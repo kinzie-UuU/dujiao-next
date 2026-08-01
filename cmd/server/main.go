@@ -19,6 +19,7 @@ import (
 	adminapplication "github.com/dujiao-next/internal/modules/identity/admin/application"
 	adminstore "github.com/dujiao-next/internal/modules/identity/admin/infrastructure/gormstore"
 	"github.com/dujiao-next/internal/platform/database/gormdb"
+	"github.com/dujiao-next/internal/securestore"
 	"github.com/dujiao-next/internal/selfupdate"
 	"github.com/dujiao-next/internal/shared/passwordpolicy"
 	"github.com/dujiao-next/internal/version"
@@ -89,6 +90,9 @@ func main() {
 	if len(weakSecrets) > 0 {
 		stdLog.Fatalf("以下运行时密钥过弱、重复或仍为默认值，请配置彼此独立的强随机密钥: %s", strings.Join(weakSecrets, ", "))
 	}
+	if err := securestore.Configure(cfg.App.SecretKey); err != nil {
+		stdLog.Fatalf("敏感数据加密初始化失败: %v", err)
+	}
 	defaultAdminUser, defaultAdminPass := resolveDefaultAdminCredentials(cfg)
 	if unsafeBootstrapAdminPassword(cfg, defaultAdminPass) {
 		if cfg.Server.Mode == "release" {
@@ -142,6 +146,13 @@ func main() {
 	// 自动迁移数据库表
 	if err := databasemigrations.AutoMigrate(); err != nil {
 		stdLog.Fatalf("数据库迁移失败: %v", err)
+	}
+	secureResult, err := securestore.Backfill(gormdb.DB)
+	if err != nil {
+		stdLog.Fatalf("敏感数据加密迁移失败: %v", err)
+	}
+	if secureResult.CardSecrets > 0 || secureResult.Fulfillments > 0 {
+		stdLog.Printf("敏感数据加密迁移完成: card_secrets=%d fulfillments=%d", secureResult.CardSecrets, secureResult.Fulfillments)
 	}
 
 	// 初始化默认管理员账号
@@ -368,6 +379,10 @@ func runRollbackCommand(args []string) {
 // 后委托给 internal/admincmd 包，不启动 HTTP / worker / web 等服务。
 func runAdminSubcommand(args []string) {
 	cfg := config.Load()
+	if err := securestore.Configure(cfg.App.SecretKey); err != nil {
+		fmt.Fprintf(os.Stderr, "configure secure storage: %v\n", err)
+		os.Exit(1)
+	}
 	if err := gormdb.InitDB(cfg.Database.Driver, cfg.Database.DSN, gormdb.DBPoolConfig{
 		MaxOpenConns:           cfg.Database.Pool.MaxOpenConns,
 		MaxIdleConns:           cfg.Database.Pool.MaxIdleConns,
