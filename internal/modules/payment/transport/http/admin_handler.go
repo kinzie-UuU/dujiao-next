@@ -43,6 +43,7 @@ type AdminPaymentListFilter struct {
 type AdminPaymentQuery interface {
 	ListPayments(filter AdminPaymentListFilter) ([]paymentdomain.Payment, int64, error)
 	GetPayment(id uint) (*paymentdomain.Payment, error)
+	ConfirmManualPayment(id uint) (*paymentdomain.Payment, error)
 }
 
 // AdminChannelLookup 后台支付渠道名称查询端口。
@@ -77,7 +78,7 @@ type paymentRechargeMeta struct {
 	UserID     uint
 }
 
-// AdminHandler 处理后台支付只读 HTTP。
+// AdminHandler 处理后台支付 HTTP。
 type AdminHandler struct {
 	payments AdminPaymentQuery
 	channels AdminChannelLookup
@@ -257,6 +258,32 @@ func (h *AdminHandler) GetAdminPayment(c *gin.Context) {
 		RechargeStatus:     rechargeMeta.Status,
 		RechargeUserID:     rechargeMeta.UserID,
 	})
+}
+
+// ConfirmAdminManualPayment 确认管理员已核实人工二维码收款到账。
+func (h *AdminHandler) ConfirmAdminManualPayment(c *gin.Context) {
+	id, err := ginutil.ParseParamUint(c, "id")
+	if err != nil {
+		ginutil.RespondError(c, response.CodeBadRequest, "error.payment_invalid", nil)
+		return
+	}
+
+	payment, err := h.payments.ConfirmManualPayment(id)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrPaymentNotFound):
+			ginutil.RespondError(c, response.CodeNotFound, "error.payment_not_found", nil)
+		case errors.Is(err, ErrPaymentProviderNotSupported):
+			ginutil.RespondError(c, response.CodeBadRequest, "error.payment_provider_not_supported", nil)
+		case errors.Is(err, ErrPaymentStatusInvalid), errors.Is(err, ErrOrderStatusInvalid):
+			ginutil.RespondError(c, response.CodeBadRequest, "error.payment_status_invalid", nil)
+		default:
+			ginutil.RespondError(c, response.CodeInternal, "error.payment_update_failed", err)
+		}
+		return
+	}
+
+	response.Success(c, redactAdminPayment(*payment))
 }
 
 func redactAdminPayment(payment paymentdomain.Payment) paymentdomain.Payment {

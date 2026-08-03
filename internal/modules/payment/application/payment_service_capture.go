@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	paymentcontract "github.com/dujiao-next/internal/modules/payment/contract"
 
@@ -19,6 +20,43 @@ import (
 type CapturePaymentInput struct {
 	PaymentID uint
 	Context   context.Context
+}
+
+const manualQRProviderType = "manual_qr"
+
+// ConfirmManualPayment 由管理员在核实到账后确认人工二维码支付。
+func (s *PaymentService) ConfirmManualPayment(paymentID uint) (*paymentdomain.Payment, error) {
+	payment, err := s.paymentRepo.GetByID(paymentID)
+	if err != nil {
+		return nil, ErrPaymentUpdateFailed
+	}
+	if payment == nil {
+		return nil, ErrPaymentNotFound
+	}
+	if !strings.EqualFold(strings.TrimSpace(payment.ProviderType), manualQRProviderType) {
+		return nil, ErrPaymentProviderNotSupported
+	}
+	if payment.Status == constants.PaymentStatusSuccess {
+		return payment, nil
+	}
+	if payment.Status != constants.PaymentStatusPending && payment.Status != constants.PaymentStatusInitiated {
+		return nil, ErrPaymentStatusInvalid
+	}
+
+	paidAt := time.Now()
+	return s.HandleCallback(PaymentCallbackInput{
+		PaymentID:   payment.ID,
+		ChannelID:   payment.ChannelID,
+		Status:      constants.PaymentStatusSuccess,
+		ProviderRef: payment.ProviderRef,
+		Amount:      payment.Amount,
+		Currency:    payment.Currency,
+		PaidAt:      &paidAt,
+		Payload: jsonmap.JSON{
+			"manual_confirmed_by_admin": true,
+			"manual_confirmed_at":       paidAt.Format(time.RFC3339),
+		},
+	})
 }
 
 func (s *PaymentService) CapturePayment(input CapturePaymentInput) (*paymentdomain.Payment, error) {

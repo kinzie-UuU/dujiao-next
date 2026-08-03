@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -973,4 +974,71 @@ func assertWalletRechargeSuccessState(t *testing.T, db *gorm.DB, paymentID uint,
 
 func ptrTime(v time.Time) *time.Time {
 	return &v
+}
+
+func TestConfirmManualPaymentMarksPaymentAndOrderPaid(t *testing.T) {
+	svc, db := setupPaymentServiceWalletTest(t)
+	now := time.Now()
+	order := &orderdomain.Order{
+		OrderNo:        "DJMANUALCONFIRM001",
+		Status:         constants.OrderStatusPendingPayment,
+		Currency:       "CNY",
+		OriginalAmount: money.FromDecimal(decimal.NewFromInt(100)),
+		TotalAmount:    money.FromDecimal(decimal.NewFromInt(100)),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := db.Create(order).Error; err != nil {
+		t.Fatalf("create order failed: %v", err)
+	}
+	payment := &paymentdomain.Payment{
+		OrderID:         order.ID,
+		ChannelID:       1,
+		ProviderType:    manualQRProviderType,
+		ChannelType:     constants.PaymentChannelTypeWechat,
+		InteractionMode: constants.PaymentInteractionQR,
+		Amount:          money.FromDecimal(decimal.NewFromInt(100)),
+		Currency:        "CNY",
+		Status:          constants.PaymentStatusPending,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := db.Create(payment).Error; err != nil {
+		t.Fatalf("create payment failed: %v", err)
+	}
+
+	updated, err := svc.ConfirmManualPayment(payment.ID)
+	if err != nil {
+		t.Fatalf("confirm manual payment failed: %v", err)
+	}
+	if updated.Status != constants.PaymentStatusSuccess || updated.PaidAt == nil {
+		t.Fatalf("payment not marked successful: %#v", updated)
+	}
+
+	var refreshedOrder orderdomain.Order
+	if err := db.First(&refreshedOrder, order.ID).Error; err != nil {
+		t.Fatalf("reload order failed: %v", err)
+	}
+	if refreshedOrder.Status != constants.OrderStatusPaid || refreshedOrder.PaidAt == nil {
+		t.Fatalf("order not marked paid: %#v", refreshedOrder)
+	}
+}
+
+func TestConfirmManualPaymentRejectsNonManualProvider(t *testing.T) {
+	svc, db := setupPaymentServiceWalletTest(t)
+	payment := &paymentdomain.Payment{
+		ProviderType: constants.PaymentProviderOfficial,
+		Amount:       money.FromDecimal(decimal.NewFromInt(100)),
+		Currency:     "CNY",
+		Status:       constants.PaymentStatusPending,
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+	}
+	if err := db.Create(payment).Error; err != nil {
+		t.Fatalf("create payment failed: %v", err)
+	}
+
+	if _, err := svc.ConfirmManualPayment(payment.ID); !errors.Is(err, ErrPaymentProviderNotSupported) {
+		t.Fatalf("expected provider not supported, got %v", err)
+	}
 }

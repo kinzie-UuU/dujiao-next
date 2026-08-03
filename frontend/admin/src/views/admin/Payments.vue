@@ -47,6 +47,8 @@ const showDetail = ref(false)
 const detailLoading = ref(false)
 const detailError = ref('')
 const detailPayment = ref<AdminPayment | null>(null)
+const manualConfirming = ref(false)
+const manualConfirmError = ref('')
 const exporting = ref(false)
 const exportError = ref('')
 
@@ -133,6 +135,7 @@ const openDetail = async (payment: { id: number }) => {
   showDetail.value = true
   detailLoading.value = true
   detailError.value = ''
+  manualConfirmError.value = ''
   detailPayment.value = null
   try {
     const response = await adminAPI.getPayment(payment.id)
@@ -141,6 +144,30 @@ const openDetail = async (payment: { id: number }) => {
     detailError.value = err?.message || t('admin.payments.detailFetchFailed')
   } finally {
     detailLoading.value = false
+  }
+}
+
+const canConfirmManualPayment = (payment: AdminPayment | null) => {
+  if (!payment || payment.provider_type !== 'manual_qr') return false
+  return payment.status === 'pending' || payment.status === 'initiated'
+}
+
+const confirmManualPayment = async () => {
+  if (!canConfirmManualPayment(detailPayment.value) || manualConfirming.value) return
+  if (!window.confirm(t('admin.payments.manualConfirmPrompt'))) return
+  const paymentId = detailPayment.value!.id
+  manualConfirming.value = true
+  manualConfirmError.value = ''
+  try {
+    await adminAPI.confirmManualPayment(paymentId)
+    await Promise.all([
+      openDetail({ id: paymentId }),
+      fetchPayments(pagination.value.page, { preserveRows: true }),
+    ])
+  } catch (err: any) {
+    manualConfirmError.value = err?.message || t('admin.payments.manualConfirmFailed')
+  } finally {
+    manualConfirming.value = false
   }
 }
 
@@ -468,6 +495,13 @@ watch(
             {{ detailError }}
           </div>
           <div v-else-if="detailPayment" class="space-y-6 text-sm text-muted-foreground">
+            <div v-if="canConfirmManualPayment(detailPayment)" class="rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-950">
+              <p class="mb-3">{{ t('admin.payments.manualConfirmHint') }}</p>
+              <Button :disabled="manualConfirming" @click="confirmManualPayment">
+                {{ manualConfirming ? t('admin.payments.manualConfirming') : t('admin.payments.manualConfirm') }}
+              </Button>
+              <p v-if="manualConfirmError" class="mt-3 text-sm text-destructive">{{ manualConfirmError }}</p>
+            </div>
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <Card class="rounded-lg border-border bg-background shadow-none">
                 <CardContent class="p-4">

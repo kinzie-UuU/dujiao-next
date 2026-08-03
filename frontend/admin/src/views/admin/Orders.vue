@@ -157,6 +157,21 @@ const canUpdateStatus = (order: AdminOrder) => {
   return order.status !== 'completed' && order.status !== 'canceled' && order.status !== 'partially_refunded' && order.status !== 'refunded'
 }
 
+const allowedStatusTransitions: Record<string, string[]> = {
+  pending_payment: ['canceled'],
+  paid: ['fulfilling', 'partially_delivered', 'delivered', 'partially_refunded', 'refunded'],
+  fulfilling: ['partially_delivered', 'delivered', 'partially_refunded', 'refunded'],
+  partially_delivered: ['delivered', 'completed', 'partially_refunded', 'refunded'],
+  delivered: ['completed', 'partially_refunded', 'refunded'],
+  completed: ['partially_refunded', 'refunded'],
+  partially_refunded: ['refunded'],
+}
+
+const editableStatusOptions = (order: AdminOrder) => [
+  order.status,
+  ...(allowedStatusTransitions[order.status] || []),
+]
+
 const updateStatus = async (order: AdminOrder) => {
   if (!canUpdateStatus(order)) return
   const status = statusEdits[order.id]
@@ -427,15 +442,9 @@ watch(
                     <SelectValue :placeholder="t('admin.orders.filterStatusAll')" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="pending_payment">{{ t('order.status.pending_payment') }}</SelectItem>
-                    <SelectItem value="paid">{{ t('order.status.paid') }}</SelectItem>
-                    <SelectItem value="fulfilling">{{ t('order.status.fulfilling') }}</SelectItem>
-                    <SelectItem value="partially_delivered">{{ t('order.status.partially_delivered') }}</SelectItem>
-                    <SelectItem value="partially_refunded">{{ t('order.status.partially_refunded') }}</SelectItem>
-                    <SelectItem value="delivered">{{ t('order.status.delivered') }}</SelectItem>
-                    <SelectItem value="completed">{{ t('order.status.completed') }}</SelectItem>
-                    <SelectItem value="canceled">{{ t('order.status.canceled') }}</SelectItem>
-                    <SelectItem value="refunded">{{ t('order.status.refunded') }}</SelectItem>
+                    <SelectItem v-for="status in editableStatusOptions(order)" :key="status" :value="status">
+                      {{ t(`order.status.${status}`) }}
+                    </SelectItem>
                   </SelectContent>
                 </Select>
                 <Button v-if="canUpdateStatus(order)" size="xs" variant="outline" @click="updateStatus(order)">

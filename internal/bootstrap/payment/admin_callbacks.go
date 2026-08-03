@@ -46,6 +46,11 @@ func (a adminQueryAdapter) GetPayment(id uint) (*paymentdomain.Payment, error) {
 	return payment, mapTransportError(err)
 }
 
+func (a adminQueryAdapter) ConfirmManualPayment(id uint) (*paymentdomain.Payment, error) {
+	payment, err := a.payments.ConfirmManualPayment(id)
+	return payment, mapTransportError(err)
+}
+
 type adminChannelLookupAdapter struct {
 	channels paymentcontract.ChannelStore
 }

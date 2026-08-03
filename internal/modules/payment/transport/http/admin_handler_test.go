@@ -28,8 +28,10 @@ import (
 )
 
 type fakeAdminPaymentQuery struct {
-	payments []paymentdomain.Payment
-	owner    map[uint]uint // paymentID -> userID
+	payments         []paymentdomain.Payment
+	owner            map[uint]uint // paymentID -> userID
+	confirmedID      uint
+	manualConfirmErr error
 }
 
 func (f *fakeAdminPaymentQuery) ListPayments(filter AdminPaymentListFilter) ([]paymentdomain.Payment, int64, error) {
@@ -72,6 +74,14 @@ func (f *fakeAdminPaymentQuery) GetPayment(id uint) (*paymentdomain.Payment, err
 		}
 	}
 	return nil, ErrPaymentNotFound
+}
+
+func (f *fakeAdminPaymentQuery) ConfirmManualPayment(id uint) (*paymentdomain.Payment, error) {
+	f.confirmedID = id
+	if f.manualConfirmErr != nil {
+		return nil, f.manualConfirmErr
+	}
+	return &paymentdomain.Payment{ID: id, Status: constants.PaymentStatusSuccess}, nil
 }
 
 type fakeAdminChannelLookup struct {
@@ -345,6 +355,23 @@ func TestBuildAdminPaymentFilterInvalidOrderID(t *testing.T) {
 	_, err := buildAdminPaymentFilter(c, 1, 20)
 	if err == nil {
 		t.Fatalf("expected invalid order_id error")
+	}
+}
+
+func TestConfirmAdminManualPayment(t *testing.T) {
+	h, fixture := setupAdminPaymentHandlerTest(t)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(fixture.OrderPaymentID), 10)}}
+	c.Request = httptest.NewRequest(http.MethodPost, "/admin/payments/11/manual-confirm", nil)
+
+	h.ConfirmAdminManualPayment(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status want 200 got %d: %s", w.Code, w.Body.String())
+	}
+	if got := h.payments.(*fakeAdminPaymentQuery).confirmedID; got != fixture.OrderPaymentID {
+		t.Fatalf("confirmed payment id want %d got %d", fixture.OrderPaymentID, got)
 	}
 }
 
