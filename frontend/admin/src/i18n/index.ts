@@ -1078,6 +1078,7 @@ const messages = {
         manualConfirmPrompt: '确认款项已经实际到账？确认后订单将进入已支付状态，此操作不能撤销。',
         manualConfirmHint: '仅在核对支付宝或微信实际到账后操作。系统会同时更新支付记录、付款时间和订单状态。',
         manualConfirmFailed: '人工确认收款失败',
+        manualConfirmUnavailable: '当前订单没有可确认的微信或支付宝收款记录，请到支付记录检查。',
       },
       orderRefunds: {
         title: '订单退款',
@@ -5423,6 +5424,7 @@ const messages = {
         manualConfirmPrompt: '確認款項已經實際到帳？確認後訂單將進入已支付狀態，此操作不能撤銷。',
         manualConfirmHint: '僅在核對支付寶或微信實際到帳後操作。系統會同時更新支付紀錄、支付時間和訂單狀態。',
         manualConfirmFailed: '人工確認收款失敗',
+        manualConfirmUnavailable: '目前訂單沒有可確認的微信或支付寶收款紀錄，請到支付紀錄檢查。',
       },
       orderRefunds: {
         title: '訂單退款',
@@ -9768,6 +9770,7 @@ const messages = {
         manualConfirmPrompt: 'Confirm that the funds were actually received? This will mark the order as paid and cannot be undone.',
         manualConfirmHint: 'Use only after verifying the Alipay or WeChat receipt. Payment status, paid time, and order status are updated together.',
         manualConfirmFailed: 'Manual payment confirmation failed',
+        manualConfirmUnavailable: 'This order has no confirmable WeChat Pay or Alipay payment. Check the payment records.',
       },
       orderRefunds: {
         title: 'Order Refunds',

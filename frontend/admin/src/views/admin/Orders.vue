@@ -4,7 +4,7 @@ import { useDebounceFn } from '@vueuse/core'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
-import type { AdminOrder, AdminOrderItem } from '@/api/types'
+import type { AdminOrder, AdminOrderItem, AdminPayment } from '@/api/types'
 import IdCell from '@/components/IdCell.vue'
 import { Copy } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
@@ -158,7 +158,7 @@ const canUpdateStatus = (order: AdminOrder) => {
 }
 
 const allowedStatusTransitions: Record<string, string[]> = {
-  pending_payment: ['canceled'],
+  pending_payment: ['paid', 'canceled'],
   paid: ['fulfilling', 'partially_delivered', 'delivered', 'partially_refunded', 'refunded'],
   fulfilling: ['partially_delivered', 'delivered', 'partially_refunded', 'refunded'],
   partially_delivered: ['delivered', 'completed', 'partially_refunded', 'refunded'],
@@ -172,11 +172,31 @@ const editableStatusOptions = (order: AdminOrder) => [
   ...(allowedStatusTransitions[order.status] || []),
 ]
 
+const latestConfirmableManualPayment = (payments: AdminPayment[] = []) =>
+  payments
+    .filter((payment) => payment.provider_type === 'manual_qr' && ['pending', 'initiated'].includes(payment.status))
+    .sort((a, b) => b.id - a.id)[0]
+
 const updateStatus = async (order: AdminOrder) => {
   if (!canUpdateStatus(order)) return
   const status = statusEdits[order.id]
   if (!status || status === order.status) return
-  await adminAPI.updateOrderStatus(order.id, { status })
+  if (order.status === 'pending_payment' && status === 'paid') {
+    const response = await adminAPI.getOrder(order.id)
+    const payment = latestConfirmableManualPayment(response.data.data?.payments)
+    if (!payment) {
+      window.alert(t('admin.payments.manualConfirmUnavailable'))
+      statusEdits[order.id] = order.status
+      return
+    }
+    if (!window.confirm(t('admin.payments.manualConfirmPrompt'))) {
+      statusEdits[order.id] = order.status
+      return
+    }
+    await adminAPI.confirmManualPayment(payment.id)
+  } else {
+    await adminAPI.updateOrderStatus(order.id, { status })
+  }
   fetchOrders(pagination.value.page)
 }
 
