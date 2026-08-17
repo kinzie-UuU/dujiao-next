@@ -38,7 +38,8 @@ func TestOrderServiceTestsAreSplitByResponsibility(t *testing.T) {
 		filepath.Join(applicationDirectory, "order_service_status_test.go"): {
 			"TestCalcParentStatus", "TestCalcParentStatusAllRefunded", "TestCalcParentStatusPartiallyRefunded",
 			"TestExpectedRefundStatus", "TestResolvedParentStatusPrefersOwnRefund",
-			"TestIsTransitionAllowedRefunded", "TestUpdateOrderStatusParentToPartiallyRefundedSyncsChildren",
+			"TestIsTransitionAllowedRefunded", "TestUpdateOrderStatusParentToDeliveredSyncsChildren",
+			"TestUpdateOrderStatusParentToPartiallyRefundedSyncsChildren",
 			"TestUpdateOrderStatusRejectsManualPaidTransition",
 			"TestCanCompleteParentOrder", "TestCanCompleteParentOrderRejectInvalidStatus",
 			"TestCanCompleteParentOrderRejectInvalidChild",
