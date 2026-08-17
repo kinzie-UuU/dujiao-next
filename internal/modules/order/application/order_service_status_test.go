@@ -159,6 +159,61 @@ func TestUpdateOrderStatusRejectsManualPaidTransition(t *testing.T) {
 	}
 }
 
+func TestUpdateOrderStatusParentToDeliveredSyncsChildren(t *testing.T) {
+	dsn := fmt.Sprintf("file:order_service_parent_delivered_%d?mode=memory&cache=shared", time.Now().UnixNano())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite failed: %v", err)
+	}
+	if err := db.AutoMigrate(&orderdomain.Order{}, &orderdomain.OrderItem{}, &fulfillmentdomain.Fulfillment{}); err != nil {
+		t.Fatalf("auto migrate failed: %v", err)
+	}
+
+	now := time.Now()
+	parent := &orderdomain.Order{
+		OrderNo:        "PARENT-DELIVERED-001",
+		Status:         constants.OrderStatusFulfilling,
+		Currency:       "CNY",
+		TotalAmount:    money.FromDecimal(decimal.NewFromInt(100)),
+		OriginalAmount: money.FromDecimal(decimal.NewFromInt(100)),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := db.Create(parent).Error; err != nil {
+		t.Fatalf("create parent order failed: %v", err)
+	}
+	child := &orderdomain.Order{
+		OrderNo:        "PARENT-DELIVERED-001-01",
+		ParentID:       &parent.ID,
+		Status:         constants.OrderStatusFulfilling,
+		Currency:       "CNY",
+		TotalAmount:    money.FromDecimal(decimal.NewFromInt(100)),
+		OriginalAmount: money.FromDecimal(decimal.NewFromInt(100)),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := db.Create(child).Error; err != nil {
+		t.Fatalf("create child order failed: %v", err)
+	}
+
+	svc := NewOrderService(OrderServiceOptions{OrderStore: ordergormstore.New(db, "test-guest-credential-secret-with-32-bytes")})
+	updated, err := svc.UpdateOrderStatus(parent.ID, constants.OrderStatusDelivered)
+	if err != nil {
+		t.Fatalf("update parent order failed: %v", err)
+	}
+	if updated.Status != constants.OrderStatusDelivered || len(updated.Children) != 1 || updated.Children[0].Status != constants.OrderStatusDelivered {
+		t.Fatalf("unexpected updated order: %+v", updated)
+	}
+
+	var stored []orderdomain.Order
+	if err := db.Order("id asc").Find(&stored).Error; err != nil {
+		t.Fatalf("reload orders failed: %v", err)
+	}
+	if len(stored) != 2 || stored[0].Status != constants.OrderStatusDelivered || stored[1].Status != constants.OrderStatusDelivered {
+		t.Fatalf("parent and child statuses were not synchronized: %+v", stored)
+	}
+}
+
 func TestIsTransitionAllowedRefunded(t *testing.T) {
 	if !IsTransitionAllowed(constants.OrderStatusDelivered, constants.OrderStatusPartiallyRefunded) {
 		t.Fatalf("expected delivered to partially_refunded transition to be allowed")

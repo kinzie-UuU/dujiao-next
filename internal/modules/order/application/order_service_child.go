@@ -198,6 +198,53 @@ func (s *OrderService) UpdateOrderStatus(orderID uint, targetStatus string) (*or
 				}
 			}
 			return order, nil
+		case constants.OrderStatusDelivered:
+			if !IsTransitionAllowed(order.Status, target) {
+				return nil, ErrOrderStatusInvalid
+			}
+			now := time.Now()
+			err = s.orderStore.WithinTransaction(func(tx ordercontract.Transaction) error {
+				orderStore := tx.Orders()
+				updates := map[string]interface{}{"updated_at": now}
+				if err := orderStore.UpdateStatus(order.ID, target, updates); err != nil {
+					return ErrOrderUpdateFailed
+				}
+				for _, child := range order.Children {
+					if child.Status == target {
+						continue
+					}
+					if !IsTransitionAllowed(child.Status, target) {
+						return ErrOrderStatusInvalid
+					}
+					if err := orderStore.UpdateStatus(child.ID, target, updates); err != nil {
+						return ErrOrderUpdateFailed
+					}
+				}
+				return nil
+			})
+			if err != nil {
+				if errors.Is(err, ErrOrderStatusInvalid) {
+					return nil, ErrOrderStatusInvalid
+				}
+				return nil, ErrOrderUpdateFailed
+			}
+			order.Status = target
+			order.UpdatedAt = now
+			for i := range order.Children {
+				order.Children[i].Status = target
+				order.Children[i].UpdatedAt = now
+			}
+			if s.queueClient != nil {
+				if _, err := EnqueueStatusEmailTaskIfEligible(s.orderStore, s.queueClient, s.settingService, s.defaultEmailConfig, order.ID, target); err != nil {
+					logger.Warnw("order_enqueue_status_email_failed",
+						"order_id", order.ID,
+						"target_order_id", order.ID,
+						"status", target,
+						"error", err,
+					)
+				}
+			}
+			return order, nil
 		case constants.OrderStatusCompleted:
 			if !canCompleteParentOrder(order) {
 				return nil, ErrOrderStatusInvalid
