@@ -19,6 +19,7 @@ export function useOrderDetail() {
   const loading = ref(true)
   const order = ref<any>(null)
   const fulfillmentDownloading = ref(false)
+  let statusPollTimer: number | undefined
 
   const helpers = useOrderDisplayHelpers(order)
 
@@ -39,15 +40,15 @@ export function useOrderDetail() {
     }
   }
 
-  const loadOrder = async () => {
-    loading.value = true
+  const loadOrder = async (silent = false) => {
+    if (!silent) loading.value = true
     try {
       const response = await userOrderAPI.detail(String(route.params.order_no || '').trim())
       order.value = response.data.data
     } catch (error) {
-      order.value = null
+      if (!silent) order.value = null
     } finally {
-      loading.value = false
+      if (!silent) loading.value = false
     }
   }
 
@@ -77,9 +78,15 @@ export function useOrderDetail() {
       return
     }
     loadOrder()
+    statusPollTimer = window.setInterval(() => {
+      if (order.value?.status === 'pending_payment' && document.visibilityState === 'visible') {
+        void loadOrder(true)
+      }
+    }, 5000)
   })
 
   onUnmounted(() => {
+    if (statusPollTimer !== undefined) window.clearInterval(statusPollTimer)
     debouncedLoadOrder.cancel()
   })
 

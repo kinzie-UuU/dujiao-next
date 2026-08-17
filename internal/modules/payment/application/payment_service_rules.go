@@ -42,7 +42,7 @@ func shouldMarkFulfilling(order *orderdomain.Order) bool {
 	}
 	for _, item := range order.Items {
 		fulfillmentType := strings.TrimSpace(item.FulfillmentType)
-		if fulfillmentType == "" || fulfillmentType == constants.FulfillmentTypeManual || fulfillmentType == constants.FulfillmentTypeUpstream {
+		if fulfillmentType == constants.FulfillmentTypeUpstream {
 			return true
 		}
 	}

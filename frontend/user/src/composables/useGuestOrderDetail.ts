@@ -23,6 +23,7 @@ export function useGuestOrderDetail() {
     order_password: '',
   })
   const fulfillmentDownloading = ref(false)
+  let statusPollTimer: number | undefined
 
   const helpers = useOrderDisplayHelpers(order)
 
@@ -58,8 +59,8 @@ export function useGuestOrderDetail() {
     showAuthForm: showAuthForm.value,
   }))
 
-  const loadOrder = async () => {
-    loading.value = true
+  const loadOrder = async (silent = false) => {
+    if (!silent) loading.value = true
     try {
       if (!hasAuth.value) {
         order.value = null
@@ -73,10 +74,12 @@ export function useGuestOrderDetail() {
       order.value = response.data.data
       authError.value = ''
     } catch (error) {
-      order.value = null
-      authError.value = t('guestOrderDetail.authInvalid')
+      if (!silent) {
+        order.value = null
+        authError.value = t('guestOrderDetail.authInvalid')
+      }
     } finally {
-      loading.value = false
+      if (!silent) loading.value = false
     }
   }
 
@@ -114,9 +117,15 @@ export function useGuestOrderDetail() {
     }
     loadSavedAuth()
     loadOrder()
+    statusPollTimer = window.setInterval(() => {
+      if (order.value?.status === 'pending_payment' && hasAuth.value && document.visibilityState === 'visible') {
+        void loadOrder(true)
+      }
+    }, 5000)
   })
 
   onUnmounted(() => {
+    if (statusPollTimer !== undefined) window.clearInterval(statusPollTimer)
     debouncedLoadOrder.cancel()
   })
 
