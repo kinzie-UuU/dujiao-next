@@ -90,10 +90,6 @@
         </Badge>
       </div>
 
-      <p class="hidden md:block text-muted-foreground text-sm mb-6 line-clamp-2">
-        {{ getLocalizedText(product.description) }}
-      </p>
-
       <div class="flex items-center justify-between border-t pt-2 md:pt-4 mt-auto">
         <div class="flex flex-col">
           <span class="hidden md:block text-xs text-muted-foreground uppercase tracking-wider">{{ t('products.price') }}</span>
