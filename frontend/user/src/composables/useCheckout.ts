@@ -577,6 +577,7 @@ export function useCheckout() {
   }
 
   const canSubmit = computed(() => {
+    if (appStore.salesPaused) return false
     if (syncingStock.value) return false
     if (submitting.value) return false
     if (cartItems.value.length === 0) return false
@@ -600,6 +601,7 @@ export function useCheckout() {
   })
 
   const submitBlockedReason = computed(() => {
+    if (appStore.salesPaused) return t('maintenance.salesPaused')
     if (syncingStock.value) return t('checkout.stockSyncing')
     if (cartItems.value.length === 0) return t('checkout.errors.emptyCart')
     if (!manualFormValidation.value.valid) {

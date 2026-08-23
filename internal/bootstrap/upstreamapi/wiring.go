@@ -119,6 +119,7 @@ func mapOrderError(err error) error {
 		target  error
 	}{
 		{[]error{orderapp.ErrOrderNotFound}, upstreamtransport.ErrOrderNotFound},
+		{[]error{orderapp.ErrSalesPaused}, upstreamtransport.ErrSalesPaused},
 		{[]error{orderapp.ErrOrderCancelNotAllowed}, upstreamtransport.ErrOrderCancelNotAllowed},
 		{[]error{walletcontract.ErrInsufficientBalance}, upstreamtransport.ErrWalletInsufficient},
 		{[]error{orderapp.ErrCardSecretInsufficient, orderapp.ErrManualStockInsufficient}, upstreamtransport.ErrStockInsufficient},

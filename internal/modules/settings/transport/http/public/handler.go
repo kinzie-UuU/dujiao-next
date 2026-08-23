@@ -129,6 +129,7 @@ func (h *Handler) GetConfig(c *gin.Context) {
 		"languages":                              append([]string(nil), constants.SupportedLocales...),
 		constants.SettingFieldSiteCurrency:       constants.SiteCurrencyDefault,
 		constants.SettingFieldStorefrontTemplate: constants.StorefrontTemplateDefault,
+		constants.SettingFieldSalesPaused:        false,
 		"contact": map[string]interface{}{
 			"telegram": "https://telegram.me/dujiaoka",
 			"whatsapp": "https://wa.me/1234567890",

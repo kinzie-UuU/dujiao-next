@@ -31,6 +31,7 @@ func channelErrorRule(target error, httpCode, code int, errorCode, key string) m
 }
 
 var channelOrderCreateErrorRules = []mappedChannelError{
+	channelErrorRule(ErrSalesPaused, http.StatusServiceUnavailable, response.CodeServiceUnavailable, "sales_paused", "error.sales_paused"),
 	channelErrorRule(ErrRiskIPBlacklisted, http.StatusForbidden, response.CodeForbidden, "risk_blocked", "error.risk_ip_blacklisted"),
 	channelErrorRule(ErrRiskEmailBlacklisted, http.StatusForbidden, response.CodeForbidden, "risk_blocked", "error.risk_email_blacklisted"),
 	channelErrorRule(ErrRiskTooManyPendingOrders, http.StatusTooManyRequests, response.CodeTooManyRequests, "risk_blocked", "error.risk_too_many_pending_orders"),

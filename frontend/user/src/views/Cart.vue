@@ -137,7 +137,10 @@
           </div>
 
           <div class="mt-6 space-y-2">
-            <Button as-child size="lg" class="w-full font-semibold">
+            <Button v-if="appStore.salesPaused" disabled size="lg" class="w-full font-semibold">
+              {{ t('maintenance.salesPaused') }}
+            </Button>
+            <Button v-else as-child size="lg" class="w-full font-semibold">
               <router-link to="/checkout">
                 {{ t('cart.checkout') }}
               </router-link>
@@ -163,8 +166,10 @@ import EmptyState from '../components/EmptyState.vue'
 import SmartImage from '../components/SmartImage.vue'
 import CheckoutSteps from '../components/checkout/CheckoutSteps.vue'
 import { useCart } from '../composables/useCart'
+import { useAppStore } from '../stores/app'
 
 const { t } = useI18n()
+const appStore = useAppStore()
 
 const {
   getLocalizedText, formatPrice, totalCurrency,

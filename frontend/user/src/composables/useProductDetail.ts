@@ -308,6 +308,7 @@ export function useProductDetail(options: { onLoaded?: () => void } = {}) {
     return limit < quantityEffectiveMin.value
   })
   const canPurchase = computed(() => {
+    if (appStore.salesPaused) return false
     if (!product.value) return false
     if (activeSkus.value.length === 0) return false
     if (product.value.is_sold_out) return false
@@ -319,6 +320,7 @@ export function useProductDetail(options: { onLoaded?: () => void } = {}) {
   })
   const cannotPurchaseReason = computed(() => {
     if (!product.value) return ''
+    if (appStore.salesPaused) return t('maintenance.salesPaused')
     if (requiresLogin.value) return ''
     if (requiresSKUSelection.value) return t('productDetail.skuRequired')
     if (stockBelowMinPurchase.value) return t('productDetail.stockBelowMinPurchase', { count: quantityEffectiveMin.value })

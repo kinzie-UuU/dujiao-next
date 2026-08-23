@@ -15,6 +15,7 @@ var (
 	ErrOrderCurrencyMismatch      = errors.New("order currency mismatch")
 	ErrOrderNotFound              = resellercontract.ErrOrderNotFound
 	ErrOrderCreateFailed          = errors.New("order create failed")
+	ErrSalesPaused                = errors.New("sales paused")
 	ErrOrderFetchFailed           = errors.New("order fetch failed")
 	ErrProductNotAvailable        = errors.New("product not available")
 	ErrProductPurchaseNotAllowed  = errors.New("product purchase not allowed")

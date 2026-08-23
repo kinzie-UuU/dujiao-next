@@ -284,7 +284,14 @@
           <!-- Actions (sticky bottom) -->
           <div class="shrink-0 px-4 md:px-5 pt-3 pb-3 md:pb-5 border-t theme-safe-bottom">
             <Button
-              v-if="requiresLogin"
+              v-if="appStore.salesPaused"
+              disabled
+              class="w-full py-3 h-auto min-h-[44px] rounded-xl text-sm font-semibold"
+            >
+              {{ t('maintenance.salesPaused') }}
+            </Button>
+            <Button
+              v-else-if="requiresLogin"
               class="w-full py-3 h-auto min-h-[44px] rounded-xl text-sm font-semibold"
               @click="goLogin"
             >
@@ -660,6 +667,7 @@ const stockBelowMinPurchase = computed(() => {
   return limit < effectiveMin.value
 })
 const canPurchase = computed(() => {
+  if (appStore.salesPaused) return false
   if (!props.product) return false
   if (activeSkus.value.length === 0) return false
   if (props.product.is_sold_out) return false

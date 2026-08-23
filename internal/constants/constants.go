@@ -453,6 +453,7 @@ const (
 	SettingKeyOrderEmailTemplateConfig = "order_email_template_config"
 	SettingFieldSiteCurrency           = "currency"
 	SettingFieldStorefrontTemplate     = "storefront_template"
+	SettingFieldSalesPaused            = "sales_paused"
 	SettingFieldPaymentExpireMinutes   = "payment_expire_minutes"
 
 	SettingKeyNavConfig = "nav_config"

@@ -29,6 +29,7 @@ var (
 	ErrRiskEmailBlacklisted          = errors.New("risk email blacklisted")
 	ErrRiskTooManyPendingOrders      = errors.New("too many pending orders")
 	ErrRiskOrderRateLimited          = errors.New("order rate limited")
+	ErrSalesPaused                   = errors.New("sales paused")
 	ErrProductSKURequired            = errors.New("product sku required")
 	ErrProductSKUInvalid             = errors.New("product sku invalid")
 	ErrInvalidOrderItem              = errors.New("invalid order item")

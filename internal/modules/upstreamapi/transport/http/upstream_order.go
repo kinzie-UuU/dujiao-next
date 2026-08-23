@@ -326,6 +326,8 @@ func (h *Handler) CancelOrder(c *gin.Context) {
 
 func mapOrderErrorToResponse(c *gin.Context, err error) {
 	switch {
+	case errors.Is(err, ErrSalesPaused):
+		errorResponse(c, http.StatusServiceUnavailable, "sales_paused", "sales are temporarily paused")
 	case errors.Is(err, ErrWalletInsufficient):
 		errorResponse(c, http.StatusPaymentRequired, "insufficient_balance", "wallet balance is insufficient")
 	case errors.Is(err, ErrStockInsufficient):

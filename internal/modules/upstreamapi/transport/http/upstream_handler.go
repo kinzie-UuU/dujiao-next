@@ -43,6 +43,7 @@ var (
 	ErrStockInsufficient     = errors.New("stock insufficient")
 	ErrProductUnavailable    = errors.New("product unavailable")
 	ErrSKUUnavailable        = errors.New("sku unavailable")
+	ErrSalesPaused           = errors.New("sales paused")
 	ErrInvalidOrderItem      = errors.New("invalid order item")
 	ErrManualFormInvalid     = errors.New("manual form invalid")
 )

@@ -23,6 +23,7 @@ export const useAppStore = defineStore('app', () => {
         return String(config.value?.tenant?.mode || '').trim().toLowerCase() === 'reseller'
     })
     const canAccessResellerConsole = computed(() => !!config.value && !isResellerTenant.value)
+    const salesPaused = computed(() => config.value?.sales_paused === true)
 
     // 设置语言：同时驱动 vue-i18n（内部按需加载语言包）
     const setLocale = (newLocale: string) => {
@@ -118,6 +119,7 @@ export const useAppStore = defineStore('app', () => {
         serverTimeOffset,
         isResellerTenant,
         canAccessResellerConsole,
+        salesPaused,
         setLocale,
         loadConfig,
         applySEO,

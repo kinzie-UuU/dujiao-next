@@ -37,6 +37,7 @@ var (
 	ErrProductNotAvailable       = errors.New("product not available")
 	ErrResellerCouponNotAllowed  = errors.New("reseller coupon not allowed")
 	ErrQueueUnavailable          = errors.New("queue unavailable")
+	ErrSalesPaused               = errors.New("sales paused")
 	ErrRiskIPBlacklisted         = errors.New("risk: ip blacklisted")
 	ErrRiskEmailBlacklisted      = errors.New("risk: email blacklisted")
 	ErrRiskTooManyPendingOrders  = errors.New("risk: too many pending orders")
@@ -321,6 +322,7 @@ var guestOrderCreateExtraErrorRules = []mappedError{
 }
 
 var userOrderCommonErrorRules = []mappedError{
+	{target: ErrSalesPaused, code: response.CodeServiceUnavailable, key: "error.sales_paused"},
 	{target: ErrProductSKURequired, code: response.CodeBadRequest, key: "error.order_item_invalid"},
 	{target: productcontract.ErrProductSKUInvalid, code: response.CodeBadRequest, key: "error.order_item_invalid"},
 	{target: productdomain.ErrPurchaseQuantityInvalid, code: response.CodeBadRequest, key: "error.order_item_invalid"},
@@ -365,6 +367,7 @@ var userOrderPreviewExtraErrorRules = []mappedError{
 }
 
 var guestOrderCommonErrorRules = []mappedError{
+	{target: ErrSalesPaused, code: response.CodeServiceUnavailable, key: "error.sales_paused"},
 	{target: ErrProductSKURequired, code: response.CodeBadRequest, key: "error.order_item_invalid"},
 	{target: productcontract.ErrProductSKUInvalid, code: response.CodeBadRequest, key: "error.order_item_invalid"},
 	{target: ErrGuestEmailRequired, code: response.CodeBadRequest, key: "error.guest_email_required"},

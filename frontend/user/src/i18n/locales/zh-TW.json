@@ -1146,6 +1146,10 @@
     "maxPurchaseExceeded": "該商品單次下單最多可購買 {count} 件",
     "minPurchaseNotMet": "該商品單次下單至少需購買 {count} 件"
   },
+  "maintenance": {
+    "banner": "系統維護中，暫停接收新訂單；已有訂單查詢與處理不受影響",
+    "salesPaused": "系統維護中，暫停下單"
+  },
   "checkout": {
     "title": "訂單結算",
     "subtitle": "確認訂單資訊並提交",

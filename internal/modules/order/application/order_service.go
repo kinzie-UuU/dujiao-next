@@ -225,6 +225,9 @@ var allowedTransitions = map[string]map[string]bool{
 
 // CreateOrder 创建订单
 func (s *OrderService) CreateOrder(input CreateOrderInput) (*orderdomain.Order, error) {
+	if err := s.rejectWhenSalesPaused(); err != nil {
+		return nil, err
+	}
 	if input.UserID == 0 {
 		return nil, ErrInvalidOrderItem
 	}
@@ -244,6 +247,9 @@ func (s *OrderService) CreateOrder(input CreateOrderInput) (*orderdomain.Order, 
 
 // CreateGuestOrder 游客创建订单
 func (s *OrderService) CreateGuestOrder(input CreateGuestOrderInput) (*orderdomain.Order, error) {
+	if err := s.rejectWhenSalesPaused(); err != nil {
+		return nil, err
+	}
 	email, err := normalizeGuestEmail(input.Email)
 	if err != nil {
 		return nil, err
@@ -267,6 +273,20 @@ func (s *OrderService) CreateGuestOrder(input CreateGuestOrderInput) (*orderdoma
 		IsGuest:             true,
 		ManualFormData:      input.ManualFormData,
 	})
+}
+
+func (s *OrderService) rejectWhenSalesPaused() error {
+	if s == nil || s.settingService == nil {
+		return nil
+	}
+	paused, err := s.settingService.GetSalesPaused()
+	if err != nil {
+		return err
+	}
+	if paused {
+		return ErrSalesPaused
+	}
+	return nil
 }
 
 type orderCreateParams struct {

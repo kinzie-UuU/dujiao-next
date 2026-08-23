@@ -502,6 +502,7 @@ func mapOrderTransportError(err error) error {
 		{orderapp.ErrProductNotAvailable, ordertransport.ErrProductNotAvailable},
 		{orderapp.ErrResellerCouponNotAllowed, ordertransport.ErrResellerCouponNotAllowed},
 		{orderapp.ErrQueueUnavailable, ordertransport.ErrQueueUnavailable},
+		{orderapp.ErrSalesPaused, ordertransport.ErrSalesPaused},
 		{orderriskcontract.ErrIPBlacklisted, ordertransport.ErrRiskIPBlacklisted},
 		{orderriskcontract.ErrEmailBlacklisted, ordertransport.ErrRiskEmailBlacklisted},
 		{orderriskcontract.ErrTooManyPendingOrders, ordertransport.ErrRiskTooManyPendingOrders},

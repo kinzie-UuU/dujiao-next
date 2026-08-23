@@ -191,6 +191,7 @@ func mapError(err error) error {
 		{orderriskcontract.ErrEmailBlacklisted, channeltransport.ErrRiskEmailBlacklisted},
 		{orderriskcontract.ErrTooManyPendingOrders, channeltransport.ErrRiskTooManyPendingOrders},
 		{orderriskcontract.ErrOrderRateLimited, channeltransport.ErrRiskOrderRateLimited},
+		{orderapp.ErrSalesPaused, channeltransport.ErrSalesPaused},
 		{orderapp.ErrProductSKURequired, channeltransport.ErrProductSKURequired},
 		{orderapp.ErrProductSKUInvalid, channeltransport.ErrProductSKUInvalid},
 		{orderapp.ErrInvalidOrderItem, channeltransport.ErrInvalidOrderItem},

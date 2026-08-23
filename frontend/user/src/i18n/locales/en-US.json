@@ -1146,6 +1146,10 @@
     "maxPurchaseExceeded": "This product can be purchased up to {count} per order",
     "minPurchaseNotMet": "This product requires at least {count} per order"
   },
+  "maintenance": {
+    "banner": "The store is under maintenance and is not accepting new orders. Existing order lookup and processing remain available.",
+    "salesPaused": "Maintenance in progress — ordering is paused"
+  },
   "checkout": {
     "title": "Checkout",
     "subtitle": "Review order and submit",

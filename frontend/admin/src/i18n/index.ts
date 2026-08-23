@@ -2906,6 +2906,12 @@ const messages = {
           maxRefundDaysPlaceholder: '输入最大可退款天数（0 表示不限制）',
           maxRefundDaysTip: '超过该时间后，订单详情不再显示退款卡片；设置为 0 则不限制',
         },
+        salesPause: {
+          title: '销售状态',
+          subtitle: '维护期间可暂停接收新订单',
+          enabled: '暂停销售',
+          enabledDesc: '开启后商品仍可浏览，但前台和所有下单接口都会拒绝新订单；已有订单和后台不受影响',
+        },
         seo: {
           title: 'SEO 配置',
           subtitle: '设置网站标题、关键词和描述（{lang}）',
@@ -7252,6 +7258,12 @@ const messages = {
           maxRefundDaysPlaceholder: '輸入最大可退款天數（0 表示不限制）',
           maxRefundDaysTip: '超過該時間後，訂單詳情將不再顯示退款卡片；設為 0 則不限制',
         },
+        salesPause: {
+          title: '銷售狀態',
+          subtitle: '維護期間可暫停接收新訂單',
+          enabled: '暫停銷售',
+          enabledDesc: '開啟後商品仍可瀏覽，但前台和所有下單介面都會拒絕新訂單；已有訂單和後台不受影響',
+        },
         seo: {
           title: 'SEO 配置',
           subtitle: '設定網站標題、關鍵詞和描述（{lang}）',
@@ -11597,6 +11609,12 @@ const messages = {
           maxRefundDays: 'Maximum Refundable Time (Days)',
           maxRefundDaysPlaceholder: 'Enter max refundable days (0 means unlimited)',
           maxRefundDaysTip: 'Refund card will be hidden after this period; set to 0 for unlimited',
+        },
+        salesPause: {
+          title: 'Sales Status',
+          subtitle: 'Pause new orders during maintenance',
+          enabled: 'Pause sales',
+          enabledDesc: 'Products remain visible, but the storefront and every order API reject new orders. Existing orders and admin access remain available.',
         },
         seo: {
           title: 'SEO Settings',

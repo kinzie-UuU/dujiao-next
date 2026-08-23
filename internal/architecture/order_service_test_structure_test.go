@@ -27,7 +27,8 @@ func TestOrderServiceTestsAreSplitByResponsibility(t *testing.T) {
 		filepath.Join(applicationDirectory, "order_service_helpers_test.go"): {
 			"TestMergeCreateOrderItems", "TestMergeCreateOrderItemsConflict",
 			"TestApplyCouponDiscountToItems", "TestResolveManualFormSubmissionPreferOrderItemKey",
-			"TestResolveManualFormSubmissionFallbackLegacyProductKey",
+			"TestResolveManualFormSubmissionFallbackLegacyProductKey", "TestOrderServiceRejectsCreateWhenSalesPaused",
+			"GetByKey", "Upsert",
 		},
 		filepath.Join(integrationDirectory, "order_service_cancel_test.go"): {
 			"TestCancelExpiredOrderExpiresPendingPayments", "setupCancelPaymentTestDB",

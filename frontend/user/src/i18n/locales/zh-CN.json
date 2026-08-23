@@ -1099,6 +1099,10 @@
     "maxPurchaseExceeded": "该商品单次下单最多可购买 {count} 件",
     "minPurchaseNotMet": "该商品单次下单至少需购买 {count} 件"
   },
+  "maintenance": {
+    "banner": "系统维护中，暂停接收新订单；已有订单查询与处理不受影响",
+    "salesPaused": "系统维护中，暂停下单"
+  },
   "checkout": {
     "title": "订单结算",
     "subtitle": "确认订单信息并提交",
