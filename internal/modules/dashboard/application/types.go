@@ -14,28 +14,29 @@ type OverviewResponse struct {
 }
 
 type KPI struct {
-	OrdersTotal          int64  `json:"orders_total"`
-	PaidOrders           int64  `json:"paid_orders"`
-	CompletedOrders      int64  `json:"completed_orders"`
-	PendingPaymentOrders int64  `json:"pending_payment_orders"`
-	ProcessingOrders     int64  `json:"processing_orders"`
-	GMVPaid              string `json:"gmv_paid"`
-	TotalCost            string `json:"total_cost"`
-	TotalProfit          string `json:"total_profit"`
-	ProfitMargin         string `json:"profit_margin"`
-	PaymentsTotal        int64  `json:"payments_total"`
-	PaymentsSuccess      int64  `json:"payments_success"`
-	PaymentsFailed       int64  `json:"payments_failed"`
-	PaymentSuccessRate   string `json:"payment_success_rate"`
-	NewUsers             int64  `json:"new_users"`
-	ActiveProducts       int64  `json:"active_products"`
-	OutOfStockProducts   int64  `json:"out_of_stock_products"`
-	LowStockProducts     int64  `json:"low_stock_products"`
-	OutOfStockSKUs       int64  `json:"out_of_stock_skus"`
-	LowStockSKUs         int64  `json:"low_stock_skus"`
-	AutoAvailableSecrets int64  `json:"auto_available_secrets"`
-	ManualAvailableUnits int64  `json:"manual_available_units"`
-	TotalUserBalance     string `json:"total_user_balance"`
+	MissingCostItems     int64   `json:"missing_cost_items"`
+	OrdersTotal          int64   `json:"orders_total"`
+	PaidOrders           int64   `json:"paid_orders"`
+	CompletedOrders      int64   `json:"completed_orders"`
+	PendingPaymentOrders int64   `json:"pending_payment_orders"`
+	ProcessingOrders     int64   `json:"processing_orders"`
+	GMVPaid              string  `json:"gmv_paid"`
+	TotalCost            string  `json:"total_cost"`
+	TotalProfit          *string `json:"total_profit"`
+	ProfitMargin         *string `json:"profit_margin"`
+	PaymentsTotal        int64   `json:"payments_total"`
+	PaymentsSuccess      int64   `json:"payments_success"`
+	PaymentsFailed       int64   `json:"payments_failed"`
+	PaymentSuccessRate   string  `json:"payment_success_rate"`
+	NewUsers             int64   `json:"new_users"`
+	ActiveProducts       int64   `json:"active_products"`
+	OutOfStockProducts   int64   `json:"out_of_stock_products"`
+	LowStockProducts     int64   `json:"low_stock_products"`
+	OutOfStockSKUs       int64   `json:"out_of_stock_skus"`
+	LowStockSKUs         int64   `json:"low_stock_skus"`
+	AutoAvailableSecrets int64   `json:"auto_available_secrets"`
+	ManualAvailableUnits int64   `json:"manual_available_units"`
+	TotalUserBalance     string  `json:"total_user_balance"`
 }
 
 type Funnel struct {
@@ -63,13 +64,14 @@ type TrendResponse struct {
 }
 
 type TrendPoint struct {
-	Date            string `json:"date"`
-	OrdersTotal     int64  `json:"orders_total"`
-	OrdersPaid      int64  `json:"orders_paid"`
-	PaymentsSuccess int64  `json:"payments_success"`
-	PaymentsFailed  int64  `json:"payments_failed"`
-	GMVPaid         string `json:"gmv_paid"`
-	Profit          string `json:"profit"`
+	MissingCostItems int64   `json:"missing_cost_items"`
+	Date             string  `json:"date"`
+	OrdersTotal      int64   `json:"orders_total"`
+	OrdersPaid       int64   `json:"orders_paid"`
+	PaymentsSuccess  int64   `json:"payments_success"`
+	PaymentsFailed   int64   `json:"payments_failed"`
+	GMVPaid          string  `json:"gmv_paid"`
+	Profit           *string `json:"profit"`
 }
 
 type RankingsResponse struct {
@@ -82,16 +84,17 @@ type RankingsResponse struct {
 }
 
 type ProductRanking struct {
-	ProductID     uint         `json:"product_id"`
-	SKUID         uint         `json:"sku_id,omitempty"`
-	SKUCode       string       `json:"sku_code,omitempty"`
-	SKUSpecValues jsonmap.JSON `json:"sku_spec_values,omitempty"`
-	Title         string       `json:"title"`
-	PaidOrders    int64        `json:"paid_orders"`
-	Quantity      int64        `json:"quantity"`
-	PaidAmount    string       `json:"paid_amount"`
-	TotalCost     string       `json:"total_cost"`
-	Profit        string       `json:"profit"`
+	MissingCostItems int64        `json:"missing_cost_items"`
+	ProductID        uint         `json:"product_id"`
+	SKUID            uint         `json:"sku_id,omitempty"`
+	SKUCode          string       `json:"sku_code,omitempty"`
+	SKUSpecValues    jsonmap.JSON `json:"sku_spec_values,omitempty"`
+	Title            string       `json:"title"`
+	PaidOrders       int64        `json:"paid_orders"`
+	Quantity         int64        `json:"quantity"`
+	PaidAmount       string       `json:"paid_amount"`
+	TotalCost        string       `json:"total_cost"`
+	Profit           *string      `json:"profit"`
 }
 
 type ChannelRanking struct {

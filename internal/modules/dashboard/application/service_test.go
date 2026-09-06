@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -10,8 +11,11 @@ import (
 )
 
 type dashboardServiceRepoStub struct {
-	overview dashboardcontract.OverviewRow
-	stock    dashboardcontract.StockStatsRow
+	profitOverview dashboardcontract.ProfitOverviewRow
+	profitTrends   []dashboardcontract.ProfitTrendRow
+	products       []dashboardcontract.ProductRankingRow
+	overview       dashboardcontract.OverviewRow
+	stock          dashboardcontract.StockStatsRow
 }
 
 func (s dashboardServiceRepoStub) GetOverview(startAt, endAt time.Time) (dashboardcontract.OverviewRow, error) {
@@ -39,15 +43,15 @@ func (s dashboardServiceRepoStub) GetInventoryAlertItems(lowStockThreshold int64
 }
 
 func (s dashboardServiceRepoStub) GetTopProducts(startAt, endAt time.Time, limit int) ([]dashboardcontract.ProductRankingRow, error) {
-	return []dashboardcontract.ProductRankingRow{}, nil
+	return s.products, nil
 }
 
 func (s dashboardServiceRepoStub) GetProfitOverview(startAt, endAt time.Time) (dashboardcontract.ProfitOverviewRow, error) {
-	return dashboardcontract.ProfitOverviewRow{}, nil
+	return s.profitOverview, nil
 }
 
 func (s dashboardServiceRepoStub) GetProfitTrends(startAt, endAt time.Time) ([]dashboardcontract.ProfitTrendRow, error) {
-	return []dashboardcontract.ProfitTrendRow{}, nil
+	return s.profitTrends, nil
 }
 
 func (s dashboardServiceRepoStub) GetTopChannels(startAt, endAt time.Time, limit int) ([]dashboardcontract.ChannelRankingRow, error) {
@@ -118,3 +122,73 @@ func TestDashboardOverviewBuildsInventoryAlertsFromStockStats(t *testing.T) {
 }
 
 var _ dashboardcontract.Repository = dashboardServiceRepoStub{}
+
+func TestDashboardProfitRequiresCompleteCosts(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		missing int64
+		cost    float64
+		want    string
+	}{
+		{"all_missing", 2, 0, ""},
+		{"mixed", 1, 40, ""},
+		{"complete", 0, 70, "130.00"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			day := time.Now().UTC().Format("2006-01-02")
+			service := NewService(dashboardServiceRepoStub{
+				overview:       dashboardcontract.OverviewRow{PaidOrders: 2, GMVPaid: 200},
+				profitOverview: dashboardcontract.ProfitOverviewRow{TotalRevenue: 200, TotalCost: tc.cost, MissingCostItems: tc.missing},
+				profitTrends:   []dashboardcontract.ProfitTrendRow{{Day: day, Revenue: 200, Cost: tc.cost, MissingCostItems: tc.missing}},
+				products:       []dashboardcontract.ProductRankingRow{{ProductID: 1, PaidOrders: 2, PaidAmount: 200, TotalCost: tc.cost, MissingCostItems: tc.missing}},
+			}, nil)
+			query := reportingdomain.Query{Range: "today", Timezone: "UTC"}
+			overview, err := service.GetOverview(context.Background(), query)
+			if err != nil {
+				t.Fatal(err)
+			}
+			trends, err := service.GetTrends(context.Background(), query)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rankings, err := service.GetRankings(context.Background(), query)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if overview.KPI.GMVPaid != "200.00" || overview.KPI.PaidOrders != 2 || rankings.TopProducts[0].PaidAmount != "200.00" || rankings.TopProducts[0].PaidOrders != 2 {
+				t.Fatal("sales data was lost")
+			}
+			for label, profit := range map[string]*string{"overview": overview.KPI.TotalProfit, "trend": trends.Points[0].Profit, "ranking": rankings.TopProducts[0].Profit} {
+				if tc.missing > 0 {
+					if profit != nil {
+						t.Errorf("%s profit should be unavailable, got %s", label, *profit)
+					}
+				} else if profit == nil || *profit != tc.want {
+					t.Errorf("%s profit want %s got %v", label, tc.want, profit)
+				}
+			}
+			if overview.KPI.MissingCostItems != tc.missing || trends.Points[0].MissingCostItems != tc.missing || rankings.TopProducts[0].MissingCostItems != tc.missing {
+				t.Fatal("cost coverage was lost")
+			}
+			if tc.missing > 0 {
+				if overview.KPI.ProfitMargin != nil {
+					t.Fatal("incomplete profit margin must be null")
+				}
+				encoded, err := json.Marshal(overview.KPI)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var payload map[string]interface{}
+				if err := json.Unmarshal(encoded, &payload); err != nil {
+					t.Fatal(err)
+				}
+				value, exists := payload["total_profit"]
+				if !exists || value != nil {
+					t.Fatalf("API must explicitly return null: %s", encoded)
+				}
+			} else if overview.KPI.ProfitMargin == nil || *overview.KPI.ProfitMargin != "65.00" {
+				t.Fatal("complete margin should be 65.00")
+			}
+		})
+	}
+}

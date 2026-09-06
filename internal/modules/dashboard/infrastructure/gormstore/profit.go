@@ -23,10 +23,11 @@ func (r *Store) GetProfitOverview(startAt, endAt time.Time) (dashboard.ProfitOve
 	if err := r.db.Model(&orderdomain.OrderItem{}).
 		Select(`
 			COALESCE(SUM(order_items.total_price - order_items.coupon_discount), 0) as total_revenue,
-			COALESCE(SUM(order_items.cost_price * order_items.quantity), 0) as total_cost
+			COALESCE(SUM(CASE WHEN order_items.cost_price > 0 THEN order_items.cost_price * order_items.quantity ELSE 0 END), 0) as total_cost,
+			COALESCE(SUM(CASE WHEN order_items.cost_price > 0 THEN 0 ELSE 1 END), 0) as missing_cost_items
 		`).
 		Joins("JOIN orders ON orders.id = order_items.order_id").
-		Where("order_items.deleted_at IS NULL AND orders.deleted_at IS NULL AND order_items.cost_price > 0 AND orders.created_at >= ? AND orders.created_at < ? AND orders.status IN ?", startAt, endAt, profitOrderStatuses()).
+		Where("order_items.deleted_at IS NULL AND orders.deleted_at IS NULL AND orders.created_at >= ? AND orders.created_at < ? AND orders.status IN ?", startAt, endAt, profitOrderStatuses()).
 		Scan(&result).Error; err != nil {
 		return result, err
 	}
@@ -50,10 +51,11 @@ func (r *Store) GetProfitTrends(startAt, endAt time.Time) ([]dashboard.ProfitTre
 	if err := r.db.Model(&orderdomain.OrderItem{}).Select(fmt.Sprintf(`
 		%s as day,
 		COALESCE(SUM(order_items.total_price - order_items.coupon_discount), 0) as revenue,
-		COALESCE(SUM(order_items.cost_price * order_items.quantity), 0) as cost
+		COALESCE(SUM(CASE WHEN order_items.cost_price > 0 THEN order_items.cost_price * order_items.quantity ELSE 0 END), 0) as cost,
+		COALESCE(SUM(CASE WHEN order_items.cost_price > 0 THEN 0 ELSE 1 END), 0) as missing_cost_items
 	`, orderDayExpr)).
 		Joins("JOIN orders ON orders.id = order_items.order_id").
-		Where("order_items.deleted_at IS NULL AND orders.deleted_at IS NULL AND order_items.cost_price > 0 AND orders.created_at >= ? AND orders.created_at < ? AND orders.status IN ?", startAt, endAt, profitOrderStatuses()).
+		Where("order_items.deleted_at IS NULL AND orders.deleted_at IS NULL AND orders.created_at >= ? AND orders.created_at < ? AND orders.status IN ?", startAt, endAt, profitOrderStatuses()).
 		Group(orderDayExpr).
 		Scan(&rows).Error; err != nil {
 		return nil, err

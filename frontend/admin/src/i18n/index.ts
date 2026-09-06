@@ -728,6 +728,9 @@ const messages = {
       },
       dashboard: {
         title: '运营仪表盘',
+        profitPending: '待核算',
+        profitPendingReason: '部分明细未录入正数成本，利润待核算',
+        recordedCostOnly: '仅含已录入的正数成本',
         subtitle: '聚合订单、支付、库存与用户核心指标',
         period: '统计周期',
         filters: {
@@ -5080,6 +5083,9 @@ const messages = {
       },
       dashboard: {
         title: '營運儀表板',
+        profitPending: '待核算',
+        profitPendingReason: '部分明細未錄入正數成本，利潤待核算',
+        recordedCostOnly: '僅含已錄入的正數成本',
         subtitle: '聚合訂單、支付、庫存與用戶核心指標',
         period: '統計週期',
         filters: {
@@ -9432,6 +9438,9 @@ const messages = {
       },
       dashboard: {
         title: 'Operations Dashboard',
+        profitPending: 'Pending calculation',
+        profitPendingReason: 'Some items have no positive cost recorded; profit is pending calculation.',
+        recordedCostOnly: 'Includes recorded positive costs only',
         subtitle: 'Key metrics across orders, payments, stock, and users',
         period: 'Period',
         filters: {

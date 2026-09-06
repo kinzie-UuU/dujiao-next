@@ -40,7 +40,7 @@ func (s *Service) GetOverview(ctx context.Context, input reportingdomain.Query) 
 
 	setting := s.loadSetting()
 
-	cacheKey := fmt.Sprintf("dashboard:overview:%s:%d:%d:%s:%d:%d:%d:%d",
+	cacheKey := fmt.Sprintf("dashboard:overview:cost-v2:%s:%d:%d:%s:%d:%d:%d:%d",
 		window.Range,
 		window.StartAt.Unix(),
 		window.EndAt.Unix(),
@@ -110,8 +110,9 @@ func (s *Service) GetOverview(ctx context.Context, input reportingdomain.Query) 
 			ProcessingOrders:     overview.ProcessingOrders,
 			GMVPaid:              formatMoneyValue(overview.GMVPaid),
 			TotalCost:            formatMoneyValue(profitOverview.TotalCost),
-			TotalProfit:          formatMoneyValue(totalProfit),
-			ProfitMargin:         formatPercentValue(profitMargin),
+			TotalProfit:          completeProfitValue(totalProfit, profitOverview.MissingCostItems),
+			MissingCostItems:     profitOverview.MissingCostItems,
+			ProfitMargin:         completeProfitValue(profitMargin, profitOverview.MissingCostItems),
 			PaymentsTotal:        overview.PaymentsTotal,
 			PaymentsSuccess:      overview.PaymentsSuccess,
 			PaymentsFailed:       overview.PaymentsFailed,
@@ -174,7 +175,7 @@ func (s *Service) GetTrends(ctx context.Context, input reportingdomain.Query) (*
 		return nil, err
 	}
 
-	cacheKey := fmt.Sprintf("dashboard:trends:%s:%d:%d:%s", window.Range, window.StartAt.Unix(), window.EndAt.Unix(), window.Timezone)
+	cacheKey := fmt.Sprintf("dashboard:trends:cost-v2:%s:%d:%d:%s", window.Range, window.StartAt.Unix(), window.EndAt.Unix(), window.Timezone)
 	if !input.ForceRefresh {
 		var cached TrendResponse
 		hit, cacheErr := cache.GetJSON(ctx, cacheKey, &cached)
@@ -217,13 +218,14 @@ func (s *Service) GetTrends(ctx context.Context, input reportingdomain.Query) (*
 		profitItem := profitMap[day]
 		dayProfit := profitItem.Revenue - profitItem.Cost
 		points = append(points, TrendPoint{
-			Date:            day,
-			OrdersTotal:     orderItem.OrdersTotal,
-			OrdersPaid:      orderItem.OrdersPaid,
-			PaymentsSuccess: paymentItem.PaymentsSuccess,
-			PaymentsFailed:  paymentItem.PaymentsFailed,
-			GMVPaid:         formatMoneyValue(paymentItem.GMVPaid),
-			Profit:          formatMoneyValue(dayProfit),
+			Date:             day,
+			OrdersTotal:      orderItem.OrdersTotal,
+			OrdersPaid:       orderItem.OrdersPaid,
+			PaymentsSuccess:  paymentItem.PaymentsSuccess,
+			PaymentsFailed:   paymentItem.PaymentsFailed,
+			GMVPaid:          formatMoneyValue(paymentItem.GMVPaid),
+			Profit:           completeProfitValue(dayProfit, profitItem.MissingCostItems),
+			MissingCostItems: profitItem.MissingCostItems,
 		})
 	}
 
@@ -252,7 +254,7 @@ func (s *Service) GetRankings(ctx context.Context, input reportingdomain.Query) 
 
 	setting := s.loadSetting()
 
-	cacheKey := fmt.Sprintf("dashboard:rankings:%s:%d:%d:%s:%d:%d",
+	cacheKey := fmt.Sprintf("dashboard:rankings:cost-v2:%s:%d:%d:%s:%d:%d",
 		window.Range,
 		window.StartAt.Unix(),
 		window.EndAt.Unix(),
@@ -284,16 +286,17 @@ func (s *Service) GetRankings(ctx context.Context, input reportingdomain.Query) 
 			title = "-"
 		}
 		products = append(products, ProductRanking{
-			ProductID:     item.ProductID,
-			SKUID:         item.SKUID,
-			SKUCode:       item.SKUCode,
-			SKUSpecValues: item.SKUSpecValuesJSON,
-			Title:         title,
-			PaidOrders:    item.PaidOrders,
-			Quantity:      item.Quantity,
-			PaidAmount:    formatMoneyValue(item.PaidAmount),
-			TotalCost:     formatMoneyValue(item.TotalCost),
-			Profit:        formatMoneyValue(item.PaidAmount - item.TotalCost),
+			ProductID:        item.ProductID,
+			SKUID:            item.SKUID,
+			SKUCode:          item.SKUCode,
+			SKUSpecValues:    item.SKUSpecValuesJSON,
+			Title:            title,
+			PaidOrders:       item.PaidOrders,
+			Quantity:         item.Quantity,
+			PaidAmount:       formatMoneyValue(item.PaidAmount),
+			TotalCost:        formatMoneyValue(item.TotalCost),
+			Profit:           completeProfitValue(item.PaidAmount-item.TotalCost, item.MissingCostItems),
+			MissingCostItems: item.MissingCostItems,
 		})
 	}
 
@@ -364,4 +367,13 @@ func buildDashboardAlerts(overview dashboardcontract.OverviewRow, stockStats das
 		alerts = append(alerts, AlertItem{Type: "payments_failed", Level: "warning", Value: overview.PaymentsFailed})
 	}
 	return alerts
+}
+
+// A non-positive cost cannot distinguish an unrecorded cost from a free item.
+func completeProfitValue(value float64, missingCostItems int64) *string {
+	if missingCostItems > 0 {
+		return nil
+	}
+	formatted := formatMoneyValue(value)
+	return &formatted
 }

@@ -26,7 +26,8 @@ func (r *Store) GetTopProducts(startAt, endAt time.Time, limit int) ([]dashboard
 			COUNT(DISTINCT order_items.order_id) as paid_orders,
 			COALESCE(SUM(order_items.quantity), 0) as quantity,
 			COALESCE(SUM(order_items.total_price - order_items.coupon_discount), 0) as paid_amount,
-			COALESCE(SUM(CASE WHEN order_items.cost_price > 0 THEN order_items.cost_price * order_items.quantity ELSE 0 END), 0) as total_cost
+			COALESCE(SUM(CASE WHEN order_items.cost_price > 0 THEN order_items.cost_price * order_items.quantity ELSE 0 END), 0) as total_cost,
+			COALESCE(SUM(CASE WHEN order_items.cost_price > 0 THEN 0 ELSE 1 END), 0) as missing_cost_items
 		`, titleExpr)).
 		Joins("JOIN orders ON orders.id = order_items.order_id").
 		Joins("LEFT JOIN product_skus ON product_skus.id = order_items.sku_id AND product_skus.deleted_at IS NULL").
