@@ -21,6 +21,11 @@ jobs:
           go-version: "1.26.5"
           cache: true
 
+      - name: Check frontend icon policy
+        run: |
+          node --test frontend/check-ui-icons.test.mjs
+          node frontend/check-ui-icons.mjs
+
       - run: go test ./...
 
       - uses: docker/login-action@v3

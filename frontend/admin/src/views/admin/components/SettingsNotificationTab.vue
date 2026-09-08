@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { reactive, ref, watch } from 'vue'
+import { X } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import type { AdminProduct } from '@/api/types'
@@ -355,7 +356,7 @@ defineExpose({ save, submitting })
                     @click="removeIgnoredProduct(product.id)"
                   >
                     <span>{{ product.label }}</span>
-                    <span class="text-muted-foreground">×</span>
+                    <X class="h-3 w-3 text-muted-foreground" aria-hidden="true" />
                   </button>
                   <span v-if="ignoredProducts.length === 0" class="text-xs text-muted-foreground">
                     {{ t('admin.settings.notification.inventory.emptyIgnoredProducts') }}
