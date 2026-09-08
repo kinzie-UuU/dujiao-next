@@ -843,6 +843,8 @@ const messages = {
         submit: '登录',
         submitting: '登录中...',
         errors: {
+          usernameRequired: '请输入用户名',
+          passwordRequired: '请输入密码',
           invalidCredentials: '用户名或密码错误',
         },
         totp: {
@@ -5198,6 +5200,8 @@ const messages = {
         submit: '登入',
         submitting: '登入中...',
         errors: {
+          usernameRequired: '請輸入使用者名稱',
+          passwordRequired: '請輸入密碼',
           invalidCredentials: '使用者名稱或密碼錯誤',
         },
         totp: {
@@ -9553,6 +9557,8 @@ const messages = {
         submit: 'Sign In',
         submitting: 'Signing in...',
         errors: {
+          usernameRequired: 'Please enter your username',
+          passwordRequired: 'Please enter your password',
           invalidCredentials: 'Invalid username or password',
         },
         totp: {

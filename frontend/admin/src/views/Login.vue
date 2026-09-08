@@ -84,6 +84,14 @@ const getCaptchaPayload = (): CaptchaPayload | undefined => {
 
 const submitPassword = async () => {
   error.value = ''
+  if (!username.value.trim()) {
+    error.value = t('admin.login.errors.usernameRequired')
+    return
+  }
+  if (!password.value) {
+    error.value = t('admin.login.errors.passwordRequired')
+    return
+  }
   if (loginCaptchaEnabled.value && captchaProvider.value === 'image') {
     if (!captchaPayload.value.captcha_id || !captchaPayload.value.captcha_code) {
       error.value = t('admin.login.captchaRequired')
@@ -197,7 +205,7 @@ onUnmounted(() => {
           <form v-if="step === 'password'" class="space-y-4" @submit.prevent="submitPassword">
             <div class="space-y-2">
               <Label for="username">{{ t('admin.login.username') }}</Label>
-              <Input id="username" v-model="username" :placeholder="t('admin.login.username')" />
+              <Input id="username" autocomplete="username" v-model="username" :placeholder="t('admin.login.username')" />
             </div>
             <div class="space-y-2">
               <Label for="password">{{ t('admin.login.password') }}</Label>
@@ -205,6 +213,7 @@ onUnmounted(() => {
                 id="password"
                 v-model="password"
                 type="password"
+                autocomplete="current-password"
                 :placeholder="t('admin.login.password')"
               />
             </div>
@@ -225,7 +234,7 @@ onUnmounted(() => {
               />
             </div>
 
-            <div v-if="error" class="text-sm text-destructive">{{ error }}</div>
+            <div v-if="error" role="alert" class="text-sm text-destructive">{{ error }}</div>
             <Button type="submit" class="w-full" :disabled="authStore.loading || loadingCaptcha">
               {{ authStore.loading ? t('admin.login.submitting') : t('admin.login.submit') }}
             </Button>
@@ -266,7 +275,7 @@ onUnmounted(() => {
               {{ useRecovery ? t('admin.login.totp.useCode') : t('admin.login.totp.useRecovery') }}
             </button>
 
-            <div v-if="error" class="text-sm text-destructive">{{ error }}</div>
+            <div v-if="error" role="alert" class="text-sm text-destructive">{{ error }}</div>
             <div class="flex gap-2">
               <Button type="button" variant="outline" class="flex-1" @click="backToPassword">
                 {{ t('admin.login.totp.back') }}
