@@ -13,10 +13,10 @@ func TestPaymentCallbackImplementationIsSplitByResponsibility(t *testing.T) {
 	serviceDirectory := filepath.Join(repositoryRoot, "internal", "modules", "payment", "application")
 	expected := map[string][]string{
 		"payment_service_callback.go": {
-			"HandleCallback", "updateCallbackMeta", "applyPaymentUpdate",
+			"HandleCallback", "applyPaymentUpdate",
 			"mergeProviderPayload", "markOrderPaid", "validateCallbackPaymentFacts",
 			"updateCallbackMetaWithRepo", "canAdoptVerifiedLegacyDujiaoPayCurrency",
-			"adoptVerifiedLegacyDujiaoPayCurrency",
+			"adoptVerifiedLegacyDujiaoPayCurrency", "creditUnderpaidToWallet",
 		},
 		"payment_service_callback_wallet.go": {
 			"handleWalletRechargeCallback", "applyWalletRechargePaymentUpdate", "canApplyWalletRechargeCallback",

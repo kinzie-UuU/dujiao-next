@@ -255,8 +255,8 @@ func (s *OrderService) CreateGuestOrder(input CreateGuestOrderInput) (*orderdoma
 		return nil, err
 	}
 	password := strings.TrimSpace(input.OrderPassword)
-	if password == "" {
-		return nil, ErrGuestPasswordRequired
+	if err := validateGuestPassword(password); err != nil {
+		return nil, err
 	}
 	locale := strings.TrimSpace(input.Locale)
 	return s.createOrder(orderCreateParams{
@@ -508,8 +508,10 @@ func (s *OrderService) createOrder(input orderCreateParams) (*orderdomain.Order,
 	if input.IsGuest && input.GuestEmail == "" {
 		return nil, ErrGuestEmailRequired
 	}
-	if input.IsGuest && input.GuestPassword == "" {
-		return nil, ErrGuestPasswordRequired
+	if input.IsGuest {
+		if err := validateGuestPassword(input.GuestPassword); err != nil {
+			return nil, err
+		}
 	}
 
 	expireMinutes := s.resolveExpireMinutes()
@@ -651,6 +653,25 @@ func (s *OrderService) createOrder(input orderCreateParams) (*orderdomain.Order,
 		if result.AppliedCoupon != nil {
 			couponRepo := tx.Coupons()
 			usageRepo := tx.CouponUsages()
+			lockedCoupon, err := couponRepo.GetByIDForUpdate(result.AppliedCoupon.ID)
+			if err != nil {
+				return err
+			}
+			if lockedCoupon == nil {
+				return couponcontract.ErrNotFound
+			}
+			if lockedCoupon.UsageLimit > 0 && lockedCoupon.UsedCount >= lockedCoupon.UsageLimit {
+				return couponcontract.ErrUsageLimit
+			}
+			if lockedCoupon.PerUserLimit > 0 && input.UserID != 0 {
+				count, err := usageRepo.CountByUser(lockedCoupon.ID, input.UserID)
+				if err != nil {
+					return err
+				}
+				if int(count) >= lockedCoupon.PerUserLimit {
+					return couponcontract.ErrPerUserLimit
+				}
+			}
 			usage := &coupondomain.CouponUsage{
 				CouponID:       result.AppliedCoupon.ID,
 				UserID:         input.UserID,
@@ -674,6 +695,15 @@ func (s *OrderService) createOrder(input orderCreateParams) (*orderdomain.Order,
 		return nil
 	})
 	if err != nil {
+		for _, couponErr := range []error{
+			couponcontract.ErrNotFound,
+			couponcontract.ErrUsageLimit,
+			couponcontract.ErrPerUserLimit,
+		} {
+			if errors.Is(err, couponErr) {
+				return nil, err
+			}
+		}
 		if errors.Is(err, ErrCardSecretInsufficient) {
 			return nil, ErrCardSecretInsufficient
 		}
@@ -721,4 +751,18 @@ func (s *OrderService) createOrder(input orderCreateParams) (*orderdomain.Order,
 
 func generateOrderNo() string {
 	return serial.Generate("DJ")
+}
+
+// guestPasswordMinLength 游客订单密码最小长度
+const guestPasswordMinLength = 6
+
+func validateGuestPassword(password string) error {
+	password = strings.TrimSpace(password)
+	if password == "" {
+		return ErrGuestPasswordRequired
+	}
+	if len([]rune(password)) < guestPasswordMinLength {
+		return ErrGuestPasswordTooShort
+	}
+	return nil
 }

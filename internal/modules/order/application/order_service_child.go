@@ -22,6 +22,19 @@ func (s *OrderService) cancelOrderWithChildren(order *orderdomain.Order, rollbac
 		orderStore := tx.Orders()
 		productRepo := tx.Products()
 		productSKURepo := tx.ProductSKUs()
+		// 事务内加锁复核状态，避免与并发的支付回调竞争
+		locked, err := orderStore.GetByIDForUpdate(order.ID)
+		if err != nil {
+			return ErrOrderFetchFailed
+		}
+		if locked == nil {
+			return ErrOrderNotFound
+		}
+		if locked.Status != order.Status {
+			return ErrOrderCancelNotAllowed
+		}
+		// 支付方式可能已在读取订单后切换，退款采用事务内最新余额分配。
+		order.WalletPaidAmount = locked.WalletPaidAmount
 		updates := map[string]interface{}{
 			"canceled_at": now,
 			"updated_at":  now,
@@ -125,7 +138,11 @@ func (s *OrderService) CancelOrder(orderID uint, userID uint) (*orderdomain.Orde
 	if order.Status != constants.OrderStatusPendingPayment {
 		return nil, ErrOrderCancelNotAllowed
 	}
-	if err := s.cancelOrderWithChildren(order, false); err != nil {
+	// 未支付订单取消时同步回滚优惠券用量
+	if err := s.cancelOrderWithChildren(order, true); err != nil {
+		if errors.Is(err, ErrOrderCancelNotAllowed) {
+			return nil, err
+		}
 		return nil, ErrOrderUpdateFailed
 	}
 	if s.affiliateSvc != nil {

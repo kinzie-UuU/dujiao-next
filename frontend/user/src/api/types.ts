@@ -467,6 +467,8 @@ export interface CreatePaymentPayload {
 }
 
 export interface PaymentCreateResult {
+    payable_amount?: string
+    currency?: string
     order_paid?: boolean
     wallet_paid_amount?: string
     online_pay_amount?: string

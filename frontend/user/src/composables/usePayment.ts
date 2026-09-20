@@ -445,8 +445,12 @@ export function usePayment() {
     return formatMoney(String(fixed), order.value?.currency)
   })
   const payableAmountDisplay = computed(() => {
+    const currency = String(paymentResult.value?.currency || "").trim() || order.value?.currency
+    if (paymentResult.value?.payable_amount !== undefined && paymentResult.value?.payable_amount !== null && paymentResult.value?.payable_amount !== "") {
+      return formatMoney(String(paymentResult.value.payable_amount), currency)
+    }
     if (paymentResult.value?.amount !== undefined && paymentResult.value?.amount !== null && paymentResult.value?.amount !== '') {
-      return formatMoney(String(paymentResult.value.amount), order.value?.currency)
+      return formatMoney(String(paymentResult.value.amount), currency)
     }
     const base = amountToCents(order.value?.total_amount)
     const fee = feeAmountCents.value

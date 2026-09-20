@@ -149,7 +149,7 @@ const openDetail = async (payment: { id: number }) => {
 
 const canConfirmManualPayment = (payment: AdminPayment | null) => {
   if (!payment || payment.provider_type !== 'manual_qr') return false
-  return payment.status === 'pending' || payment.status === 'initiated'
+  return payment.status === 'pending' || payment.status === 'initiated' || payment.status === 'expired'
 }
 
 const confirmManualPayment = async () => {
@@ -495,6 +495,9 @@ watch(
             {{ detailError }}
           </div>
           <div v-else-if="detailPayment" class="space-y-6 text-sm text-muted-foreground">
+            <div v-if="detailPayment.exception_code" role="alert" class="rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-950">
+              {{ t('admin.payments.exceptionHint') }}
+            </div>
             <div v-if="canConfirmManualPayment(detailPayment)" class="rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-950">
               <p class="mb-3">{{ t('admin.payments.manualConfirmHint') }}</p>
               <Button :disabled="manualConfirming" @click="confirmManualPayment">

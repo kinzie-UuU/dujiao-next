@@ -39,7 +39,7 @@ func (s *PaymentService) ConfirmManualPayment(paymentID uint) (*paymentdomain.Pa
 	if payment.Status == constants.PaymentStatusSuccess {
 		return payment, nil
 	}
-	if payment.Status != constants.PaymentStatusPending && payment.Status != constants.PaymentStatusInitiated {
+	if payment.Status != constants.PaymentStatusPending && payment.Status != constants.PaymentStatusInitiated && payment.Status != constants.PaymentStatusExpired {
 		return nil, ErrPaymentStatusInvalid
 	}
 

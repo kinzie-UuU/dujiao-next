@@ -1042,3 +1042,475 @@ func TestConfirmManualPaymentRejectsNonManualProvider(t *testing.T) {
 		t.Fatalf("expected provider not supported, got %v", err)
 	}
 }
+
+func createUnderpaidChannel(t *testing.T, db *gorm.DB, svc *PaymentService, name, channelType string) *paymentdomain.PaymentChannel {
+	t.Helper()
+	now := time.Now()
+	channel := &paymentdomain.PaymentChannel{
+		Name: name, ProviderType: constants.PaymentProviderOfficial, ChannelType: channelType,
+		InteractionMode: constants.PaymentInteractionQR,
+		FeeRate:         money.FromDecimal(decimal.Zero), FixedFee: money.FromDecimal(decimal.Zero),
+		ConfigJSON: jsonmap.JSON{}, IsActive: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(channel).Error; err != nil {
+		t.Fatalf("create payment channel failed: %v", err)
+	}
+	registerTestGateway(t, svc, channel.ProviderType, channel.ChannelType, emptyProviderRefProvider{})
+	return channel
+}
+
+func createUnderpaidOrder(t *testing.T, db *gorm.DB, orderNo string, userID uint, total int64) *orderdomain.Order {
+	t.Helper()
+	now := time.Now()
+	order := &orderdomain.Order{
+		OrderNo: orderNo, UserID: userID, Status: constants.OrderStatusPendingPayment, Currency: "CNY",
+		OriginalAmount: money.FromDecimal(decimal.NewFromInt(total)), TotalAmount: money.FromDecimal(decimal.NewFromInt(total)),
+		DiscountAmount: money.FromDecimal(decimal.Zero), PromotionDiscountAmount: money.FromDecimal(decimal.Zero),
+		WalletPaidAmount: money.FromDecimal(decimal.Zero), OnlinePaidAmount: money.FromDecimal(decimal.NewFromInt(total)),
+		RefundedAmount: money.FromDecimal(decimal.Zero), CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(order).Error; err != nil {
+		t.Fatalf("create order failed: %v", err)
+	}
+	return order
+}
+
+func walletBalance(t *testing.T, db *gorm.DB, userID uint) string {
+	t.Helper()
+	var account walletdomain.Account
+	if err := db.Where("user_id = ?", userID).First(&account).Error; err != nil {
+		t.Fatalf("load wallet account failed: %v", err)
+	}
+	return account.Balance.StringFixed(2)
+}
+
+// 余额 5 + 渠道 A 在线 10 混合支付后切到渠道 B，余额被退回、在线应付额抬到 15。
+// 此时旧的 A 链接在网关侧仍可支付，只付 10 不得履约整单。
+func TestOldPaymentUnderpaidDoesNotFulfillOrder(t *testing.T) {
+	svc, db := setupPaymentServiceWalletTest(t)
+	now := time.Now()
+
+	user := &userdomain.User{
+		Email: "underpaid@example.com", PasswordHash: "hash", Status: constants.UserStatusActive,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(user).Error; err != nil {
+		t.Fatalf("create user failed: %v", err)
+	}
+	if err := db.Create(&walletdomain.Account{
+		UserID: user.ID, Balance: money.FromDecimal(decimal.NewFromInt(5)), CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatalf("create wallet account failed: %v", err)
+	}
+
+	channelA := createUnderpaidChannel(t, db, svc, "Underpaid Gateway A", constants.PaymentChannelTypeWechat)
+	channelB := createUnderpaidChannel(t, db, svc, "Underpaid Gateway B", constants.PaymentChannelTypeAlipay)
+	order := createUnderpaidOrder(t, db, "DJUNDERPAID001", user.ID, 15)
+
+	resultA, err := svc.CreatePayment(CreatePaymentInput{
+		OrderID: order.ID, ChannelID: channelA.ID, UseBalance: true, Context: context.Background(),
+	})
+	if err != nil {
+		t.Fatalf("create payment on channel A failed: %v", err)
+	}
+	if got := resultA.Payment.Amount.StringFixed(2); got != "10.00" {
+		t.Fatalf("channel A payment amount want 10.00 got %s", got)
+	}
+
+	if _, err := svc.CreatePayment(CreatePaymentInput{
+		OrderID: order.ID, ChannelID: channelB.ID, UseBalance: false, Context: context.Background(),
+	}); err != nil {
+		t.Fatalf("switch to channel B failed: %v", err)
+	}
+	if got := walletBalance(t, db, user.ID); got != "5.00" {
+		t.Fatalf("balance want 5.00 after switching to online payment got %s", got)
+	}
+
+	var supersededA paymentdomain.Payment
+	if err := db.First(&supersededA, resultA.Payment.ID).Error; err != nil {
+		t.Fatalf("reload channel A payment failed: %v", err)
+	}
+
+	paid, err := svc.HandleCallback(PaymentCallbackInput{
+		PaymentID: supersededA.ID, OrderNo: order.OrderNo, ChannelID: channelA.ID,
+		Status: constants.PaymentStatusSuccess, Amount: supersededA.Amount, Currency: "CNY", ProviderRef: "underpaid-ref",
+	})
+	if err != nil {
+		t.Fatalf("handle underpaid callback failed: %v", err)
+	}
+	if paid.Status != constants.PaymentStatusSuccess {
+		t.Fatalf("payment status want success got %s", paid.Status)
+	}
+	if paid.ExceptionCode != constants.PaymentExceptionUnderpaidSucceeded {
+		t.Fatalf("exception code want %s got %s", constants.PaymentExceptionUnderpaidSucceeded, paid.ExceptionCode)
+	}
+
+	var reloadedOrder orderdomain.Order
+	if err := db.First(&reloadedOrder, order.ID).Error; err != nil {
+		t.Fatalf("reload order failed: %v", err)
+	}
+	if reloadedOrder.Status != constants.OrderStatusPendingPayment || reloadedOrder.PaidAt != nil {
+		t.Fatalf("underpaid callback must not fulfill the order: %+v", reloadedOrder)
+	}
+
+	// 用户实付的 10 元转入余额，加上退回的 5 元刚好可以补齐这一单。
+	if got := walletBalance(t, db, user.ID); got != "15.00" {
+		t.Fatalf("balance want 15.00 after underpaid credit got %s", got)
+	}
+	var credits []walletdomain.Transaction
+	if err := db.Where("user_id = ? AND type = ?", user.ID, constants.WalletTxnTypeOrderUnderpaidCredit).Find(&credits).Error; err != nil {
+		t.Fatalf("load underpaid credit transactions failed: %v", err)
+	}
+	if len(credits) != 1 || credits[0].Amount.StringFixed(2) != "10.00" {
+		t.Fatalf("underpaid credit transactions unexpected: %+v", credits)
+	}
+
+	// 重复回调不得重复入账。
+	if _, err := svc.HandleCallback(PaymentCallbackInput{
+		PaymentID: supersededA.ID, OrderNo: order.OrderNo, ChannelID: channelA.ID,
+		Status: constants.PaymentStatusSuccess, Amount: supersededA.Amount, Currency: "CNY", ProviderRef: "underpaid-ref",
+	}); err != nil {
+		t.Fatalf("replay underpaid callback failed: %v", err)
+	}
+	if got := walletBalance(t, db, user.ID); got != "15.00" {
+		t.Fatalf("balance want 15.00 after replayed callback got %s", got)
+	}
+
+	// 余额补齐后用户可以正常完成订单。
+	settled, err := svc.CreatePayment(CreatePaymentInput{
+		OrderID: order.ID, UseBalance: true, Context: context.Background(),
+	})
+	if err != nil {
+		t.Fatalf("settle order with wallet balance failed: %v", err)
+	}
+	if !settled.OrderPaid {
+		t.Fatalf("order should be paid by wallet balance: %+v", settled)
+	}
+	if got := walletBalance(t, db, user.ID); got != "0.00" {
+		t.Fatalf("balance want 0.00 after settling the order got %s", got)
+	}
+}
+
+// 游客订单没有钱包账户：同样不得履约，只留异常码等待人工处理。
+func TestUnderpaidGuestOrderIsNotFulfilled(t *testing.T) {
+	svc, db := setupPaymentServiceWalletTest(t)
+	channel := createUnderpaidChannel(t, db, svc, "Guest Underpaid Gateway", constants.PaymentChannelTypeWechat)
+	order := createUnderpaidOrder(t, db, "DJUNDERPAID002", 0, 15)
+
+	now := time.Now()
+	stale := &paymentdomain.Payment{
+		OrderID: order.ID, ChannelID: channel.ID, ProviderType: channel.ProviderType, ChannelType: channel.ChannelType,
+		InteractionMode: channel.InteractionMode, Amount: money.FromDecimal(decimal.NewFromInt(10)),
+		FeeAmount: money.FromDecimal(decimal.Zero),
+		Currency:  "CNY", Status: constants.PaymentStatusPending, QRCode: "stale-link",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(stale).Error; err != nil {
+		t.Fatalf("create stale payment failed: %v", err)
+	}
+
+	paid, err := svc.HandleCallback(PaymentCallbackInput{
+		PaymentID: stale.ID, OrderNo: order.OrderNo, ChannelID: channel.ID,
+		Status: constants.PaymentStatusSuccess, Amount: stale.Amount, Currency: "CNY", ProviderRef: "guest-underpaid-ref",
+	})
+	if err != nil {
+		t.Fatalf("handle guest underpaid callback failed: %v", err)
+	}
+	if paid.ExceptionCode != constants.PaymentExceptionUnderpaidSucceeded {
+		t.Fatalf("exception code want %s got %s", constants.PaymentExceptionUnderpaidSucceeded, paid.ExceptionCode)
+	}
+
+	var reloadedOrder orderdomain.Order
+	if err := db.First(&reloadedOrder, order.ID).Error; err != nil {
+		t.Fatalf("reload order failed: %v", err)
+	}
+	if reloadedOrder.Status != constants.OrderStatusPendingPayment || reloadedOrder.PaidAt != nil {
+		t.Fatalf("guest underpaid callback must not fulfill the order: %+v", reloadedOrder)
+	}
+}
+
+// 足额支付不受影响：金额守恒校验只拦欠额，不改变正常履约路径。
+func TestFullyPaidCallbackStillFulfillsOrder(t *testing.T) {
+	svc, db := setupPaymentServiceWalletTest(t)
+	channel := createUnderpaidChannel(t, db, svc, "Full Amount Gateway", constants.PaymentChannelTypeWechat)
+	order := createUnderpaidOrder(t, db, "DJUNDERPAID003", 0, 15)
+
+	created, err := svc.CreatePayment(CreatePaymentInput{
+		OrderID: order.ID, ChannelID: channel.ID, Context: context.Background(),
+	})
+	if err != nil {
+		t.Fatalf("create payment failed: %v", err)
+	}
+	paid, err := svc.HandleCallback(PaymentCallbackInput{
+		PaymentID: created.Payment.ID, OrderNo: order.OrderNo, ChannelID: channel.ID,
+		Status: constants.PaymentStatusSuccess, Amount: created.Payment.Amount, Currency: "CNY", ProviderRef: "full-ref",
+	})
+	if err != nil {
+		t.Fatalf("handle full amount callback failed: %v", err)
+	}
+	if paid.ExceptionCode != "" {
+		t.Fatalf("full amount payment should not be flagged, got %s", paid.ExceptionCode)
+	}
+
+	var reloadedOrder orderdomain.Order
+	if err := db.First(&reloadedOrder, order.ID).Error; err != nil {
+		t.Fatalf("reload order failed: %v", err)
+	}
+	if reloadedOrder.Status != constants.OrderStatusPaid || reloadedOrder.PaidAt == nil {
+		t.Fatalf("full amount payment should fulfill the order: %+v", reloadedOrder)
+	}
+}
+
+// 余额分配在"用余额 → 改在线 → 再用余额"之间来回切换时，每一轮都必须真实扣款。
+// 轮次幂等键缺失时第二轮会命中上一轮早已退回的流水，订单被标记为已用余额、钱包却没扣钱。
+func TestWalletBalanceReappliedAfterReleaseDebitsAgain(t *testing.T) {
+	svc, db := setupPaymentServiceWalletTest(t)
+	now := time.Now()
+
+	user := &userdomain.User{
+		Email: "reapply@example.com", PasswordHash: "hash", Status: constants.UserStatusActive,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(user).Error; err != nil {
+		t.Fatalf("create user failed: %v", err)
+	}
+	if err := db.Create(&walletdomain.Account{
+		UserID: user.ID, Balance: money.FromDecimal(decimal.NewFromInt(5)), CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatalf("create wallet account failed: %v", err)
+	}
+
+	channelA := createUnderpaidChannel(t, db, svc, "Reapply Gateway A", constants.PaymentChannelTypeWechat)
+	channelB := createUnderpaidChannel(t, db, svc, "Reapply Gateway B", constants.PaymentChannelTypeAlipay)
+	order := createUnderpaidOrder(t, db, "DJUNDERPAID004", user.ID, 15)
+
+	if _, err := svc.CreatePayment(CreatePaymentInput{
+		OrderID: order.ID, ChannelID: channelA.ID, UseBalance: true, Context: context.Background(),
+	}); err != nil {
+		t.Fatalf("first wallet allocation failed: %v", err)
+	}
+	if got := walletBalance(t, db, user.ID); got != "0.00" {
+		t.Fatalf("balance want 0.00 after first allocation got %s", got)
+	}
+
+	if _, err := svc.CreatePayment(CreatePaymentInput{
+		OrderID: order.ID, ChannelID: channelB.ID, UseBalance: false, Context: context.Background(),
+	}); err != nil {
+		t.Fatalf("switch to online payment failed: %v", err)
+	}
+	if got := walletBalance(t, db, user.ID); got != "5.00" {
+		t.Fatalf("balance want 5.00 after release got %s", got)
+	}
+
+	result, err := svc.CreatePayment(CreatePaymentInput{
+		OrderID: order.ID, ChannelID: channelA.ID, UseBalance: true, Context: context.Background(),
+	})
+	if err != nil {
+		t.Fatalf("second wallet allocation failed: %v", err)
+	}
+	if got := walletBalance(t, db, user.ID); got != "0.00" {
+		t.Fatalf("balance want 0.00 after re-applying the balance got %s", got)
+	}
+	if got := result.WalletPaidAmount.StringFixed(2); got != "5.00" {
+		t.Fatalf("wallet_paid_amount want 5.00 got %s", got)
+	}
+	if got := result.Payment.Amount.StringFixed(2); got != "10.00" {
+		t.Fatalf("online payment amount want 10.00 got %s", got)
+	}
+
+	var reloadedOrder orderdomain.Order
+	if err := db.First(&reloadedOrder, order.ID).Error; err != nil {
+		t.Fatalf("reload order failed: %v", err)
+	}
+	if got := reloadedOrder.WalletPaidAmount.StringFixed(2); got != "5.00" {
+		t.Fatalf("order wallet_paid_amount want 5.00 got %s", got)
+	}
+}
+
+func TestPaymentCoveredOrderAmountConversion(t *testing.T) {
+	for _, tc := range []struct{ name, amount, fee, rate, want string }{
+		{"same currency", "105", "5", "", "100"},
+		{"converted", "11", "0", "0.11", "100"},
+		{"converted fee", "11.55", "5", "0.11", "100"},
+		{"underpaid converted", "5.5", "0", "0.11", "50"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &paymentdomain.Payment{Amount: money.FromDecimal(decimal.RequireFromString(tc.amount)), FeeAmount: money.FromDecimal(decimal.RequireFromString(tc.fee))}
+			if tc.rate != "" {
+				p.ProviderPayload = jsonmap.JSON{"exchange_rate": tc.rate}
+			}
+			if got := paymentCoveredOrderAmount(p, p.Amount.Decimal); got.String() != tc.want {
+				t.Fatalf("got %s want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestClosedOrderCallbackDoesNotResurrectOrder(t *testing.T) {
+	for _, status := range []string{constants.OrderStatusCanceled, constants.OrderStatusDelivered} {
+		t.Run(status, func(t *testing.T) {
+			svc, db := setupPaymentServiceWalletTest(t)
+			channel := createUnderpaidChannel(t, db, svc, "Closed", constants.PaymentChannelTypeWechat)
+			order := createUnderpaidOrder(t, db, "DJCLOSED"+status, 0, 15)
+			payment := &paymentdomain.Payment{OrderID: order.ID, ChannelID: channel.ID, ProviderType: channel.ProviderType, ChannelType: channel.ChannelType, InteractionMode: channel.InteractionMode, Amount: money.FromDecimal(decimal.NewFromInt(15)), Currency: "CNY", Status: constants.PaymentStatusPending}
+			if err := db.Create(payment).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Model(order).Update("status", status).Error; err != nil {
+				t.Fatal(err)
+			}
+			got, err := svc.HandleCallback(PaymentCallbackInput{PaymentID: payment.ID, OrderNo: order.OrderNo, ChannelID: channel.ID, Status: constants.PaymentStatusSuccess, Amount: payment.Amount, Currency: "CNY"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.ExceptionCode == "" {
+				t.Fatal("missing exception")
+			}
+			var saved orderdomain.Order
+			if err := db.First(&saved, order.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if saved.Status != status {
+				t.Fatalf("status changed to %s", saved.Status)
+			}
+		})
+	}
+}
+
+func TestExpiredPaymentFailureDoesNotReleaseNewWalletAllocation(t *testing.T) {
+	svc, db := setupPaymentServiceWalletTest(t)
+	// The old link expired while a newer payment owns the current allocation.
+	channel := createUnderpaidChannel(t, db, svc, "Old failed link", constants.PaymentChannelTypeWechat)
+	order := createUnderpaidOrder(t, db, "DJOLDFAILED", 42, 15)
+	if err := db.Model(order).Update("wallet_paid_amount", 5).Error; err != nil {
+		t.Fatal(err)
+	}
+	old := &paymentdomain.Payment{OrderID: order.ID, ChannelID: channel.ID, ProviderType: channel.ProviderType, ChannelType: channel.ChannelType, Amount: money.FromDecimal(decimal.NewFromInt(10)), Currency: "CNY", Status: constants.PaymentStatusExpired}
+	if err := db.Create(old).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.HandleCallback(PaymentCallbackInput{PaymentID: old.ID, OrderNo: order.OrderNo, ChannelID: channel.ID, Status: constants.PaymentStatusFailed}); err != nil {
+		t.Fatal(err)
+	}
+	var saved orderdomain.Order
+	if err := db.First(&saved, order.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if saved.WalletPaidAmount.StringFixed(2) != "5.00" {
+		t.Fatalf("new wallet allocation released: %s", saved.WalletPaidAmount)
+	}
+}
+
+func TestConvertedPaymentUsesOriginalSnapshotAfterRounding(t *testing.T) {
+	p := &paymentdomain.Payment{Amount: money.FromDecimal(decimal.RequireFromString("0.01")), ProviderPayload: jsonmap.JSON{"original_amount": "0.10", "exchange_rate": "0.11"}}
+	if got := paymentCoveredOrderAmount(p, p.Amount.Decimal); !got.Equal(decimal.RequireFromString("0.10")) {
+		t.Fatalf("rounded full payment covers %s", got)
+	}
+	merged := mergeProviderPayload(p.ProviderPayload, jsonmap.JSON{"original_amount": "999", "exchange_rate": "0.000001"})
+	if merged["original_amount"] != "0.10" || merged["exchange_rate"] != "0.11" {
+		t.Fatalf("snapshot overwritten: %v", merged)
+	}
+}
+
+type callbackReadRaceStore struct {
+	paymentcontract.Store
+	afterRead func()
+}
+
+func (s *callbackReadRaceStore) GetByID(id uint) (*paymentdomain.Payment, error) {
+	p, err := s.Store.GetByID(id)
+	if err == nil && s.afterRead != nil {
+		s.afterRead()
+	}
+	return p, err
+}
+func TestSameStatusCallbackDoesNotOverwriteConcurrentSuccess(t *testing.T) {
+	svc, db := setupPaymentServiceWalletTest(t)
+	order := createUnderpaidOrder(t, db, "DJCALLBACKRACE", 0, 15)
+	payment := &paymentdomain.Payment{OrderID: order.ID, ChannelID: 1, ProviderType: constants.PaymentProviderOfficial, ChannelType: constants.PaymentChannelTypeWechat, Amount: money.FromDecimal(decimal.NewFromInt(15)), Currency: "CNY", Status: constants.PaymentStatusPending}
+	if err := db.Create(payment).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc.paymentRepo = &callbackReadRaceStore{Store: svc.paymentRepo, afterRead: func() {
+		if err := db.Model(payment).Updates(map[string]interface{}{"status": constants.PaymentStatusSuccess, "exception_code": constants.PaymentExceptionUnderpaidSucceeded}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}}
+	got, err := svc.HandleCallback(PaymentCallbackInput{PaymentID: payment.ID, Status: constants.PaymentStatusPending, Payload: jsonmap.JSON{"late_pending": true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != constants.PaymentStatusSuccess || got.ExceptionCode != constants.PaymentExceptionUnderpaidSucceeded {
+		t.Fatalf("concurrent success overwritten: %+v", got)
+	}
+	var saved paymentdomain.Payment
+	if err := db.First(&saved, payment.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if saved.Status != constants.PaymentStatusSuccess || saved.ExceptionCode != constants.PaymentExceptionUnderpaidSucceeded {
+		t.Fatalf("stored success overwritten: %+v", saved)
+	}
+}
+
+func TestConfirmExpiredManualPaymentUsesNormalGuards(t *testing.T) {
+	for _, tc := range []struct {
+		name, status, exception string
+		amount                  int64
+	}{
+		{"underpaid", constants.OrderStatusPendingPayment, constants.PaymentExceptionUnderpaidSucceeded, 10},
+		{"closed", constants.OrderStatusCanceled, constants.PaymentExceptionClosedOrderSucceeded, 15},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, db := setupPaymentServiceWalletTest(t)
+			order := createUnderpaidOrder(t, db, "DJMANUALEXPIRED"+tc.name, 0, 15)
+			if err := db.Model(order).Update("status", tc.status).Error; err != nil {
+				t.Fatal(err)
+			}
+			old := &paymentdomain.Payment{OrderID: order.ID, ChannelID: 1, ProviderType: manualQRProviderType, ChannelType: constants.PaymentChannelTypeWechat, Amount: money.FromDecimal(decimal.NewFromInt(tc.amount)), Currency: "CNY", Status: constants.PaymentStatusExpired}
+			if err := db.Create(old).Error; err != nil {
+				t.Fatal(err)
+			}
+			got, err := svc.ConfirmManualPayment(old.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != constants.PaymentStatusSuccess || got.ExceptionCode != tc.exception {
+				t.Fatalf("unexpected payment: %+v", got)
+			}
+			var saved orderdomain.Order
+			if err := db.First(&saved, order.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if saved.Status != tc.status || saved.PaidAt != nil {
+				t.Fatalf("order incorrectly fulfilled: %+v", saved)
+			}
+		})
+	}
+}
+
+func TestRechargeSameStatusCallbackDoesNotOverwriteConcurrentSuccess(t *testing.T) {
+	svc, db := setupPaymentServiceWalletTest(t)
+	payment, recharge := createWalletRechargeFixture(t, db, constants.PaymentStatusPending, constants.WalletRechargeStatusPending)
+	svc.paymentRepo = &callbackReadRaceStore{Store: svc.paymentRepo, afterRead: func() {
+		if err := db.Model(payment).Update("status", constants.PaymentStatusSuccess).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Model(recharge).Update("status", constants.WalletRechargeStatusSuccess).Error; err != nil {
+			t.Fatal(err)
+		}
+	}}
+	got, err := svc.HandleCallback(PaymentCallbackInput{PaymentID: payment.ID, Status: constants.PaymentStatusPending, Payload: jsonmap.JSON{"late_pending": true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != constants.PaymentStatusSuccess {
+		t.Fatalf("concurrent recharge success overwritten: %s", got.Status)
+	}
+	var saved paymentdomain.Payment
+	if err := db.First(&saved, payment.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if saved.Status != constants.PaymentStatusSuccess {
+		t.Fatalf("stored recharge success overwritten: %s", saved.Status)
+	}
+}

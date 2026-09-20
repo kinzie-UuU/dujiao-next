@@ -555,3 +555,10 @@ const (
 	BannerLinkTypeInternal = "internal"
 	BannerLinkTypeExternal = "external"
 )
+
+const (
+	PaymentExceptionUnderpaidSucceeded   = "underpaid_payment_succeeded"
+	PaymentExceptionDuplicateSucceeded   = "duplicate_payment_succeeded"
+	PaymentExceptionClosedOrderSucceeded = "closed_order_payment_succeeded"
+	WalletTxnTypeOrderUnderpaidCredit    = "order_underpaid_credit"
+)

@@ -1,6 +1,7 @@
 package application
 
 import (
+	"fmt"
 	"strings"
 
 	paymentdomain "github.com/dujiao-next/internal/modules/payment/domain"
@@ -14,6 +15,60 @@ import (
 
 	"github.com/shopspring/decimal"
 )
+
+// paymentExchangeRate 读取创建支付时存下的渠道换汇汇率快照
+// （ProviderPayload["exchange_rate"]）。存在即说明这笔支付发生过法币换汇（渠道配置了
+// target_currency + exchange_rate，见各 adapter 的 cfg.NeedsCurrencyConversion 分支），
+// applyProviderPayment 回写后 payment.Amount/Currency 已经不是订单原始币种。返回零值
+// 和 false 表示未换汇或快照缺失/无效。
+func paymentExchangeRate(payment *paymentdomain.Payment) (decimal.Decimal, bool) {
+	if payment == nil || payment.ProviderPayload == nil {
+		return decimal.Zero, false
+	}
+	rateRaw, ok := payment.ProviderPayload["exchange_rate"]
+	if !ok {
+		return decimal.Zero, false
+	}
+	rateStr := strings.TrimSpace(fmt.Sprint(rateRaw))
+	if rateStr == "" {
+		return decimal.Zero, false
+	}
+	rate, err := decimal.NewFromString(rateStr)
+	if err != nil || !rate.IsPositive() {
+		return decimal.Zero, false
+	}
+	return rate, true
+}
+
+// paymentCoveredOrderAmount 按订单币种计算到账金额，扣除本版本由用户承担的手续费。
+// 换汇使用创建时汇率快照，兼容仅保留 original_amount 的历史支付。
+func paymentCoveredOrderAmount(payment *paymentdomain.Payment, callbackAmount decimal.Decimal) decimal.Decimal {
+	if payment == nil {
+		return decimal.Zero
+	}
+	covered := payment.Amount.Decimal
+	if rate, ok := paymentExchangeRate(payment); ok {
+		source := callbackAmount
+		if source.IsZero() {
+			source = payment.Amount.Decimal
+		}
+		covered = source.Div(rate)
+	}
+	// 原币金额是创建时的可信快照。结算币舍入不可逆，已验证实付与创建金额一致时
+	// 优先使用它，避免 0.10 CNY -> 0.01 GBP -> 0.09 CNY 被误判欠付。
+	if callbackAmount.IsZero() || callbackAmount.Equal(payment.Amount.Decimal) {
+		if raw, ok := payment.ProviderPayload["original_amount"]; ok {
+			if original, err := decimal.NewFromString(strings.TrimSpace(fmt.Sprint(raw))); err == nil && original.IsPositive() {
+				covered = original
+			}
+		}
+	}
+	fee := payment.FeeAmount.Decimal
+	if fee.IsPositive() {
+		covered = covered.Sub(fee)
+	}
+	return normalizeOrderAmount(covered)
+}
 
 // normalizeOrderAmount 归一化金额精度与下限。
 func normalizeOrderAmount(amount decimal.Decimal) decimal.Decimal {

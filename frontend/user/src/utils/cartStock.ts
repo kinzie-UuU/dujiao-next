@@ -1,5 +1,6 @@
 import { productAPI } from '../api'
 import type { CartItem } from '../stores/cart'
+import { resolveCartPricingSnapshot } from './cartPricingSnapshot'
 import { normalizeSkuId } from './sku'
 
 interface CartStoreLike {
@@ -126,6 +127,7 @@ export const refreshCartStockSnapshots = async (cartStore: CartStoreLike) => {
     const stockRangeMax = normalizeStockNumber(matchedSku?.stock_range_max)
 
     cartStore.patchItem(item.productId, item.skuId, {
+      ...resolveCartPricingSnapshot(product, matchedSku),
       skuCode: String(matchedSku?.sku_code || item.skuCode || ''),
       skuSpecValues: (matchedSku?.spec_values && typeof matchedSku.spec_values === 'object')
         ? matchedSku.spec_values

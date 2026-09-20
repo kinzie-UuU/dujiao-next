@@ -9,6 +9,7 @@ import (
 
 // Payment 支付记录
 type Payment struct {
+	ExceptionCode      string       `gorm:"size:64" json:"exception_code,omitempty"`
 	ID                 uint         `gorm:"primarykey" json:"id"`                                    // 主键
 	OrderID            uint         `gorm:"index;not null" json:"order_id"`                          // 订单ID
 	ChannelID          uint         `gorm:"index;not null" json:"channel_id"`                        // 支付渠道ID

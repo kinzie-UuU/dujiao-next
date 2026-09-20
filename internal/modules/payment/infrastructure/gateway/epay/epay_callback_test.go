@@ -137,3 +137,9 @@ func signEpayV2CallbackForm(t *testing.T, cfg *Config, params map[string]string)
 	form["sign"] = []string{sign}
 	return form
 }
+
+func TestVerifyCallbackRejectsEmptyMerchantKey(t *testing.T) {
+	if err := VerifyCallback(&Config{EpayVersion: VersionV1}, map[string][]string{"sign": {signMD5("")}}); err != ErrConfigInvalid {
+		t.Fatalf("expected invalid empty key, got %v", err)
+	}
+}

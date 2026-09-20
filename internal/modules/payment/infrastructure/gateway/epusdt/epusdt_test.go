@@ -432,3 +432,9 @@ func TestCreatePayment_MissingTradeIDBecomesResponseInvalid(t *testing.T) {
 		t.Fatalf("expected ErrResponseInvalid, got %v", err)
 	}
 }
+
+func TestVerifyCallbackRejectsEmptySecret(t *testing.T) {
+	if err := VerifyCallback(&Config{}, &CallbackData{Status: StatusSuccess}); err != ErrConfigInvalid {
+		t.Fatalf("expected invalid empty secret, got %v", err)
+	}
+}
