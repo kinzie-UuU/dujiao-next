@@ -7,6 +7,7 @@ package jsonmap
 import (
 	"database/sql/driver"
 	"encoding/json"
+	"fmt"
 )
 
 // JSON is a JSON object with database/sql serialization support.
@@ -22,13 +23,25 @@ func (value JSON) Value() (driver.Value, error) {
 
 // Scan implements sql.Scanner.
 func (value *JSON) Scan(source interface{}) error {
+	// Scan replaces the whole persisted object, including on decoding failure.
+	*value = nil
 	if source == nil {
 		*value = make(JSON)
 		return nil
 	}
-	bytes, ok := source.([]byte)
-	if !ok {
-		return nil
+	var data []byte
+	switch source := source.(type) {
+	case []byte:
+		data = source
+	case string:
+		data = []byte(source)
+	default:
+		return fmt.Errorf("jsonmap: unsupported database value type %T", source)
 	}
-	return json.Unmarshal(bytes, value)
+	var decoded JSON
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*value = decoded
+	return nil
 }

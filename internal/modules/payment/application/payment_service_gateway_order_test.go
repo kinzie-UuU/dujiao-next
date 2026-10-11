@@ -1048,3 +1048,53 @@ func TestManualUSDTAdminConfirmIncludesFeesAndIsIdempotent(t *testing.T) {
 		t.Fatalf("fee settlement incorrect: order=%s payment=%+v", order.Status, payment)
 	}
 }
+
+func TestManualUSDTCreatePaymentWithSQLiteConfigStorageTypes(t *testing.T) {
+	for _, storageType := range []string{"text", "blob"} {
+		t.Run(storageType, func(t *testing.T) {
+			svc, db := setupPaymentServiceWalletTest(t)
+			svc.paymentProviderRegistry = nil
+			channel := manualUSDTChannel()
+			if err := db.Create(channel).Error; err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(channel.ConfigJSON)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Python deployment scripts bind json.dumps output as TEXT; GORM's
+			// driver.Valuer binds JSON as BLOB. Both must load the same config.
+			var config interface{} = encoded
+			if storageType == "text" {
+				config = string(encoded)
+			}
+			if err := db.Exec("UPDATE payment_channels SET config_json = ? WHERE id = ?", config, channel.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			var actualType string
+			if err := db.Raw("SELECT typeof(config_json) FROM payment_channels WHERE id = ?", channel.ID).Scan(&actualType).Error; err != nil {
+				t.Fatal(err)
+			}
+			if actualType != storageType {
+				t.Fatalf("SQLite storage type = %s, want %s", actualType, storageType)
+			}
+			order := &orderdomain.Order{OrderNo: "DJMANUAL-CONFIG", Currency: "CNY", Status: constants.OrderStatusPendingPayment, TotalAmount: money.FromDecimal(decimal.NewFromInt(100)), OriginalAmount: money.FromDecimal(decimal.NewFromInt(100))}
+			if err := db.Create(order).Error; err != nil {
+				t.Fatal(err)
+			}
+			result, err := svc.CreatePayment(CreatePaymentInput{OrderID: order.ID, ChannelID: channel.ID})
+			if err != nil {
+				t.Fatalf("CreatePayment with SQLite %s config: %v", storageType, err)
+			}
+			if result.OrderPaid || result.Payment == nil || result.Payment.Status != constants.PaymentStatusPending || result.Payment.QRCode != "manual://order/"+order.OrderNo {
+				t.Fatalf("unexpected payment result: %+v", result)
+			}
+			if err := db.First(order, order.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if order.Status != constants.OrderStatusPendingPayment {
+				t.Fatalf("creation changed order status to %s", order.Status)
+			}
+		})
+	}
+}

@@ -46,3 +46,54 @@ func TestJSONNilDatabaseValueStaysNull(t *testing.T) {
 		t.Fatalf("nil JSON should produce a NULL driver value, got %#v", encoded)
 	}
 }
+
+func TestJSONScanReplacesPreviousObject(t *testing.T) {
+	for name, source := range map[string]interface{}{
+		"text": `{"enabled":true,"nested":{"count":2}}`,
+		"blob": []byte(`{"enabled":true,"nested":{"count":2}}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := JSON{"stale": true}
+			if err := value.Scan(source); err != nil {
+				t.Fatal(err)
+			}
+			want := JSON{"enabled": true, "nested": map[string]interface{}{"count": float64(2)}}
+			if !reflect.DeepEqual(value, want) {
+				t.Fatalf("scan mismatch: want %#v, got %#v", want, value)
+			}
+		})
+	}
+}
+
+func TestJSONScanRejectsInvalidValuesWithoutRetainingState(t *testing.T) {
+	for name, source := range map[string]interface{}{
+		"unsupported":    int64(42),
+		"malformed_text": `{"enabled":`,
+		"malformed_blob": []byte(`{"enabled":`),
+		"array":          `[1,2]`,
+		"scalar":         `true`,
+		"empty":          "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := JSON{"stale": true}
+			if err := value.Scan(source); err == nil {
+				t.Fatal("invalid database value was accepted")
+			}
+			if value != nil {
+				t.Fatalf("invalid scan retained state: %#v", value)
+			}
+		})
+	}
+}
+
+func TestJSONScanJSONNull(t *testing.T) {
+	for _, source := range []interface{}{`null`, []byte(`null`)} {
+		value := JSON{"stale": true}
+		if err := value.Scan(source); err != nil {
+			t.Fatal(err)
+		}
+		if value != nil {
+			t.Fatalf("JSON null should clear state, got %#v", value)
+		}
+	}
+}
