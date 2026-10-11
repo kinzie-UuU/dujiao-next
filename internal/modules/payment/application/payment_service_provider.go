@@ -2,8 +2,10 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -108,6 +110,9 @@ func buildPaymentReturnQuery(input CreatePaymentInput, order *orderdomain.Order,
 func (s *PaymentService) applyProviderPayment(input CreatePaymentInput, order *orderdomain.Order, channel *paymentdomain.PaymentChannel, payment *paymentdomain.Payment) (err error) {
 	providerType := strings.ToLower(strings.TrimSpace(channel.ProviderType))
 	channelType := strings.ToLower(strings.TrimSpace(channel.ChannelType))
+	if providerType == manualQRProviderType && channelType == "binance_usdt" {
+		return s.applyManualUSDT(order, channel, payment)
+	}
 	gatewayCtx, cancel := detachOutboundRequestContext(input.Context)
 	defer cancel()
 	payment.GatewayOrderNo = resolveGatewayOrderNo(channel, payment)
@@ -258,6 +263,10 @@ func (s *PaymentService) ValidateChannel(channel *paymentdomain.PaymentChannel) 
 		return ErrPaymentChannelConfigInvalid
 	}
 
+	if providerType == manualQRProviderType && channelType == "binance_usdt" {
+		return validateManualUSDT(channel)
+	}
+
 	// wallet 是内部余额通道，无 native adapter，直接通过。
 	if providerType == constants.PaymentProviderWallet {
 		return nil
@@ -360,4 +369,49 @@ func resolveTokenPayOrderUserKey(order *orderdomain.Order) string {
 		return guestEmail
 	}
 	return strings.TrimSpace(order.OrderNo)
+}
+
+// The storefront creates and locks the quote after core authorizes payment.
+// Never expose an address or imply payment confirmation from this placeholder.
+func validateManualUSDT(channel *paymentdomain.PaymentChannel) error {
+	if channel == nil || channel.ProviderType != manualQRProviderType || channel.ChannelType != "binance_usdt" || channel.InteractionMode != constants.PaymentInteractionQR {
+		return ErrPaymentChannelConfigInvalid
+	}
+	raw, err := json.Marshal(channel.ConfigJSON["usdt_fixed"])
+	if err != nil {
+		return ErrPaymentChannelConfigInvalid
+	}
+	var config struct {
+		Rate    string `json:"rate"`
+		Address string `json:"address"`
+		Network string `json:"network"`
+		TTL     int    `json:"quote_ttl_minutes"`
+	}
+	if err := json.Unmarshal(raw, &config); err != nil {
+		return ErrPaymentChannelConfigInvalid
+	}
+	rate, err := decimal.NewFromString(config.Rate)
+	if err != nil || !rate.GreaterThan(decimal.Zero) || config.Network != "BSC" || config.TTL < 1 || config.TTL > 1440 || !regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`).MatchString(config.Address) || strings.Trim(config.Address[2:], "0") == "" {
+		return ErrPaymentChannelConfigInvalid
+	}
+	return nil
+}
+
+func (s *PaymentService) applyManualUSDT(order *orderdomain.Order, channel *paymentdomain.PaymentChannel, payment *paymentdomain.Payment) error {
+	if err := validateManualUSDT(channel); err != nil {
+		return err
+	}
+	if !channel.IsActive || channel.DeletedAt != nil || order == nil || payment == nil || order.ID == 0 || order.OrderNo == "" || payment.ID == 0 || payment.OrderID != order.ID || payment.ChannelID != channel.ID || payment.ProviderType != manualQRProviderType || payment.ChannelType != "binance_usdt" || order.Status != constants.OrderStatusPendingPayment || order.Currency != "CNY" || payment.Currency != "CNY" || !payment.Amount.Decimal.GreaterThan(decimal.Zero) || payment.Status != constants.PaymentStatusInitiated {
+		return ErrPaymentChannelConfigInvalid
+	}
+	payment.PayURL = ""
+	payment.QRCode = fmt.Sprintf("manual://order/%s", order.OrderNo)
+	payment.ProviderRef = fmt.Sprintf("manual-%d", payment.ID)
+	payment.ProviderPayload = jsonmap.JSON{"manual_confirmation_required": true}
+	payment.Status = constants.PaymentStatusPending
+	payment.UpdatedAt = time.Now()
+	if err := s.paymentRepo.Update(payment); err != nil {
+		return ErrPaymentUpdateFailed
+	}
+	return nil
 }
