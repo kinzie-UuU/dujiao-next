@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/dujiao-next/internal/cache"
 	"github.com/dujiao-next/internal/constants"
 	"github.com/dujiao-next/internal/logger"
 	"github.com/dujiao-next/internal/modules/notification/application/format"
@@ -111,6 +113,11 @@ func (s *Service) dispatchSingleEvent(ctx context.Context, setting settingsmessa
 
 	locale := format.ResolveLocale(payload.Locale, setting.DefaultLocale)
 	template := setting.Templates.TemplateByEvent(payload.EventType).ResolveLocaleTemplate(locale)
+	if payload.EventType == constants.NotificationEventAdminLoginSuccess {
+		// Login reminders share the exception switch, but use Telegram and a fixed template.
+		template = format.AdminLoginTemplate(locale)
+		setting.Channels.Email.Enabled = false
+	}
 	variables := format.BuildTemplateVariables(payload)
 	title := format.RenderTemplate(template.Title, variables)
 	body := format.RenderTemplate(template.Body, variables)
@@ -192,6 +199,12 @@ func (s *Service) dispatchSingleEvent(ctx context.Context, setting settingsmessa
 		}
 	}
 	if firstErr != nil {
+		if payload.EventType == constants.NotificationEventAdminLoginSuccess && !payload.Force {
+			// A transient Telegram failure must not consume this login's retry.
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = cache.Del(cleanupCtx, buildNotificationDedupeKey(payload))
+			cancel()
+		}
 		return fmt.Errorf("%w: %v", contract.ErrSendFailed, firstErr)
 	}
 	return nil

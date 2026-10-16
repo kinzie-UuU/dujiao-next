@@ -2,6 +2,7 @@ package format
 
 import (
 	"fmt"
+	"github.com/dujiao-next/internal/constants"
 	"regexp"
 	"strings"
 	"time"
@@ -95,4 +96,17 @@ func normalizeNotificationInventoryAlertInterval(seconds int) int {
 
 func normalizeNotificationPaymentOrderAlertInterval(seconds int) int {
 	return settingsmessaging.NormalizeNotificationPaymentOrderAlertInterval(seconds)
+}
+
+// AdminLoginTemplate is deliberately independent of editable business templates.
+// The existing exception-alert switch controls this Telegram-only security reminder.
+func AdminLoginTemplate(locale string) settingsmessaging.NotificationLocalizedTemplate {
+	switch locale {
+	case constants.LocaleEnUS:
+		return settingsmessaging.NotificationLocalizedTemplate{Title: "Administrator sign-in succeeded", Body: "Administrator: {{admin_username}}\nTime (UTC): {{login_at}}\nIP: {{client_ip}}\nMethod: {{login_method}}\nIf this was not you, secure the administrator account immediately."}
+	case constants.LocaleZhTW:
+		return settingsmessaging.NotificationLocalizedTemplate{Title: "管理員登入成功提醒", Body: "管理員：{{admin_username}}\n時間（UTC）：{{login_at}}\nIP：{{client_ip}}\n方式：{{login_method}}\n如非本人操作，請立即檢查管理員帳號安全。"}
+	default:
+		return settingsmessaging.NotificationLocalizedTemplate{Title: "管理员登录成功提醒", Body: "管理员：{{admin_username}}\n时间（UTC）：{{login_at}}\nIP：{{client_ip}}\n方式：{{login_method}}\n如非本人操作，请立即检查管理员账号安全。"}
+	}
 }

@@ -103,16 +103,21 @@ type Admin2FAHandler struct {
 	auth       AuthService
 	challenges ChallengeStore
 	recorder   AdminLoginRecorder
+	notifier   AdminLoginNotifier
 }
 
-func NewAdmin2FAHandler(totp TOTPService, auth AuthService, challenges ChallengeStore, recorder AdminLoginRecorder) *Admin2FAHandler {
+func NewAdmin2FAHandler(totp TOTPService, auth AuthService, challenges ChallengeStore, recorder AdminLoginRecorder, notifiers ...AdminLoginNotifier) *Admin2FAHandler {
 	if totp == nil {
 		panic("admin 2fa handler: totp is nil")
 	}
 	if auth == nil {
 		panic("admin 2fa handler: auth is nil")
 	}
-	return &Admin2FAHandler{totp: totp, auth: auth, challenges: challenges, recorder: recorder}
+	var notifier AdminLoginNotifier
+	if len(notifiers) > 0 {
+		notifier = notifiers[0]
+	}
+	return &Admin2FAHandler{totp: totp, auth: auth, challenges: challenges, recorder: recorder, notifier: notifier}
 }
 
 func (h *Admin2FAHandler) writeLoginLog(c *gin.Context, adminID uint, username, eventType, status, failReason string, operatorID *uint) {
@@ -358,6 +363,7 @@ func (h *Admin2FAHandler) Verify2FA(c *gin.Context) {
 		successEvent = constants.AdminLoginEventLoginRecoveryCode
 	}
 	h.writeLoginLog(c, claims.AdminID, username, successEvent, constants.AdminLoginStatusSuccess, "", nil)
+	notifyAdminLogin(c, h.notifier, loginRes.Admin.ID, loginRes.Admin.Username, successEvent)
 	response.Success(c, gin.H{
 		"requires_totp": false,
 		"token":         loginRes.Token,

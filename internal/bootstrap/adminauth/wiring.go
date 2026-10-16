@@ -14,17 +14,20 @@ type Handlers struct {
 
 func New(c *container.Container) Handlers {
 	recorder := adminLoginRecorderAdapter{logs: c.AdminLoginLogService}
+	notifier := adminLoginNotifierAdapter{notifications: c.NotificationService, slots: make(chan struct{}, 32)}
 	return Handlers{
 		Login: adminauthtransport.NewAdminLoginHandler(
 			adminLoginAuthTransportAdapter{auth: c.AuthService},
 			captchahttp.NewVerifier(c.CaptchaService),
 			recorder,
+			notifier,
 		),
 		TwoFA: adminauthtransport.NewAdmin2FAHandler(
 			admin2FATOTPTransportAdapter{totp: c.TOTPService},
 			admin2FAAuthTransportAdapter{auth: c.AuthService},
 			admin2FAChallengeStoreAdapter{},
 			recorder,
+			notifier,
 		),
 		UserTwoFA: adminauthtransport.NewAdminUser2FAHandler(
 			adminUser2FATransportAdapter{totp: c.UserTOTPService},

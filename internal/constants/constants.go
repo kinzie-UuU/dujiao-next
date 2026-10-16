@@ -342,6 +342,7 @@ const (
 	NotificationEventManualFulfillmentPending = "manual_fulfillment_pending"
 	NotificationEventExceptionAlert           = "exception_alert"
 	NotificationEventExceptionAlertCheck      = "exception_alert_check"
+	NotificationEventAdminLoginSuccess        = "admin_login_success"
 )
 
 // 通知中心异常阈值类型常量

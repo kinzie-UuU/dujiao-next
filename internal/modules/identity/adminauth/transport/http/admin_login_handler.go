@@ -2,6 +2,9 @@ package adminauthhttp
 
 import (
 	"errors"
+	"github.com/google/uuid"
+	"strings"
+	"time"
 
 	ginutil "github.com/dujiao-next/internal/platform/http/ginutil"
 
@@ -57,13 +60,18 @@ type AdminLoginHandler struct {
 	auth     LoginAuthService
 	captcha  CaptchaVerifier
 	recorder AdminLoginRecorder
+	notifier AdminLoginNotifier
 }
 
-func NewAdminLoginHandler(auth LoginAuthService, captcha CaptchaVerifier, recorder AdminLoginRecorder) *AdminLoginHandler {
+func NewAdminLoginHandler(auth LoginAuthService, captcha CaptchaVerifier, recorder AdminLoginRecorder, notifiers ...AdminLoginNotifier) *AdminLoginHandler {
 	if auth == nil {
 		panic("admin login handler: auth is nil")
 	}
-	return &AdminLoginHandler{auth: auth, captcha: captcha, recorder: recorder}
+	var notifier AdminLoginNotifier
+	if len(notifiers) > 0 {
+		notifier = notifiers[0]
+	}
+	return &AdminLoginHandler{auth: auth, captcha: captcha, recorder: recorder, notifier: notifier}
 }
 
 func (h *AdminLoginHandler) writeLoginLog(c *gin.Context, adminID uint, username, eventType, status, failReason string, operatorID *uint) {
@@ -139,6 +147,7 @@ func (h *AdminLoginHandler) AdminLogin(c *gin.Context) {
 	}
 
 	h.writeLoginLog(c, loginRes.Admin.ID, loginRes.Admin.Username, constants.AdminLoginEventLoginPassword, constants.AdminLoginStatusSuccess, "", nil)
+	notifyAdminLogin(c, h.notifier, loginRes.Admin.ID, loginRes.Admin.Username, "password")
 	response.Success(c, gin.H{
 		"requires_totp": false,
 		"token":         loginRes.Token,
@@ -197,4 +206,32 @@ func respondWeakPassword(c *gin.Context, err error) {
 		return
 	}
 	ginutil.RespondError(c, response.CodeBadRequest, "error.password_weak", nil)
+}
+
+// AdminLoginNotification contains only facts safe to send after authentication completes.
+type AdminLoginNotification struct {
+	AdminID  uint
+	Username string
+	ClientIP string
+	Method   string
+	LoginAt  string
+	EventID  string
+}
+
+type AdminLoginNotifier interface {
+	NotifyAdminLogin(AdminLoginNotification)
+}
+
+func notifyAdminLogin(c *gin.Context, notifier AdminLoginNotifier, adminID uint, username, method string) {
+	if notifier == nil {
+		return
+	}
+	notifier.NotifyAdminLogin(AdminLoginNotification{
+		AdminID:  adminID,
+		Username: strings.Join(strings.Fields(username), " "),
+		ClientIP: c.ClientIP(),
+		Method:   method,
+		LoginAt:  time.Now().UTC().Format(time.RFC3339),
+		EventID:  uuid.NewString(),
+	})
 }

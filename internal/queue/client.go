@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -121,6 +122,9 @@ func (c *Client) EnqueueWalletRechargeExpire(payload WalletRechargeExpirePayload
 // EnqueueNotificationDispatch 推送通知中心分发任务
 func (c *Client) EnqueueNotificationDispatch(payload NotificationDispatchPayload, opts ...asynq.Option) error {
 	if !c.Enabled() {
+		if payload.EventType == constants.NotificationEventAdminLoginSuccess {
+			return fmt.Errorf("admin login notification queue disabled")
+		}
 		return nil
 	}
 	task, err := NewNotificationDispatchTask(payload)
@@ -128,6 +132,13 @@ func (c *Client) EnqueueNotificationDispatch(payload NotificationDispatchPayload
 		return err
 	}
 	options := append([]asynq.Option{asynq.Queue(c.defaultQueue)}, opts...)
+	if payload.EventType == constants.NotificationEventAdminLoginSuccess {
+		// Do not let unavailable Redis hold up a completed administrator sign-in.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_, err = c.client.EnqueueContext(ctx, task, options...)
+		return err
+	}
 	_, err = c.client.Enqueue(task, options...)
 	return err
 }
