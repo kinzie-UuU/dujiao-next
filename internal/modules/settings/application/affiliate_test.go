@@ -32,6 +32,29 @@ func TestGetAffiliateSettingFallback(t *testing.T) {
 	}
 }
 
+func TestGPTWalletRewardSettingRoundTrip(t *testing.T) {
+	svc := NewService(newMockSettingRepo())
+	_, err := svc.UpdateAffiliateSetting(settingsintegration.AffiliateSetting{Enabled: true, RewardMode: settingsintegration.AffiliateRewardModeGPTWallet})
+	if err == nil {
+		t.Fatal("enabled reward requires a product allowlist")
+	}
+	_, err = svc.UpdateAffiliateSetting(settingsintegration.AffiliateSetting{RewardMode: "unknown"})
+	if err == nil {
+		t.Fatal("unknown mode accepted")
+	}
+	_, err = svc.UpdateAffiliateSetting(settingsintegration.AffiliateSetting{RewardMode: settingsintegration.AffiliateRewardModeGPTWallet, EligibleProductIDs: []uint{1, 0, 2, 1}, CommissionRate: 50, WithdrawChannels: []string{"cash"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, err := svc.GetAffiliateSetting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actual.Enabled || actual.RewardMode != settingsintegration.AffiliateRewardModeGPTWallet || len(actual.EligibleProductIDs) != 2 || actual.CommissionRate != 0 || len(actual.WithdrawChannels) != 0 {
+		t.Fatalf("unsafe reward settings: %+v", actual)
+	}
+}
+
 func TestUpdateAffiliateSettingNormalize(t *testing.T) {
 	repo := newMockSettingRepo()
 	svc := NewService(repo)

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	walletcontract "github.com/dujiao-next/internal/modules/wallet/contract"
+	walletdomain "github.com/dujiao-next/internal/modules/wallet/domain"
 	"strings"
 	"testing"
 	"time"
@@ -84,7 +86,7 @@ func newOrderResellerSnapshotFixture(t *testing.T) orderResellerSnapshotFixture 
 	if err != nil {
 		t.Fatalf("open sqlite failed: %v", err)
 	}
-	if err := db.AutoMigrate(
+	if err := db.AutoMigrate(&walletdomain.Account{},
 		&userdomain.User{},
 		&categorydomain.Category{},
 		&productdomain.Product{},
@@ -642,5 +644,32 @@ func TestOrderServiceTenantScopedGuestQueries(t *testing.T) {
 	}
 	if total != 1 || len(orders) != 1 || orders[0].ID != resellerOrder.ID {
 		t.Fatalf("expected only reseller guest order, total=%d orders=%+v", total, orders)
+	}
+}
+
+func TestCreateOrderOutstandingDebtBlocksUntilCleared(t *testing.T) {
+	f := newOrderResellerSnapshotFixture(t)
+	if err := f.db.Create(&walletdomain.Account{UserID: f.buyer.ID, Balance: money.FromDecimal(decimal.NewFromInt(-5))}).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, balance := range []int64{-5, -3, 0} {
+		if err := f.db.Model(&walletdomain.Account{}).Where("user_id = ?", f.buyer.ID).Update("balance", money.FromDecimal(decimal.NewFromInt(balance))).Error; err != nil {
+			t.Fatal(err)
+		}
+		order, err := f.svc.CreateOrder(f.createInput(f.buyer.ID))
+		if balance < 0 {
+			if !errors.Is(err, walletcontract.ErrOutstandingDebt) || order != nil {
+				t.Fatalf("balance %d: order=%v err=%v", balance, order, err)
+			}
+			if f.queue.enqueued != 0 {
+				t.Fatal("blocked order queued")
+			}
+			var count int64
+			if err := f.db.Model(&orderdomain.Order{}).Count(&count).Error; err != nil || count != 0 {
+				t.Fatalf("blocked order persisted: %d %v", count, err)
+			}
+		} else if err != nil || order == nil {
+			t.Fatalf("cleared debt order failed: %v", err)
+		}
 	}
 }

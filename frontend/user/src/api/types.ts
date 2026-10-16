@@ -170,6 +170,7 @@ export interface AffiliateDashboardData {
     pending_commission: string
     available_commission: string
     withdrawn_commission: string
+    wallet_credited_commission?: string
 }
 
 export interface AffiliateCommissionData {

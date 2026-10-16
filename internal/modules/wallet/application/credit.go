@@ -107,7 +107,9 @@ func (s *Service) changeBalance(
 
 		before := account.Balance.Decimal.Round(2)
 		after := before.Add(delta).Round(2)
-		if after.LessThan(decimal.Zero) {
+		// Positive credits may repay reward debt in several installments.
+		// Ordinary debits must still never create or deepen debt.
+		if delta.LessThan(decimal.Zero) && after.LessThan(decimal.Zero) {
 			return walletcontract.ErrInsufficientBalance
 		}
 		direction := constants.WalletTxnDirectionIn

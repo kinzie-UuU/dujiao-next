@@ -182,17 +182,19 @@ func (h *ChannelHandler) GetAffiliateDashboard(c *gin.Context) {
 	}
 
 	channelresponse.Success(c, gin.H{
-		"opened":               dashboard.Opened,
-		"affiliate_code":       dashboard.AffiliateCode,
-		"promotion_path":       dashboard.PromotionPath,
-		"click_count":          dashboard.ClickCount,
-		"valid_order_count":    dashboard.ValidOrderCount,
-		"conversion_rate":      dashboard.ConversionRate,
-		"pending_commission":   dashboard.PendingCommission,
-		"available_commission": dashboard.AvailableCommission,
-		"withdrawn_commission": dashboard.WithdrawnCommission,
-		"min_withdraw_amount":  setting.MinWithdrawAmount,
-		"withdraw_channels":    setting.WithdrawChannels,
+		"opened":                     dashboard.Opened,
+		"affiliate_code":             dashboard.AffiliateCode,
+		"promotion_path":             dashboard.PromotionPath,
+		"click_count":                dashboard.ClickCount,
+		"valid_order_count":          dashboard.ValidOrderCount,
+		"conversion_rate":            dashboard.ConversionRate,
+		"pending_commission":         dashboard.PendingCommission,
+		"available_commission":       dashboard.AvailableCommission,
+		"withdrawn_commission":       dashboard.WithdrawnCommission,
+		"wallet_credited_commission": dashboard.WalletCreditedCommission,
+		"reward_mode":                setting.RewardMode,
+		"min_withdraw_amount":        setting.MinWithdrawAmount,
+		"withdraw_channels":          setting.WithdrawChannels,
 	})
 }
 
@@ -367,6 +369,34 @@ func (h *ChannelHandler) resolveChannelAffiliateUserID(c *gin.Context) (uint, st
 		return 0, channelUserID, false
 	}
 	return userID, channelUserID, true
+}
+
+func (h *ChannelHandler) CreditAffiliateWallet(c *gin.Context) {
+	var req channelIdentityRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		channelresponse.BindError(c, err)
+		return
+	}
+	identity := buildChannelIdentity(req)
+	if identity.ChannelUserID == "" {
+		channelresponse.Error(c, http.StatusBadRequest, response.CodeBadRequest, "validation_error", "error.bad_request", nil)
+		return
+	}
+	uid, err := h.users.ProvisionUserID(identity)
+	if err != nil {
+		respondChannelIdentityError(c, err)
+		return
+	}
+	amount, err := h.affiliate.CreditRewardsToWallet(uid)
+	if err != nil {
+		if errors.Is(err, affiliateapp.ErrDisabled) || errors.Is(err, affiliateapp.ErrNotOpened) {
+			channelresponse.Error(c, http.StatusBadRequest, response.CodeBadRequest, "affiliate_disabled", "error.forbidden", nil)
+		} else {
+			channelresponse.Error(c, http.StatusInternalServerError, response.CodeInternal, "affiliate_wallet_credit_failed", "error.save_failed", err)
+		}
+		return
+	}
+	channelresponse.Success(c, gin.H{"credited_amount": amount})
 }
 
 func respondChannelIdentityError(c *gin.Context, err error) {

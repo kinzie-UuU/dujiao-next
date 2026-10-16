@@ -87,6 +87,7 @@ const changePageSize = (size: number) => {
 }
 
 const statusLabel = (status?: string) => {
+  if (status === 'wallet_credited') return t('admin.settings.affiliate.walletCredited')
   if (status === AFFILIATE_COMMISSION_STATUS_PENDING_CONFIRM) return t('admin.affiliatesCommissions.status.pendingConfirm')
   if (status === AFFILIATE_COMMISSION_STATUS_AVAILABLE) return t('admin.affiliatesCommissions.status.available')
   if (status === AFFILIATE_COMMISSION_STATUS_REJECTED) return t('admin.affiliatesCommissions.status.rejected')
@@ -135,6 +136,7 @@ onMounted(() => {
               <SelectItem :value="AFFILIATE_COMMISSION_STATUS_PENDING_CONFIRM">{{ t('admin.affiliatesCommissions.status.pendingConfirm') }}</SelectItem>
               <SelectItem :value="AFFILIATE_COMMISSION_STATUS_AVAILABLE">{{ t('admin.affiliatesCommissions.status.available') }}</SelectItem>
               <SelectItem :value="AFFILIATE_COMMISSION_STATUS_REJECTED">{{ t('admin.affiliatesCommissions.status.rejected') }}</SelectItem>
+              <SelectItem value="wallet_credited">{{ t('admin.settings.affiliate.walletCredited') }}</SelectItem>
               <SelectItem :value="AFFILIATE_COMMISSION_STATUS_WITHDRAWN">{{ t('admin.affiliatesCommissions.status.withdrawn') }}</SelectItem>
             </SelectContent>
           </Select>

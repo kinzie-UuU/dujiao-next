@@ -3,6 +3,7 @@ package application_test
 import (
 	"errors"
 	"fmt"
+	walletdomain "github.com/dujiao-next/internal/modules/wallet/domain"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -99,7 +100,7 @@ func newCouponLimitRaceFixture(t *testing.T, name string, usageLimit, perUserLim
 	sqlDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = sqlDB.Close() })
 
-	if err := db.AutoMigrate(
+	if err := db.AutoMigrate(&walletdomain.Account{},
 		&userdomain.User{},
 		&categorydomain.Category{},
 		&productdomain.Product{},

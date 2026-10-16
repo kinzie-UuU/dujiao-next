@@ -39,6 +39,7 @@ var (
 	ErrProductNotFound       = errors.New("product not found")
 	ErrOrderNotFound         = errors.New("order not found")
 	ErrOrderCancelNotAllowed = errors.New("order cancel not allowed")
+	ErrWalletOutstandingDebt = errors.New("wallet outstanding debt")
 	ErrWalletInsufficient    = errors.New("wallet insufficient balance")
 	ErrStockInsufficient     = errors.New("stock insufficient")
 	ErrProductUnavailable    = errors.New("product unavailable")

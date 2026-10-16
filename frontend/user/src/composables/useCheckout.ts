@@ -8,7 +8,7 @@ import { useUserAuthStore } from '../stores/userAuth'
 import { guestOrderAPI, userOrderAPI, walletAPI, type CaptchaPayload } from '../api'
 import { debounceAsync } from '../utils/debounce'
 import { type PageAlert } from '../utils/alerts'
-import { amountToCents, basisPointsToPercent, centsToAmount, parseInteger, rateToBasisPoints } from '../utils/money'
+import { walletPurchaseBlock, walletPaymentCents, amountToCents, basisPointsToPercent, centsToAmount, parseInteger, rateToBasisPoints } from '../utils/money'
 import { buildSkuDisplayText, normalizeSkuId } from '../utils/sku'
 import { refreshCartStockSnapshots, cartItemPurchaseLimit as itemPurchaseLimit, cartItemPurchaseMin as itemPurchaseMin } from '../utils/cartStock'
 import { getImageUrl } from '../utils/image'
@@ -81,6 +81,9 @@ export function useCheckout() {
   const useBalance = ref(false)
   const walletLoading = ref(false)
   const walletBalance = ref('0')
+  const walletLoaded = ref(false)
+  const walletPurchaseBlocked = computed(() => userAuthStore.isAuthenticated ? walletPurchaseBlock(walletBalance.value, walletLoaded.value, walletLoading.value) : null)
+  const walletPurchaseHint = computed(() => walletPurchaseBlocked.value === 'debt' ? t('payment.walletDebtBlocked') : walletPurchaseBlocked.value ? (walletLoading.value ? t('common.loading') : t('payment.walletUnavailable')) : '')
 
   // Payment channels
   const paymentChannels = computed(() => {
@@ -127,10 +130,7 @@ export function useCheckout() {
   const showBalanceOption = computed(() => userAuthStore.isAuthenticated)
   const expectedWalletPaidCents = computed(() => {
     if (!showBalanceOption.value || !useBalance.value) return 0
-    const balance = amountToCents(walletBalance.value)
-    const total = amountToCents(previewTotal.value)
-    if (balance === null || total === null) return 0
-    return Math.min(balance, total)
+    return walletPaymentCents(walletBalance.value, previewTotal.value)
   })
   const expectedOnlinePayCents = computed(() => {
     const total = amountToCents(previewTotal.value)
@@ -579,7 +579,7 @@ export function useCheckout() {
   const canSubmit = computed(() => {
     if (appStore.salesPaused) return false
     if (syncingStock.value) return false
-    if (submitting.value) return false
+    if (submitting.value || walletPurchaseBlocked.value) return false
     if (cartItems.value.length === 0) return false
     if (!manualFormValidation.value.valid) return false
     if (cartItems.value.some((item) => itemStockExceeded(item))) return false
@@ -601,6 +601,7 @@ export function useCheckout() {
   })
 
   const submitBlockedReason = computed(() => {
+    if (walletPurchaseHint.value) return walletPurchaseHint.value
     if (appStore.salesPaused) return t('maintenance.salesPaused')
     if (syncingStock.value) return t('checkout.stockSyncing')
     if (cartItems.value.length === 0) return t('checkout.errors.emptyCart')
@@ -800,7 +801,9 @@ export function useCheckout() {
   }
 
   const handleSubmit = async () => {
+    if (submitting.value || walletLoading.value) return
     submitAttempted.value = true
+    await loadWalletBalance()
     error.value = ''
     previewError.value = ''
     if (!canSubmit.value) {
@@ -909,9 +912,10 @@ export function useCheckout() {
     walletLoading.value = true
     try {
       const response = await walletAPI.account()
-      walletBalance.value = String(response.data.data?.balance || '0')
+      walletBalance.value = String(response.data.data?.balance ?? '')
+      walletLoaded.value = amountToCents(walletBalance.value) !== null
     } catch {
-      walletBalance.value = '0'
+      walletLoaded.value = false
     } finally {
       walletLoading.value = false
     }
@@ -1163,6 +1167,8 @@ export function useCheckout() {
     showBalanceOption,
     walletLoading,
     walletBalance,
+    walletPurchaseBlocked,
+    walletPurchaseHint,
     useBalance,
     walletOnlyPayment,
     expectedWalletPaidDisplay,

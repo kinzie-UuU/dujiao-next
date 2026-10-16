@@ -372,6 +372,9 @@ func (a orderPaymentCreatorAdapter) CreatePayment(input ordertransport.CreatePay
 		RequestScheme: input.RequestScheme,
 	})
 	if err != nil {
+		if errors.Is(err, walletcontract.ErrOutstandingDebt) {
+			return nil, ordertransport.ErrWalletOutstandingDebt
+		}
 		// create-and-pay returns payment_error as plain string; keep original error text.
 		return nil, err
 	}
@@ -498,6 +501,7 @@ func mapOrderTransportError(err error) error {
 		{orderapp.ErrGuestPasswordTooShort, ordertransport.ErrGuestPasswordTooShort},
 		{orderapp.ErrInvalidEmail, ordertransport.ErrInvalidEmail},
 		{orderapp.ErrProductPurchaseNotAllowed, ordertransport.ErrProductPurchaseNotAllowed},
+		{walletcontract.ErrOutstandingDebt, ordertransport.ErrWalletOutstandingDebt},
 		{orderapp.ErrManualStockInsufficient, ordertransport.ErrManualStockInsufficient},
 		{orderapp.ErrOrderCurrencyMismatch, ordertransport.ErrOrderCurrencyMismatch},
 		{orderapp.ErrProductNotAvailable, ordertransport.ErrProductNotAvailable},

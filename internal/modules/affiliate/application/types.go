@@ -26,15 +26,16 @@ type WithdrawApplyInput struct {
 
 // Dashboard 推广用户中心数据。
 type Dashboard struct {
-	Opened              bool         `json:"opened"`
-	AffiliateCode       string       `json:"affiliate_code"`
-	PromotionPath       string       `json:"promotion_path"`
-	ClickCount          int64        `json:"click_count"`
-	ValidOrderCount     int64        `json:"valid_order_count"`
-	ConversionRate      float64      `json:"conversion_rate"`
-	PendingCommission   money.Amount `json:"pending_commission"`
-	AvailableCommission money.Amount `json:"available_commission"`
-	WithdrawnCommission money.Amount `json:"withdrawn_commission"`
+	Opened                   bool         `json:"opened"`
+	AffiliateCode            string       `json:"affiliate_code"`
+	PromotionPath            string       `json:"promotion_path"`
+	ClickCount               int64        `json:"click_count"`
+	ValidOrderCount          int64        `json:"valid_order_count"`
+	ConversionRate           float64      `json:"conversion_rate"`
+	PendingCommission        money.Amount `json:"pending_commission"`
+	AvailableCommission      money.Amount `json:"available_commission"`
+	WithdrawnCommission      money.Amount `json:"withdrawn_commission"`
+	WalletCreditedCommission money.Amount `json:"wallet_credited_commission"`
 }
 
 // Stats 推广统计数据。
