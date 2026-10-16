@@ -468,6 +468,8 @@
       "title": "我的钱包",
       "subtitle": "管理余额、充值与资金明细",
       "balanceLabel": "当前余额",
+      "debtTitle": "当前欠额 {amount}",
+      "debtDescription": "退款扣回等奖励调整可能导致欠额。充值到账后先抵扣欠额，剩余金额才可消费；欠额未补齐前不能购买商品，也不能绕过余额直接在线付款。",
       "transactionsLabel": "明细总数",
       "currentPageLabel": "当前页",
       "rechargeTitle": "余额充值",
@@ -514,7 +516,10 @@
         "order_refund": "订单退款",
         "gift_card_redeem": "礼品卡兑换",
         "admin_adjust": "管理员调账",
-        "admin_refund": "管理员退款"
+        "admin_refund": "管理员退款",
+        "affiliate_reward": "推广奖励",
+        "order_debt_credit": "欠额拦截款项入账",
+        "affiliate_reward_reversal": "推广奖励退款扣回"
       },
       "errors": {
         "loadFailed": "钱包数据加载失败，请稍后重试",
@@ -587,7 +592,16 @@
         "withdrawChannelRequired": "请输入提现渠道",
         "withdrawAccountRequired": "请输入提现账号",
         "withdrawFailed": "提现申请提交失败，请稍后重试"
-      }
+      },
+      "walletRules": "仅指定 GPT 商品参与：每笔符合条件的订单随机奖励整数 1～5 元（不超过参与商品实付整数金额，不足 1 元不奖励）。确认后可转入消费余额，抵扣站内所有商品，不支持提现；退款将扣回相应奖励。",
+      "availableReward": "可转入奖励",
+      "creditedReward": "已转入消费余额",
+      "creditTitle": "转入消费余额",
+      "creditHint": "将全部已确认奖励转入钱包，可用于站内所有商品。转入后不能撤回或提现。 退款会扣回奖励；已消费的奖励不足扣回时会形成欠额，后续充值或奖励优先抵扣。",
+      "creditButton": "全部转入消费余额",
+      "crediting": "转入中…",
+      "creditSuccess": "已转入 {amount} 元消费余额",
+      "creditFailed": "转入失败，请稍后重试"
     },
     "reseller": {
       "title": "分销财务",
@@ -1192,6 +1206,9 @@
     "walletDeductLabel": "余额抵扣",
     "onlinePayLabel": "在线支付",
     "walletOnlyHint": "当前仅支持钱包余额支付",
+    "walletDebtBlocked": "钱包有欠额，请先充值补齐后再购买，不能直接在线付款。",
+    "walletUnavailable": "无法确认钱包余额，暂不能付款，请刷新重试。",
+    "rechargeDebt": "去充值补齐欠额",
     "walletInsufficientHint": "钱包余额不足，请先充值",
     "feeFree": "免手续费",
     "channelTypes": {

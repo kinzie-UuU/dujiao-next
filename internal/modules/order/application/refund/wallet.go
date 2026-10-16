@@ -134,16 +134,8 @@ func (s *Service) AdminRefundToWallet(
 		} else if _, err := orderapp.SyncParentStatus(orderRepository, *order.ParentID, now); err != nil {
 			return ErrOrderUpdateFailed
 		}
-		if s.affiliateRefund != nil {
-			if err := s.affiliateRefund.HandleOrderRefunded(
-				tx.Affiliates(),
-				&order,
-				amount,
-				refundedBefore,
-				"order_refunded_to_wallet",
-			); err != nil {
-				return err
-			}
+		if err := s.reverseAffiliateRefund(tx, &order, amount, refundedBefore, "order_refunded_to_wallet"); err != nil {
+			return err
 		}
 
 		currency := strings.ToUpper(strings.TrimSpace(order.Currency))

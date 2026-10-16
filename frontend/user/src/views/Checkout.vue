@@ -238,6 +238,10 @@
           <div class="mb-4 border-t pt-4">
             <h3 class="mb-3 text-sm font-bold text-foreground">{{ t('checkout.paymentMethod') }}</h3>
 
+            <div v-if="walletPurchaseBlocked" role="alert" class="mb-4 rounded-xl border border-amber-500 bg-amber-50 p-4 text-sm text-amber-950 dark:bg-amber-950 dark:text-amber-100">
+              <p class="font-semibold">{{ walletPurchaseHint }}</p>
+              <router-link v-if="walletPurchaseBlocked === 'debt'" to="/me/wallet" class="mt-2 inline-block font-semibold underline">{{ t('payment.rechargeDebt') }}</router-link>
+            </div>
             <!-- Wallet Balance -->
             <div v-if="showBalanceOption" class="mb-3 rounded-lg border bg-secondary p-3">
               <div class="flex items-center justify-between">
@@ -248,7 +252,7 @@
                   </div>
                 </div>
                 <label class="inline-flex items-center gap-2 text-xs text-muted-foreground">
-                  <input v-model="useBalance" type="checkbox" class="h-4 w-4 accent-primary" :disabled="walletOnlyPayment" />
+                  <input v-model="useBalance" type="checkbox" class="h-4 w-4 accent-primary" :disabled="walletOnlyPayment || !!walletPurchaseBlocked" />
                   <span>{{ t('payment.useBalance') }}</span>
                 </label>
               </div>
@@ -338,7 +342,7 @@ const {
   guestImageCaptchaRef, guestTurnstileRef, handleGuestCaptchaConfigStale,
   previewCurrency, previewOriginal, previewCoupon, previewPromotion, previewWholesale, previewMemberDiscount, previewTotal,
   previewLoading, couponRefreshing, previewStatusText, hasPositiveAmount, formatDiscountPrice, checkoutAlert,
-  showBalanceOption, walletLoading, walletBalance, useBalance, walletOnlyPayment,
+  showBalanceOption, walletLoading, walletBalance, walletPurchaseBlocked, walletPurchaseHint, useBalance, walletOnlyPayment,
   expectedWalletPaidDisplay, expectedOnlinePayDisplay, expectedOnlinePayCents,
   requiresOnlineChannel, paymentChannels, selectedChannelId, isChannelDisabledForAmount, channelAmountLimitHint,
   handleSelectChannel, formatChannelFeeRate, formatChannelFixedFee,

@@ -81,6 +81,7 @@ var channelPaymentCreateErrorRules = []mappedChannelError{
 	channelErrorRule(ErrPaymentGatewayRequestFailed, http.StatusBadRequest, response.CodeBadRequest, "payment_create_failed", "error.payment_gateway_request_failed"),
 	channelErrorRule(ErrPaymentGatewayResponseInvalid, http.StatusBadRequest, response.CodeBadRequest, "payment_create_failed", "error.payment_gateway_response_invalid"),
 	channelErrorRule(ErrPaymentCurrencyMismatch, http.StatusBadRequest, response.CodeBadRequest, "payment_create_failed", "error.payment_currency_mismatch"),
+	channelErrorRule(ErrWalletOutstandingDebt, http.StatusBadRequest, response.CodeBadRequest, "wallet_outstanding_debt", "error.wallet_outstanding_debt"),
 	channelErrorRule(ErrWalletOnlyPaymentRequired, http.StatusBadRequest, response.CodeBadRequest, "wallet_only_payment_required", "error.wallet_only_payment_required"),
 }
 

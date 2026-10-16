@@ -330,6 +330,10 @@
               {{ t('common.loading') }}
             </div>
             <template v-else>
+            <div v-if="walletPurchaseBlocked" role="alert" class="mb-4 rounded-xl border border-amber-500 bg-amber-50 p-4 text-sm text-amber-950 dark:bg-amber-950 dark:text-amber-100">
+              <p class="font-semibold">{{ walletPurchaseHint }}</p>
+              <router-link v-if="walletPurchaseBlocked === 'debt'" to="/me/wallet" class="mt-2 inline-block font-semibold underline">{{ t('payment.rechargeDebt') }}</router-link>
+            </div>
               <div
                 v-if="showBalanceOption"
                 class="mb-4 rounded-xl border p-4 bg-secondary"
@@ -342,7 +346,7 @@
                     </div>
                   </div>
                   <label class="inline-flex items-center gap-2 text-xs text-muted-foreground">
-                    <input v-model="useBalance" type="checkbox" class="h-4 w-4 accent-primary" :disabled="walletOnlyPayment" />
+                    <input v-model="useBalance" type="checkbox" class="h-4 w-4 accent-primary" :disabled="walletOnlyPayment || !!walletPurchaseBlocked" />
                     <span>{{ t('payment.useBalance') }}</span>
                   </label>
                 </div>
@@ -527,7 +531,7 @@ const {
   paymentResultTitle, paymentGuideTitle, paymentGuideTip, showPayLink, showTelegramPayHint, payLinkOpenedTip,
   cryptoWalletAddress, cryptoPaymentDetails, hasCryptoPaymentDetails, qrUsingPayLinkFallback, showQRCode, qrImageUrl,
   orderExpired, orderCanceled, paymentAlert, countdownExpired, countdownText, showCountdown, showResultView, pollingActive, orderItems,
-  feeRateDisplay, feeAmountDisplay, fixedFeeDisplay, payableAmountDisplay, walletBalanceDisplay,
+  walletPurchaseBlocked, walletPurchaseHint, feeRateDisplay, feeAmountDisplay, fixedFeeDisplay, payableAmountDisplay, walletBalanceDisplay,
   expectedWalletPaidDisplay, expectedOnlinePayDisplay, expectedOnlinePayCents, requiresOnlineChannel,
   paymentWalletPaidDisplay, paymentOnlinePayDisplay, isChannelDisabledForAmount, channelAmountLimitHint, canSubmitPayment,
   formatDate, statusLabel, formatMoney, hasDiscountAmount, formatDiscountMoney, getLocalizedText, orderItemSkuText, fulfillmentTypeLabelText,

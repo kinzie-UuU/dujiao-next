@@ -17,6 +17,9 @@ func (s *Service) ApplyOrderBalance(tx walletcontract.Transaction, input walletc
 	if tx == nil {
 		return money.Amount{}, walletcontract.ErrTransactionRequired
 	}
+	if err := CheckPurchaseAllowed(tx, input.UserID); err != nil {
+		return money.Amount{}, err
+	}
 	if !input.UseBalance {
 		return input.WalletPaidAmount, nil
 	}
@@ -146,4 +149,23 @@ func (s *Service) ReleaseOrderBalance(
 		return money.Amount{}, walletcontract.ErrTransactionCreateFailed
 	}
 	return transaction.Amount, nil
+}
+
+// CheckPurchaseAllowed locks the account for the purchasing transaction.
+// Recharge and refunds intentionally do not call this guard.
+func CheckPurchaseAllowed(tx walletcontract.Transaction, userID uint) error {
+	if tx == nil {
+		return walletcontract.ErrTransactionRequired
+	}
+	if userID == 0 {
+		return nil
+	}
+	account, err := tx.Wallets().GetAccountByUserIDForUpdate(userID)
+	if err != nil {
+		return err
+	}
+	if account != nil && account.Balance.Decimal.IsNegative() {
+		return walletcontract.ErrOutstandingDebt
+	}
+	return nil
 }

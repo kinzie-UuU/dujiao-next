@@ -282,10 +282,14 @@ func (h *CreateHandler) respondCreateAndPay(c *gin.Context, order *orderdomain.O
 		RequestScheme: requestSchemeFromContext(c),
 	})
 	if err != nil {
+		message := err.Error()
+		if errors.Is(err, ErrWalletOutstandingDebt) {
+			message = i18n.T(i18n.ResolveLocale(c), "error.wallet_outstanding_debt")
+		}
 		response.Success(c, gin.H{
 			"order":         orderResp,
 			"order_no":      order.OrderNo,
-			"payment_error": err.Error(),
+			"payment_error": message,
 		})
 		return
 	}

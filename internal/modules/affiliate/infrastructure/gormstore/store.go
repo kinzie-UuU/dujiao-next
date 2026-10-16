@@ -8,6 +8,9 @@ import (
 	"github.com/dujiao-next/internal/constants"
 	affiliatecontract "github.com/dujiao-next/internal/modules/affiliate/contract"
 	affiliatedomain "github.com/dujiao-next/internal/modules/affiliate/domain"
+	orderdomain "github.com/dujiao-next/internal/modules/order/domain"
+	walletdomain "github.com/dujiao-next/internal/modules/wallet/domain"
+	"github.com/dujiao-next/internal/shared/money"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -27,6 +30,61 @@ func (r *Store) WithinTransaction(fn func(affiliatecontract.Store) error) error 
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		return fn(New(tx))
 	})
+}
+
+func (r *Store) GetRewardOrderForUpdate(orderID uint) (*orderdomain.Order, error) {
+	var order orderdomain.Order
+	err := r.db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("deleted_at IS NULL").
+		Preload("Items").Preload("Children", "deleted_at IS NULL").Preload("Children.Items").First(&order, orderID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &order, nil
+}
+
+// AdjustRewardWallet runs inside the caller's transaction. Only reward reversals
+// may create debt; ordinary wallet spending keeps its nonnegative balance rule.
+func (r *Store) AdjustRewardWallet(userID uint, delta decimal.Decimal, reference string, orderID uint) error {
+	if userID == 0 || strings.TrimSpace(reference) == "" || delta.Round(2).IsZero() {
+		return errors.New("invalid reward wallet adjustment")
+	}
+	account := walletdomain.Account{UserID: userID, Balance: money.FromDecimal(decimal.Zero)}
+	if err := r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&account).Error; err != nil {
+		return err
+	}
+	if err := r.db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ? AND deleted_at IS NULL", userID).First(&account).Error; err != nil {
+		return err
+	}
+	var existing walletdomain.Transaction
+	err := r.db.Where("reference = ?", reference).First(&existing).Error
+	if err == nil {
+		wantDirection := constants.WalletTxnDirectionIn
+		if delta.IsNegative() {
+			wantDirection = constants.WalletTxnDirectionOut
+		}
+		if existing.Direction != wantDirection || existing.UserID != userID || existing.OrderID == nil || *existing.OrderID != orderID || !existing.Amount.Decimal.Equal(delta.Abs().Round(2)) {
+			return errors.New("reward wallet reference conflict")
+		}
+		return nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	before := account.Balance.Decimal
+	after := before.Add(delta).Round(2)
+	if err := r.db.Model(&account).Updates(map[string]interface{}{"balance": money.FromDecimal(after), "updated_at": time.Now()}).Error; err != nil {
+		return err
+	}
+	txnType, direction := "affiliate_reward", constants.WalletTxnDirectionIn
+	if delta.IsNegative() {
+		txnType, direction = "affiliate_reward_reversal", constants.WalletTxnDirectionOut
+	}
+	return r.db.Create(&walletdomain.Transaction{UserID: userID, OrderID: &orderID, Type: txnType, Direction: direction,
+		Amount: money.FromDecimal(delta.Abs().Round(2)), BalanceBefore: money.FromDecimal(before), BalanceAfter: money.FromDecimal(after),
+		Currency: "CNY", Reference: reference, Remark: "推广奖励余额变动"}).Error
 }
 
 // GetProfileByID 按ID获取推广档案
@@ -372,7 +430,7 @@ func (r *Store) CountValidOrdersByProfile(profileID uint) (int64, error) {
 }
 
 // SumCommissionByProfile 汇总指定状态佣金金额
-func (r *Store) SumCommissionByProfile(profileID uint, statuses []string, unboundOnly bool) (decimal.Decimal, error) {
+func (r *Store) SumCommissionByProfile(profileID uint, statuses []string, unboundOnly bool, commissionTypes ...string) (decimal.Decimal, error) {
 	if profileID == 0 || len(statuses) == 0 {
 		return decimal.Zero, nil
 	}
@@ -380,6 +438,9 @@ func (r *Store) SumCommissionByProfile(profileID uint, statuses []string, unboun
 		Where("affiliate_profile_id = ? AND status IN ? AND deleted_at IS NULL", profileID, statuses)
 	if unboundOnly {
 		query = query.Where("withdraw_request_id IS NULL")
+	}
+	if len(commissionTypes) > 0 {
+		query = query.Where("commission_type IN ?", commissionTypes)
 	}
 
 	var row struct {

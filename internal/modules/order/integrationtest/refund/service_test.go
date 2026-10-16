@@ -174,6 +174,62 @@ func TestOrderRefundServiceAdminManualRefundGuestCreatesRecord(t *testing.T) {
 	}
 }
 
+func TestOrderRefundServiceAdminManualRefundGuestReversesCommission(t *testing.T) {
+	for _, status := range []string{constants.AffiliateCommissionStatusPendingConfirm, constants.AffiliateCommissionStatusAvailable} {
+		t.Run(status, func(t *testing.T) {
+			svc, db := setupOrderRefundServiceTest(t)
+			createTestUser(t, db, 1)
+			profile := affiliatedomain.Profile{UserID: 1, AffiliateCode: "GUESTREF", Status: constants.AffiliateProfileStatusActive}
+			if err := db.Create(&profile).Error; err != nil {
+				t.Fatalf("create affiliate profile: %v", err)
+			}
+			order := createTestOrder(t, db, 0, "GUEST-COMMISSION-REFUND", decimal.NewFromInt(100))
+			now := time.Now()
+			if err := db.Model(order).Updates(map[string]interface{}{
+				"status": constants.OrderStatusCompleted, "paid_at": now,
+				"guest_email": "guest-affiliate@example.com", "affiliate_profile_id": profile.ID,
+			}).Error; err != nil {
+				t.Fatalf("complete guest order: %v", err)
+			}
+			commission := affiliatedomain.Commission{
+				AffiliateProfileID: profile.ID, OrderID: order.ID,
+				CommissionType:   constants.AffiliateCommissionTypeOrder,
+				BaseAmount:       money.FromDecimal(decimal.NewFromInt(100)),
+				RatePercent:      money.FromDecimal(decimal.NewFromInt(10)),
+				CommissionAmount: money.FromDecimal(decimal.NewFromInt(10)), Status: status,
+			}
+			if err := db.Create(&commission).Error; err != nil {
+				t.Fatalf("create commission: %v", err)
+			}
+			for _, step := range []struct {
+				refund, remainingCommission, remainingBase int64
+				wantStatus                                 string
+			}{
+				{20, 8, 80, status},
+				{80, 0, 0, constants.AffiliateCommissionStatusRejected},
+			} {
+				_, record, err := svc.AdminManualRefund(AdminManualRefundInput{
+					OrderID: order.ID, Amount: money.FromDecimal(decimal.NewFromInt(step.refund)),
+				})
+				if err != nil {
+					t.Fatalf("refund guest order: %v", err)
+				}
+				if record == nil || record.UserID != 0 {
+					t.Fatalf("expected guest refund record, got %+v", record)
+				}
+				var actual affiliatedomain.Commission
+				if err := db.First(&actual, commission.ID).Error; err != nil {
+					t.Fatalf("reload commission: %v", err)
+				}
+				if !actual.CommissionAmount.Decimal.Equal(decimal.NewFromInt(step.remainingCommission)) ||
+					!actual.BaseAmount.Decimal.Equal(decimal.NewFromInt(step.remainingBase)) || actual.Status != step.wantStatus {
+					t.Fatalf("unexpected refunded commission: amount=%s base=%s status=%s", actual.CommissionAmount, actual.BaseAmount, actual.Status)
+				}
+			}
+		})
+	}
+}
+
 func TestOrderRefundServiceAdminManualRefundExpiredWindow(t *testing.T) {
 	svc, db := setupOrderRefundServiceTest(t)
 	paidAt := time.Now().AddDate(0, 0, -31)

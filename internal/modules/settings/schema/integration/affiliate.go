@@ -1,6 +1,7 @@
 package settingsintegration
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -22,13 +23,17 @@ const (
 
 var ErrAffiliateConfigInvalid = errors.New("affiliate config invalid")
 
+const AffiliateRewardModeGPTWallet = "gpt_random_wallet"
+
 // AffiliateSetting 是推广返利设置的 typed representation。
 type AffiliateSetting struct {
-	Enabled           bool     `json:"enabled"`
-	CommissionRate    float64  `json:"commission_rate"`
-	ConfirmDays       int      `json:"confirm_days"`
-	MinWithdrawAmount float64  `json:"min_withdraw_amount"`
-	WithdrawChannels  []string `json:"withdraw_channels"`
+	RewardMode         string   `json:"reward_mode"`
+	EligibleProductIDs []uint   `json:"eligible_product_ids"`
+	Enabled            bool     `json:"enabled"`
+	CommissionRate     float64  `json:"commission_rate"`
+	ConfirmDays        int      `json:"confirm_days"`
+	MinWithdrawAmount  float64  `json:"min_withdraw_amount"`
+	WithdrawChannels   []string `json:"withdraw_channels"`
 }
 
 // DefaultAffiliateSetting 返回稳定的推广返利默认设置。
@@ -40,6 +45,21 @@ func DefaultAffiliateSetting() AffiliateSetting {
 
 // NormalizeAffiliateSetting 归一化数值范围和提现渠道。
 func NormalizeAffiliateSetting(setting AffiliateSetting) AffiliateSetting {
+	setting.RewardMode = strings.TrimSpace(setting.RewardMode)
+	ids := make([]uint, 0, len(setting.EligibleProductIDs))
+	seen := make(map[uint]bool)
+	for _, id := range setting.EligibleProductIDs {
+		if id > 0 && !seen[id] {
+			ids = append(ids, id)
+			seen[id] = true
+		}
+	}
+	setting.EligibleProductIDs = ids
+	if setting.RewardMode == AffiliateRewardModeGPTWallet {
+		setting.CommissionRate = 0
+		setting.MinWithdrawAmount = 0
+		setting.WithdrawChannels = nil
+	}
 	setting.CommissionRate = roundAffiliateDecimal(setting.CommissionRate)
 	if setting.CommissionRate < affiliateCommissionRateMin {
 		setting.CommissionRate = affiliateCommissionRateMin
@@ -64,6 +84,12 @@ func NormalizeAffiliateSetting(setting AffiliateSetting) AffiliateSetting {
 // ValidateAffiliateSetting 保留现有归一化后校验合同。
 func ValidateAffiliateSetting(setting AffiliateSetting) error {
 	normalized := NormalizeAffiliateSetting(setting)
+	if normalized.RewardMode != "" && normalized.RewardMode != AffiliateRewardModeGPTWallet {
+		return fmt.Errorf("%w: 未知奖励模式", ErrAffiliateConfigInvalid)
+	}
+	if normalized.Enabled && normalized.RewardMode == AffiliateRewardModeGPTWallet && len(normalized.EligibleProductIDs) == 0 {
+		return fmt.Errorf("%w: 请配置参与奖励的 GPT 商品", ErrAffiliateConfigInvalid)
+	}
 	if normalized.CommissionRate < affiliateCommissionRateMin || normalized.CommissionRate > affiliateCommissionRateMax {
 		return fmt.Errorf("%w: 返利比例必须在 0-100 之间", ErrAffiliateConfigInvalid)
 	}
@@ -79,6 +105,15 @@ func ValidateAffiliateSetting(setting AffiliateSetting) error {
 // DecodeAffiliateSetting 从持久化 JSON 解码，并对缺失字段使用 fallback。
 func DecodeAffiliateSetting(raw jsonmap.JSON, fallback AffiliateSetting) AffiliateSetting {
 	result := fallback
+	if value, exists := raw["reward_mode"]; exists {
+		result.RewardMode, _ = value.(string)
+	}
+	if value, exists := raw["eligible_product_ids"]; exists {
+		result.EligibleProductIDs = nil
+		if data, err := json.Marshal(value); err == nil {
+			_ = json.Unmarshal(data, &result.EligibleProductIDs)
+		}
+	}
 	if value, exists := raw["enabled"]; exists {
 		result.Enabled = settingsvalue.ParseBool(value)
 	}
@@ -107,11 +142,13 @@ func DecodeAffiliateSetting(raw jsonmap.JSON, fallback AffiliateSetting) Affilia
 func EncodeAffiliateSetting(setting AffiliateSetting) jsonmap.JSON {
 	normalized := NormalizeAffiliateSetting(setting)
 	return jsonmap.JSON{
-		"enabled":             normalized.Enabled,
-		"commission_rate":     normalized.CommissionRate,
-		"confirm_days":        normalized.ConfirmDays,
-		"min_withdraw_amount": normalized.MinWithdrawAmount,
-		"withdraw_channels":   settingsvalue.CloneStringSlice(normalized.WithdrawChannels),
+		"reward_mode":          normalized.RewardMode,
+		"eligible_product_ids": normalized.EligibleProductIDs,
+		"enabled":              normalized.Enabled,
+		"commission_rate":      normalized.CommissionRate,
+		"confirm_days":         normalized.ConfirmDays,
+		"min_withdraw_amount":  normalized.MinWithdrawAmount,
+		"withdraw_channels":    settingsvalue.CloneStringSlice(normalized.WithdrawChannels),
 	}
 }
 

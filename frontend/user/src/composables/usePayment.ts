@@ -8,7 +8,7 @@ import { orderStatusLabel } from '../utils/status'
 import { fulfillmentTypeLabel } from '../utils/fulfillment'
 import { debounceAsync } from '../utils/debounce'
 import { copyText } from '../utils/clipboard'
-import { amountToCents, basisPointsToPercent, calculateFeeCents, centsToAmount, rateToBasisPoints } from '../utils/money'
+import { walletPurchaseBlock, walletPaymentCents, amountToCents, basisPointsToPercent, calculateFeeCents, centsToAmount, rateToBasisPoints } from '../utils/money'
 import { buildSkuDisplayTextFromSnapshot } from '../utils/sku'
 import {
   getCachedPaymentRestorePolicy,
@@ -58,6 +58,9 @@ export function usePayment() {
   const redirectTimer = ref<number | null>(null)
   const walletLoading = ref(false)
   const walletBalance = ref('0')
+  const walletLoaded = ref(false)
+  const walletPurchaseBlocked = computed(() => !isGuest.value ? walletPurchaseBlock(walletBalance.value, walletLoaded.value, walletLoading.value) : null)
+  const walletPurchaseHint = computed(() => walletPurchaseBlocked.value === 'debt' ? t('payment.walletDebtBlocked') : walletPurchaseBlocked.value ? (walletLoading.value ? t('common.loading') : t('payment.walletUnavailable')) : '')
   const useBalance = ref(false)
   const orderPaymentChannels = ref<any[]>([])
   const orderPaymentChannelsLoaded = ref(false)
@@ -380,7 +383,7 @@ export function usePayment() {
   })
 
   const showCountdown = computed(() => Boolean(expiresAtMs.value && order.value?.status === 'pending_payment'))
-  const showResultView = computed(() => Boolean(paymentResult.value && order.value && order.value.status === 'pending_payment' && !orderExpired.value && !orderCanceled.value))
+  const showResultView = computed(() => Boolean(!walletPurchaseBlocked.value && paymentResult.value && order.value && order.value.status === 'pending_payment' && !orderExpired.value && !orderCanceled.value))
   const pollingActive = computed(() => pollTimer.value !== null)
   const orderItems = computed(() => (Array.isArray(order.value?.items) ? order.value.items : []))
   const feeRateBasisPoints = computed(() => {
@@ -460,10 +463,7 @@ export function usePayment() {
   const walletBalanceDisplay = computed(() => formatMoney(walletBalance.value, order.value?.currency))
   const expectedWalletPaidCents = computed(() => {
     if (!showBalanceOption.value || !useBalance.value) return 0
-    const balance = amountToCents(walletBalance.value)
-    const total = amountToCents(order.value?.total_amount)
-    if (balance === null || total === null) return 0
-    return Math.min(balance, total)
+    return walletPaymentCents(walletBalance.value, order.value?.total_amount)
   })
   const expectedOnlinePayCents = computed(() => {
     const total = amountToCents(order.value?.total_amount)
@@ -529,7 +529,7 @@ export function usePayment() {
     return channelAmountLimitHint(channel)
   })
   const canSubmitPayment = computed(() => {
-    if (submitting.value) return false
+    if (submitting.value || walletPurchaseBlocked.value) return false
     if (walletOnlyPayment.value && expectedOnlinePayCents.value > 0) return false
     if (!walletOnlyPayment.value && requiresOnlineChannel.value && !selectedChannelId.value) return false
     if (requiresOnlineChannel.value && selectedChannelAmountHint.value) return false
@@ -597,9 +597,10 @@ export function usePayment() {
     walletLoading.value = true
     try {
       const response = await walletAPI.account()
-      walletBalance.value = String(response.data.data?.balance || '0')
+      walletBalance.value = String(response.data.data?.balance ?? '')
+      walletLoaded.value = amountToCents(walletBalance.value) !== null
     } catch {
-      walletBalance.value = '0'
+      walletLoaded.value = false
     } finally {
       walletLoading.value = false
     }
@@ -782,6 +783,7 @@ export function usePayment() {
   }
 
   const openPayLinkInCompatibleWindow = () => {
+    if (walletPurchaseBlocked.value) return
     if (!payLink.value) return
     if (isTelegramMiniApp.value) {
       telegramMiniAppStore.openLink(payLink.value)
@@ -972,7 +974,13 @@ export function usePayment() {
   }
 
   const performPayment = async () => {
+    if (submitting.value || walletLoading.value) return
     error.value = ''
+    await loadWallet()
+    if (walletPurchaseBlocked.value) {
+      error.value = walletPurchaseHint.value
+      return
+    }
     if (!orderNoResolved.value) {
       error.value = t('payment.orderNotFound')
       return
@@ -1151,6 +1159,7 @@ export function usePayment() {
   }
 
   const restoreCachedPayment = () => {
+    if (walletPurchaseBlocked.value) return
     if (!cachedPayment.value) return
     const restorePolicy = getCachedPaymentRestorePolicy()
     paymentResult.value = cachedPayment.value
@@ -1401,6 +1410,8 @@ export function usePayment() {
     guestAuthError,
     walletLoading,
     walletBalance,
+    walletPurchaseBlocked,
+    walletPurchaseHint,
     useBalance,
     // routing / flags
     backLink,

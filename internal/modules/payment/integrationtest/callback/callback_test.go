@@ -27,6 +27,7 @@ import (
 	productgormstore "github.com/dujiao-next/internal/modules/catalog/product/store/gormstore"
 
 	userdomain "github.com/dujiao-next/internal/modules/identity/user/domain"
+	walletdomain "github.com/dujiao-next/internal/modules/wallet/domain"
 
 	"github.com/dujiao-next/internal/constants"
 	paymentprovider "github.com/dujiao-next/internal/modules/payment/infrastructure/gateway/provider"
@@ -84,6 +85,8 @@ func newOkpayCallbackFixture(t *testing.T) *okpayCallbackFixture {
 		&fulfillmentdomain.Fulfillment{},
 		&paymentdomain.PaymentChannel{},
 		&paymentdomain.Payment{},
+		&walletdomain.Account{},
+		&walletdomain.Transaction{},
 	); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}

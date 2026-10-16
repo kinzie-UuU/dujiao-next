@@ -1,6 +1,12 @@
 package application
 
 import (
+	userdomain "github.com/dujiao-next/internal/modules/identity/user/domain"
+	walletcontract "github.com/dujiao-next/internal/modules/wallet/contract"
+	walletdomain "github.com/dujiao-next/internal/modules/wallet/domain"
+	"github.com/dujiao-next/internal/shared/money"
+	"github.com/shopspring/decimal"
+
 	"context"
 	"errors"
 	"testing"
@@ -64,5 +70,37 @@ func TestCaptureViaRegistry_PassesInteractionModeNotChannelType(t *testing.T) {
 	}
 	if cap.receivedMode == channel.ChannelType {
 		t.Fatalf("regression: ValidateConfig received channel.ChannelType=%q", cap.receivedMode)
+	}
+}
+
+func TestPendingPaymentCannotBeReusedOrCapturedWhileInDebt(t *testing.T) {
+	svc, db := setupPaymentServiceWalletTest(t)
+	user := userdomain.User{Email: "pending-debt@example.test", PasswordHash: "hash", Status: constants.UserStatusActive}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	order := createUnderpaidOrder(t, db, "DEBT-OLD-LINK", user.ID, 99)
+	channel := createUnderpaidChannel(t, db, svc, "local", constants.PaymentChannelTypeWechat)
+	first, err := svc.CreatePayment(CreatePaymentInput{OrderID: order.ID, ChannelID: channel.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&paymentdomain.Payment{}).Where("id = ?", first.Payment.ID).Update("pay_url", "https://example.test/old-link").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&walletdomain.Account{UserID: user.ID, Balance: money.FromDecimal(decimal.NewFromInt(-5))}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreatePayment(CreatePaymentInput{OrderID: order.ID, ChannelID: channel.ID}); !errors.Is(err, walletcontract.ErrOutstandingDebt) {
+		t.Fatalf("pending link reused: %v", err)
+	}
+	if _, err := svc.CapturePayment(CapturePaymentInput{PaymentID: first.Payment.ID}); !errors.Is(err, walletcontract.ErrOutstandingDebt) {
+		t.Fatalf("pending capture not blocked: %v", err)
+	}
+	if err := db.Model(&paymentdomain.Payment{}).Where("id = ?", first.Payment.ID).Update("status", constants.PaymentStatusSuccess).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CapturePayment(CapturePaymentInput{PaymentID: first.Payment.ID}); err != nil {
+		t.Fatalf("already paid query blocked: %v", err)
 	}
 }

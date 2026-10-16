@@ -27,6 +27,13 @@ const { t } = useI18n()
 const loading = ref(true)
 const { refreshing, refreshList } = useListRefresh()
 const operating = ref(false)
+const cashAllowed = ref(false)
+const loadRewardMode = async () => {
+  try {
+    const response = await adminAPI.getAffiliateSettings()
+    cashAllowed.value = response.data?.data?.reward_mode !== 'gpt_random_wallet'
+  } catch { cashAllowed.value = false }
+}
 const rows = ref<AdminAffiliateWithdraw[]>([])
 const pagination = ref({
   page: 1,
@@ -121,6 +128,8 @@ const rejectWithdraw = async (row: AdminAffiliateWithdraw) => {
 }
 
 const payWithdraw = async (row: AdminAffiliateWithdraw) => {
+  await loadRewardMode()
+  if (!cashAllowed.value) return
   const confirmed = await confirmAction({ description: t('admin.affiliatesWithdraws.actions.payConfirm', { id: row.id }) })
   if (!confirmed) return
   operating.value = true
@@ -137,12 +146,14 @@ const payWithdraw = async (row: AdminAffiliateWithdraw) => {
 
 onMounted(() => {
   fetchRows()
+  loadRewardMode()
 })
 </script>
 
 <template>
   <ComplianceGuardWrapper>
   <div class="space-y-6">
+    <p v-if="!cashAllowed" role="status" class="rounded-xl border border-border bg-muted p-4 text-sm">{{ t('admin.settings.affiliate.cashDisabled') }}</p>
     <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <h1 class="text-2xl font-semibold">{{ t('admin.affiliatesWithdraws.title') }}</h1>
     </div>
@@ -247,7 +258,7 @@ onMounted(() => {
                 </Button>
                 <Button
                   size="sm"
-                  :disabled="operating || item.status !== AFFILIATE_WITHDRAW_STATUS_PENDING_REVIEW"
+                  :disabled="!cashAllowed || operating || item.status !== AFFILIATE_WITHDRAW_STATUS_PENDING_REVIEW"
                   @click="payWithdraw(item)"
                 >
                   {{ t('admin.affiliatesWithdraws.actions.pay') }}

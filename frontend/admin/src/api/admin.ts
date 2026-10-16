@@ -274,6 +274,8 @@ export interface AdminExportGiftCardsPayload {
 }
 
 export interface AdminAffiliateSetting {
+  reward_mode?: string
+  eligible_product_ids?: number[]
   enabled: boolean
   commission_rate: number
   confirm_days: number

@@ -10,6 +10,7 @@ func RegisterPublicRoutes(public gin.IRoutes, handler *Handler) {
 // RegisterUserRoutes 注册需登录的推广返利路由。
 func RegisterUserRoutes(user gin.IRoutes, handler *Handler) {
 	user.POST("/affiliate/open", handler.OpenAffiliate)
+	user.POST("/affiliate/wallet-credit", handler.CreditAffiliateWallet)
 	user.GET("/affiliate/dashboard", handler.GetAffiliateDashboard)
 	user.GET("/affiliate/commissions", handler.ListAffiliateCommissions)
 	user.GET("/affiliate/withdraws", handler.ListAffiliateWithdraws)
@@ -35,6 +36,7 @@ func RegisterAdminFinanceRoutes(admin gin.IRoutes, handler *AdminHandler) {
 func RegisterChannelRoutes(channel gin.IRoutes, handler *ChannelHandler) {
 	channel.POST("/affiliate/click", handler.TrackAffiliateClick)
 	channel.POST("/affiliate/open", handler.OpenAffiliate)
+	channel.POST("/affiliate/wallet-credit", handler.CreditAffiliateWallet)
 	channel.GET("/affiliate/dashboard", handler.GetAffiliateDashboard)
 	channel.GET("/affiliate/commissions", handler.ListAffiliateCommissions)
 	channel.GET("/affiliate/withdraws", handler.ListAffiliateWithdraws)

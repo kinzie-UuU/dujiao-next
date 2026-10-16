@@ -1514,3 +1514,168 @@ func TestRechargeSameStatusCallbackDoesNotOverwriteConcurrentSuccess(t *testing.
 		t.Fatalf("stored recharge success overwritten: %s", saved.Status)
 	}
 }
+
+func TestCreatePaymentAfterRewardDebtRecharge(t *testing.T) {
+	for _, tc := range []struct {
+		name                                     string
+		recharge, total, wallet, online, balance int64
+	}{
+		{"debt", 0, 99, 0, 99, -5}, {"partial-recharge", 2, 99, 0, 99, -3},
+		{"cleared", 5, 99, 0, 99, 0}, {"mixed-payment", 8, 99, 3, 96, 0},
+		{"wallet-only", 8, 2, 2, 0, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, db := setupPaymentServiceWalletTest(t)
+			m := func(n int64) money.Amount { return money.FromDecimal(decimal.NewFromInt(n)) }
+			user := userdomain.User{Email: "debt-payment@example.test", PasswordHash: "hash", Status: constants.UserStatusActive}
+			if err := db.Create(&user).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Create(&walletdomain.Account{UserID: user.ID, Balance: m(-5)}).Error; err != nil {
+				t.Fatal(err)
+			}
+			if tc.recharge > 0 {
+				if _, _, err := svc.walletSvc.Recharge(walletcontract.RechargeInput{UserID: user.ID, Amount: m(tc.recharge), Currency: "CNY"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			order := createUnderpaidOrder(t, db, "DEBT-PAY", user.ID, tc.total)
+			var channelID uint
+			if tc.online > 0 {
+				channelID = createUnderpaidChannel(t, db, svc, "Local test gateway", constants.PaymentChannelTypeWechat).ID
+			}
+			result, err := svc.CreatePayment(CreatePaymentInput{OrderID: order.ID, ChannelID: channelID, UseBalance: true, Context: context.Background()})
+			if tc.recharge < 5 {
+				if !errors.Is(err, walletcontract.ErrOutstandingDebt) {
+					t.Fatalf("debt payment must be blocked: %v", err)
+				}
+				_, err = svc.CreatePayment(CreatePaymentInput{OrderID: order.ID, ChannelID: channelID, UseBalance: false, Context: context.Background()})
+				if !errors.Is(err, walletcontract.ErrOutstandingDebt) {
+					t.Fatalf("online-only bypass must be blocked: %v", err)
+				}
+				var count int64
+				if err := db.Model(&paymentdomain.Payment{}).Where("order_id = ?", order.ID).Count(&count).Error; err != nil || count != 0 {
+					t.Fatalf("blocked payment records=%d err=%v", count, err)
+				}
+				if got := walletBalance(t, db, user.ID); got != decimal.NewFromInt(tc.balance).StringFixed(2) {
+					t.Fatalf("blocked balance=%s", got)
+				}
+				if err := svc.paymentRepo.WithinTransaction(func(tx paymentcontract.Transaction) error {
+					_, _, err := svc.walletSvc.CreditInTransaction(tx.Wallets(), walletcontract.CreditInput{UserID: user.ID, Amount: m(5 - tc.recharge), Currency: "CNY", Reference: "debt-clear-final"})
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+				resumed, err := svc.CreatePayment(CreatePaymentInput{OrderID: order.ID, ChannelID: channelID, UseBalance: false, Context: context.Background()})
+				if err != nil || resumed == nil || resumed.Payment == nil || !resumed.Payment.Amount.Decimal.Equal(decimal.NewFromInt(99)) {
+					t.Fatalf("cleared debt did not resume online payment: %+v %v", resumed, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var actual orderdomain.Order
+			if err := db.First(&actual, order.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if !actual.WalletPaidAmount.Decimal.Equal(decimal.NewFromInt(tc.wallet)) || !actual.OnlinePaidAmount.Decimal.Equal(decimal.NewFromInt(tc.online)) {
+				t.Fatalf("allocation wallet=%s online=%s", actual.WalletPaidAmount, actual.OnlinePaidAmount)
+			}
+			wantPayment := tc.online
+			var persistedPayment paymentdomain.Payment
+			if err := db.Where("order_id = ?", order.ID).First(&persistedPayment).Error; err != nil {
+				t.Fatal(err)
+			}
+			if tc.online == 0 {
+				wantPayment = tc.wallet
+				if !result.OrderPaid || persistedPayment.Status != constants.PaymentStatusSuccess || actual.PaidAt == nil {
+					t.Fatal("wallet-only order not paid")
+				}
+			} else if actual.PaidAt != nil {
+				t.Fatal("unpaid online portion marked paid")
+			}
+			if !persistedPayment.Amount.Decimal.Equal(decimal.NewFromInt(wantPayment)) {
+				t.Fatalf("payment=%s want=%d", persistedPayment.Amount, wantPayment)
+			}
+			if got := walletBalance(t, db, user.ID); got != decimal.NewFromInt(tc.balance).StringFixed(2) {
+				t.Fatalf("balance=%s", got)
+			}
+			var debits []walletdomain.Transaction
+			if err := db.Where("user_id = ? AND type = ?", user.ID, constants.WalletTxnTypeOrderPay).Find(&debits).Error; err != nil {
+				t.Fatal(err)
+			}
+			if tc.wallet == 0 && len(debits) != 0 {
+				t.Fatal("debt generated wallet debit")
+			}
+			if tc.wallet > 0 && (len(debits) != 1 || !debits[0].Amount.Decimal.Equal(decimal.NewFromInt(tc.wallet))) {
+				t.Fatalf("wrong debits %+v", debits)
+			}
+			t.Logf("recharge=%d order=%d wallet=%d online=%d remaining=%d", tc.recharge, tc.total, tc.wallet, tc.online, tc.balance)
+		})
+	}
+}
+
+func TestOldPaymentLinkWithRewardDebtCreditsWithoutFulfillment(t *testing.T) {
+	for _, debt := range []int64{5, 20} {
+		t.Run(decimal.NewFromInt(debt).String(), func(t *testing.T) {
+			svc, db := setupPaymentServiceWalletTest(t)
+			m := func(n int64) money.Amount { return money.FromDecimal(decimal.NewFromInt(n)) }
+			user := userdomain.User{Email: "debt-callback@example.test", PasswordHash: "hash", Status: constants.UserStatusActive}
+			if err := db.Create(&user).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Create(&walletdomain.Account{UserID: user.ID, Balance: m(0)}).Error; err != nil {
+				t.Fatal(err)
+			}
+			channel := createUnderpaidChannel(t, db, svc, "Debt callback gateway", constants.PaymentChannelTypeWechat)
+			order := createUnderpaidOrder(t, db, "DEBT-OLD-LINK", user.ID, 15)
+			created, err := svc.CreatePayment(CreatePaymentInput{OrderID: order.ID, ChannelID: channel.ID, Context: context.Background()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// 已获取付款链接后，其他订单退款扣回奖励导致欠额。
+			if err := db.Model(&walletdomain.Account{}).Where("user_id = ?", user.ID).Update("balance", m(-debt)).Error; err != nil {
+				t.Fatal(err)
+			}
+			input := PaymentCallbackInput{PaymentID: created.Payment.ID, OrderNo: order.OrderNo, ChannelID: channel.ID, Status: constants.PaymentStatusSuccess, Amount: created.Payment.Amount, Currency: "CNY", ProviderRef: "debt-old-link-paid"}
+			for i := 0; i < 2; i++ {
+				paid, err := svc.HandleCallback(input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if paid.Status != constants.PaymentStatusSuccess || paid.ExceptionCode != constants.PaymentExceptionDebtBlockedSucceeded {
+					t.Fatalf("payment=%+v", paid)
+				}
+				var actual orderdomain.Order
+				if err := db.First(&actual, order.ID).Error; err != nil {
+					t.Fatal(err)
+				}
+				if actual.Status != constants.OrderStatusPendingPayment || actual.PaidAt != nil {
+					t.Fatal("debt callback fulfilled order")
+				}
+				if got := walletBalance(t, db, user.ID); got != decimal.NewFromInt(15-debt).StringFixed(2) {
+					t.Fatalf("balance=%s", got)
+				}
+			}
+			var credits []walletdomain.Transaction
+			if err := db.Where("user_id = ? AND type = ?", user.ID, constants.WalletTxnTypeOrderDebtCredit).Find(&credits).Error; err != nil {
+				t.Fatal(err)
+			}
+			if len(credits) != 1 || !credits[0].Amount.Decimal.Equal(decimal.NewFromInt(15)) || !credits[0].BalanceBefore.Decimal.Equal(decimal.NewFromInt(-debt)) || !credits[0].BalanceAfter.Decimal.Equal(decimal.NewFromInt(15-debt)) {
+				t.Fatalf("credits=%+v", credits)
+			}
+			// 补足欠额以及购货所需款项后，必须重新主动支付才履约。
+			if _, _, err := svc.walletSvc.Recharge(walletcontract.RechargeInput{UserID: user.ID, Amount: m(debt), Currency: "CNY"}); err != nil {
+				t.Fatal(err)
+			}
+			result, err := svc.CreatePayment(CreatePaymentInput{OrderID: order.ID, UseBalance: true, Context: context.Background()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !result.OrderPaid || walletBalance(t, db, user.ID) != "0.00" {
+				t.Fatal("repaid wallet purchase failed")
+			}
+		})
+	}
+}

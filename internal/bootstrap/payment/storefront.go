@@ -15,6 +15,7 @@ import (
 
 	paymenttransport "github.com/dujiao-next/internal/modules/payment/transport/http"
 	reseller "github.com/dujiao-next/internal/modules/reseller/contract"
+	walletapp "github.com/dujiao-next/internal/modules/wallet/application"
 	walletcontract "github.com/dujiao-next/internal/modules/wallet/contract"
 )
 
@@ -51,7 +52,22 @@ type pendingLookupAdapter struct {
 }
 
 func (a pendingLookupAdapter) GetLatestPendingByOrder(orderID uint, now time.Time) (*paymentdomain.Payment, error) {
-	return a.payments.GetLatestPendingByOrder(orderID, now)
+	var payment *paymentdomain.Payment
+	err := a.payments.WithinTransaction(func(tx paymentcontract.Transaction) error {
+		order, err := tx.Orders().GetByIDForUpdateWithChildren(orderID)
+		if err != nil {
+			return err
+		}
+		if order == nil {
+			return orderapp.ErrOrderNotFound
+		}
+		if err := walletapp.CheckPurchaseAllowed(tx.Wallets(), order.UserID); err != nil {
+			return err
+		}
+		payment, err = tx.Payments().GetLatestPendingByOrder(orderID, now)
+		return err
+	})
+	return payment, mapTransportError(err)
 }
 
 type writerAdapter struct {
@@ -118,6 +134,7 @@ func mapTransportError(err error) error {
 		{walletcontract.ErrNotSupportedForGuest, paymenttransport.ErrWalletNotSupportedForGuest},
 		{paymentapp.ErrPaymentChannelNotAllowedForProduct, paymenttransport.ErrPaymentChannelNotAllowedForProduct},
 		{paymentapp.ErrPaymentChannelNotAllowedForRecharge, paymenttransport.ErrPaymentChannelNotAllowedForRecharge},
+		{walletcontract.ErrOutstandingDebt, paymenttransport.ErrWalletOutstandingDebt},
 		{walletcontract.ErrOnlyPaymentRequired, paymenttransport.ErrWalletOnlyPaymentRequired},
 		{paymentapp.ErrPaymentStatusInvalid, paymenttransport.ErrPaymentStatusInvalid},
 		{paymentapp.ErrPaymentAmountMismatch, paymenttransport.ErrPaymentAmountMismatch},

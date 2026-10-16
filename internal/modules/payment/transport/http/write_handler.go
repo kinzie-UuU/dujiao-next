@@ -34,6 +34,7 @@ var (
 	ErrWalletNotSupportedForGuest          = errors.New("wallet not supported for guest")
 	ErrPaymentChannelNotAllowedForProduct  = errors.New("payment channel not allowed for product")
 	ErrPaymentChannelNotAllowedForRecharge = errors.New("payment channel not allowed for wallet recharge")
+	ErrWalletOutstandingDebt               = errors.New("wallet outstanding debt")
 	ErrWalletOnlyPaymentRequired           = errors.New("wallet only payment required")
 	ErrPaymentStatusInvalid                = errors.New("payment status invalid")
 	ErrPaymentAmountMismatch               = errors.New("payment amount mismatch")
@@ -365,6 +366,7 @@ var paymentCreateErrorRules = concatMappedErrors(
 		{target: ErrWalletNotSupportedForGuest, code: response.CodeBadRequest, key: "error.payment_invalid"},
 		{target: ErrPaymentChannelNotAllowedForProduct, code: response.CodeBadRequest, key: "error.payment_channel_not_allowed_for_product"},
 		{target: ErrPaymentChannelNotAllowedForRecharge, code: response.CodeBadRequest, key: "error.payment_channel_not_allowed_for_recharge"},
+		{target: ErrWalletOutstandingDebt, code: response.CodeBadRequest, key: "error.wallet_outstanding_debt"},
 		{target: ErrWalletOnlyPaymentRequired, code: response.CodeBadRequest, key: "error.wallet_only_payment_required"},
 	},
 )

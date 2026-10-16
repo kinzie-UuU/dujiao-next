@@ -2,6 +2,7 @@ package affiliatehttp
 
 import (
 	"errors"
+	"github.com/dujiao-next/internal/shared/money"
 	"strings"
 
 	affiliatedomain "github.com/dujiao-next/internal/modules/affiliate/domain"
@@ -18,12 +19,30 @@ import (
 
 // Service 是前台推广返利端口。
 type Service interface {
+	CreditRewardsToWallet(userID uint) (money.Amount, error)
 	TrackClick(input affiliateapp.TrackClickInput) error
 	OpenAffiliate(userID uint) (*affiliatedomain.Profile, error)
 	GetUserDashboard(userID uint) (affiliateapp.Dashboard, error)
 	ListUserCommissions(userID uint, page, pageSize int, status string) ([]affiliatedomain.Commission, int64, error)
 	ListUserWithdraws(userID uint, page, pageSize int, status string) ([]affiliatedomain.WithdrawRequest, int64, error)
 	ApplyWithdraw(userID uint, input affiliateapp.WithdrawApplyInput) (*affiliatedomain.WithdrawRequest, error)
+}
+
+func (h *Handler) CreditAffiliateWallet(c *gin.Context) {
+	uid, ok := ginutil.GetUserID(c)
+	if !ok {
+		return
+	}
+	amount, err := h.svc.CreditRewardsToWallet(uid)
+	if err != nil {
+		if errors.Is(err, affiliateapp.ErrDisabled) || errors.Is(err, affiliateapp.ErrNotOpened) {
+			ginutil.RespondError(c, response.CodeBadRequest, "error.forbidden", nil)
+		} else {
+			ginutil.RespondError(c, response.CodeInternal, "error.save_failed", err)
+		}
+		return
+	}
+	response.Success(c, gin.H{"credited_amount": amount})
 }
 
 type trackClickRequest struct {

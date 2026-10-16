@@ -72,6 +72,7 @@ type affiliateRefundProcessor interface {
 		refundDelta decimal.Decimal,
 		refundedBefore decimal.Decimal,
 		reason string,
+		sourceOrderID ...uint,
 	) error
 }
 
@@ -325,16 +326,8 @@ func (s *Service) AdminManualRefund(input AdminManualRefundInput) (*orderdomain.
 			return err
 		}
 		createdRecord = record
-		if s.affiliateRefund != nil && order.UserID > 0 {
-			if err := s.affiliateRefund.HandleOrderRefunded(
-				tx.Affiliates(),
-				&order,
-				amount,
-				refundedBefore,
-				"order_refunded_manual",
-			); err != nil {
-				return err
-			}
+		if err := s.reverseAffiliateRefund(tx, &order, amount, refundedBefore, "order_refunded_manual"); err != nil {
+			return err
 		}
 		if s.resellerAccounting != nil {
 			if err := s.resellerAccounting.HandleRefundDeduct(tx.ResellerAccounting(), &order, record, refundedBefore); err != nil {
@@ -354,6 +347,42 @@ func (s *Service) AdminManualRefund(input AdminManualRefundInput) (*orderdomain.
 		return nil, nil, ErrOrderNotFound
 	}
 	return order, createdRecord, nil
+}
+
+// Rewards belong to the checkout's parent order. A child refund must reverse
+// that reward too, using cumulative refunds across the checkout.
+func (s *Service) reverseAffiliateRefund(tx ordercontract.Transaction, order *orderdomain.Order, amount, before decimal.Decimal, reason string) error {
+	if s.affiliateRefund == nil {
+		return nil
+	}
+	if order.ParentID == nil {
+		loaded, err := tx.Orders().GetByID(order.ID)
+		if err != nil {
+			return err
+		}
+		if loaded != nil {
+			for _, child := range loaded.Children {
+				before = before.Add(child.RefundedAmount.Decimal)
+			}
+		}
+		return s.affiliateRefund.HandleOrderRefunded(tx.Affiliates(), order, amount, before, reason)
+	}
+	// Keep existing child-level commissions reversible for historical orders.
+	if err := s.affiliateRefund.HandleOrderRefunded(tx.Affiliates(), order, amount, before, reason); err != nil {
+		return err
+	}
+	parent, err := tx.Orders().GetByIDForUpdateWithChildren(*order.ParentID)
+	if err != nil {
+		return err
+	}
+	if parent == nil {
+		return ErrOrderNotFound
+	}
+	parentBefore := parent.RefundedAmount.Decimal.Sub(amount)
+	for _, child := range parent.Children {
+		parentBefore = parentBefore.Add(child.RefundedAmount.Decimal)
+	}
+	return s.affiliateRefund.HandleOrderRefunded(tx.Affiliates(), parent, amount, parentBefore, reason, order.ID)
 }
 
 // ListAdminRefundRecords 管理端退款记录列表

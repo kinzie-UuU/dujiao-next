@@ -559,6 +559,8 @@ const (
 
 const (
 	PaymentExceptionUnderpaidSucceeded   = "underpaid_payment_succeeded"
+	PaymentExceptionDebtBlockedSucceeded = "debt_blocked_payment_succeeded"
+	WalletTxnTypeOrderDebtCredit         = "order_debt_credit"
 	PaymentExceptionDuplicateSucceeded   = "duplicate_payment_succeeded"
 	PaymentExceptionClosedOrderSucceeded = "closed_order_payment_succeeded"
 	WalletTxnTypeOrderUnderpaidCredit    = "order_underpaid_credit"
