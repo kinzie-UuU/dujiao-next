@@ -159,6 +159,7 @@ func TestResellerSiteConfigServiceApplyPublicConfigOverlay(t *testing.T) {
 		},
 		"announcement": map[string]interface{}{"enabled": true},
 		"nav_config":   map[string]interface{}{"builtin": map[string]interface{}{"blog": false}},
+		"scripts":      []interface{}{map[string]interface{}{"name": "main-analytics"}},
 	}
 	tenant := ResellerTenantContext("shop.example.test", resellerID, user.ID, "shop.example.test")
 	out, err := svc.ApplyPublicConfigOverlay(context.Background(), tenant, base)
@@ -174,6 +175,12 @@ func TestResellerSiteConfigServiceApplyPublicConfigOverlay(t *testing.T) {
 	}
 	if out["currency"] != "CNY" {
 		t.Fatalf("global inherited fields should remain, got currency=%v", out["currency"])
+	}
+	if scripts, ok := out["scripts"].([]interface{}); !ok || len(scripts) != 0 {
+		t.Fatalf("main-site scripts must not reach reseller: %+v", out["scripts"])
+	}
+	if len(base["scripts"].([]interface{})) != 1 {
+		t.Fatal("main-site scripts must remain unchanged")
 	}
 	seo := resellerSiteConfigTestMap(out["seo"])
 	title := resellerSiteConfigTestMap(seo["title"])

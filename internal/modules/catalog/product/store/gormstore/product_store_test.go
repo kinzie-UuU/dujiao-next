@@ -580,3 +580,19 @@ func TestProductRepositoryListFiltersWholesalePrices(t *testing.T) {
 		t.Fatalf("product without wholesale missing: %+v", rows)
 	}
 }
+
+func TestProductIDsRejectSQLConditions(t *testing.T) {
+	repo, _ := setupProductStoreTest(t)
+	p := createManualProduct(t, repo, "numeric-id", 5, 0, 0)
+	for _, id := range []string{"1=1", "1 OR 1=1", "-1", "18446744073709551616", "", "1; SELECT 1"} {
+		if got, err := repo.GetByID(id); got != nil || err != nil {
+			t.Fatalf("invalid ID %q: %v %v", id, got, err)
+		}
+		if got, err := repo.GetAdminByID(id); got != nil || err != nil {
+			t.Fatalf("invalid admin ID %q: %v %v", id, got, err)
+		}
+	}
+	if got, err := repo.GetByID(strconv.FormatUint(uint64(p.ID), 10)); err != nil || got == nil || got.ID != p.ID {
+		t.Fatalf("valid ID: %v %v", got, err)
+	}
+}

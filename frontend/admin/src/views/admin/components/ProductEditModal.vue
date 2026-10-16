@@ -34,6 +34,8 @@ const emit = defineEmits<{
 const { t, locale } = useI18n()
 const submitting = ref(false)
 const isEditing = ref(false)
+const originalStock = ref<number | null>(null)
+const originalSKUStocks = ref<Record<number, number>>({})
 const paymentChannels = ref<AdminPaymentChannel[]>([])
 const editingIsMapped = ref(false)
 const initialCategoryID = ref<number | null>(null)
@@ -528,6 +530,8 @@ const populateForm = (product: AdminProduct) => {
     }
   }
 
+  originalStock.value = resolveManualStockMetrics(product).total
+  originalSKUStocks.value = Object.fromEntries((product.skus || []).map((sku: AdminProductSKU) => [sku.id, toSafeStockTotal(sku.manual_stock_total)]))
   Object.assign(form, {
     id: product.id,
     title: product.title || { 'zh-CN': '', 'zh-TW': '', 'en-US': '' },
@@ -618,8 +622,8 @@ const handleSubmit = async () => {
       max_purchase_quantity: maxPurchaseQuantityValue,
       stock_display_mode: form.stock_display_mode,
       fulfillment_type: form.fulfillment_type,
-      manual_stock_total: effectiveManualStockTotal,
-      skus: normalizedSKUs,
+      manual_stock_total: isEditing.value && (normalizedSKUs.length > 0 || effectiveManualStockTotal === originalStock.value) ? undefined : effectiveManualStockTotal,
+      skus: normalizedSKUs.map((sku) => ({ ...sku, manual_stock_total: isEditing.value && Number(sku.id) > 0 && sku.manual_stock_total === originalSKUStocks.value[Number(sku.id)] ? undefined : sku.manual_stock_total })),
       payment_channel_ids: form.payment_channel_ids.length > 0 ? form.payment_channel_ids : [],
       is_affiliate_enabled: form.is_affiliate_enabled,
       is_active: form.is_active,

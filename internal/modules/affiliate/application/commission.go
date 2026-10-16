@@ -35,7 +35,8 @@ func (s *Service) HandleOrderPaid(orderID uint) error {
 	if err != nil {
 		return err
 	}
-	if order == nil {
+	// 重试任务可能晚于退款/取消执行，此时退款流程已找不到佣金可冲销，不能再生成
+	if order == nil || order.Status == constants.OrderStatusRefunded || order.Status == constants.OrderStatusCanceled {
 		return nil
 	}
 	profile, err := s.resolveAffiliateProfileForOrder(order)
@@ -100,7 +101,7 @@ func (s *Service) HandleOrderPaid(orderID uint) error {
 		ConfirmAt:          confirmAt,
 		AvailableAt:        availableAt,
 	}
-	return s.repo.CreateCommission(commission)
+	return s.repo.CreateOrderCommission(commission)
 }
 
 // ConfirmDueCommissions 将到期佣金转可提现

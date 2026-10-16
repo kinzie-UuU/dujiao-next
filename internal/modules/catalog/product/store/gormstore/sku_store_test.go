@@ -171,3 +171,38 @@ func TestSKUStoreDeleteByProductHidesRowsAndRejectsStockMutations(t *testing.T) 
 		}
 	}
 }
+
+// A product editor may hold a stale SKU snapshot while checkout reserves stock.
+// Saving metadata must omit inventory columns in SQL, including locked/sold.
+func TestSKUStoreMetadataUpdatePreservesConcurrentStock(t *testing.T) {
+	repo, db := setupSKUStoreTest(t)
+	sku := &productdomain.ProductSKU{ProductID: 1, SKUCode: "A", ManualStockTotal: 10, IsActive: true, PriceAmount: money.FromDecimal(decimal.NewFromInt(10))}
+	if err := repo.Create(sku); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&productdomain.ProductSKU{}).Where("id = ?", sku.ID).Updates(map[string]interface{}{"manual_stock_total": 6, "manual_stock_locked": 3, "manual_stock_sold": 1}).Error; err != nil {
+		t.Fatal(err)
+	}
+	sku.PriceAmount = money.FromDecimal(decimal.NewFromInt(20))
+	if err := repo.UpdateKeepingStock(sku); err != nil {
+		t.Fatal(err)
+	}
+	var got productdomain.ProductSKU
+	if err := db.First(&got, sku.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.ManualStockTotal != 6 || got.ManualStockLocked != 3 || got.ManualStockSold != 1 || !got.PriceAmount.Decimal.Equal(decimal.NewFromInt(20)) {
+		t.Fatalf("metadata overwrote live stock: %+v", got)
+	}
+	// Explicit stock edits are still supported, without resetting locked/sold.
+	sku.ManualStockTotal = 12
+	if err := repo.Update(sku); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&got, sku.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.ManualStockTotal != 12 || got.ManualStockLocked != 3 || got.ManualStockSold != 1 {
+		t.Fatalf("stock edit overwrote counters: %+v", got)
+	}
+}

@@ -802,3 +802,18 @@ func (r *Store) GetByIDForUpdateWithChildren(id uint) (*orderdomain.Order, error
 	}
 	return &order, nil
 }
+
+// UpdateStatusIfCurrent prevents asynchronous procurement work from overwriting
+// a delivery, refund or cancellation that committed after its snapshot.
+func (r *Store) UpdateStatusIfCurrent(id uint, fromStatuses []string, status string, updates map[string]interface{}) (bool, error) {
+	if len(fromStatuses) == 0 {
+		return false, nil
+	}
+	values := make(map[string]interface{}, len(updates)+1)
+	for k, v := range updates {
+		values[k] = v
+	}
+	values["status"] = status
+	result := r.db.Model(&orderdomain.Order{}).Where("orders.deleted_at IS NULL AND id = ? AND status IN ?", id, fromStatuses).Updates(values)
+	return result.RowsAffected == 1, result.Error
+}

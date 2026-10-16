@@ -268,7 +268,7 @@ func (s *Service) AdminManualRefund(input AdminManualRefundInput) (*orderdomain.
 
 	if err := s.orderStore.WithinTransaction(func(tx ordercontract.Transaction) error {
 		orders := tx.Orders()
-		locked, err := orders.GetByIDForUpdate(input.OrderID)
+		locked, err := lockRefundOrder(orders, input.OrderID)
 		if err != nil {
 			return err
 		}
@@ -289,6 +289,10 @@ func (s *Service) AdminManualRefund(input AdminManualRefundInput) (*orderdomain.
 		refundable := order.TotalAmount.Decimal.Sub(refundedBefore).Round(2)
 		if amount.GreaterThan(refundable) {
 			return walletcontract.ErrRefundExceeded
+		}
+
+		if err := reserveParentRefund(orders, &order, amount, time.Now()); err != nil {
+			return err
 		}
 
 		newRefunded := refundedBefore.Add(amount).Round(2)

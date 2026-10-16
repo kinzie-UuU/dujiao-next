@@ -1,6 +1,8 @@
 package procurement_test
 
 import (
+	ordergormstore "github.com/dujiao-next/internal/modules/order/infrastructure/gormstore"
+	procurementorderreader "github.com/dujiao-next/internal/modules/procurement/infrastructure/orderreader"
 	"testing"
 	"time"
 
@@ -9,6 +11,7 @@ import (
 
 	"github.com/dujiao-next/internal/constants"
 	procurementcontract "github.com/dujiao-next/internal/modules/procurement/contract"
+	procurementgormstore "github.com/dujiao-next/internal/modules/procurement/infrastructure/gormstore"
 )
 
 type procurementCallbackStatusFixture struct {
@@ -223,4 +226,43 @@ func TestHandleUpstreamCallback_Refunded_AfterCompletedKeepsOrderStatus(t *testi
 		expectedProcurementStatus: constants.ProcurementStatusRefunded,
 		expectedOrderStatus:       constants.OrderStatusCompleted,
 	})
+}
+
+// 秒发货的回调可能先于下单响应把采购单推进到 fulfilled；随后的提交 / 轮询写入
+// 必须基于读到的旧状态做比较后再写，不能把状态回退为 accepted。
+func TestProcurementStoreUpdateStatusIsCompareAndSet(t *testing.T) {
+	db := setupProcurementTestDB(t)
+	order := createProcTestOrder(t, db, "PROC-CAS-001", constants.OrderStatusDelivered, constants.FulfillmentTypeUpstream)
+	proc := createTestProcurementOrder(t, db, 1, order.ID, order.OrderNo, constants.ProcurementStatusFulfilled)
+
+	store := procurementgormstore.New(db)
+	written, err := store.UpdateStatus(proc.ID, constants.ProcurementStatusPending, constants.ProcurementStatusAccepted, nil)
+	if err != nil || written {
+		t.Fatalf("stale transition must not be written: written=%v err=%v", written, err)
+	}
+	var reloaded ProcurementOrder
+	db.First(&reloaded, proc.ID)
+	if reloaded.Status != constants.ProcurementStatusFulfilled {
+		t.Fatalf("expected status to stay fulfilled, got %q", reloaded.Status)
+	}
+}
+
+func TestProcurementLocalStatusCannotOverwriteTerminalOrder(t *testing.T) {
+	for _, status := range []string{constants.OrderStatusDelivered, constants.OrderStatusCompleted, constants.OrderStatusRefunded, constants.OrderStatusCanceled} {
+		t.Run(status, func(t *testing.T) {
+			db := setupProcurementTestDB(t)
+			order := createProcTestOrder(t, db, "CAS-LOCAL-"+status, status, constants.FulfillmentTypeUpstream)
+			reader := procurementorderreader.New(ordergormstore.New(db, "test-procurement-secret"))
+			for _, change := range []struct{ from, to string }{{constants.OrderStatusPaid, constants.OrderStatusFulfilling}, {constants.OrderStatusFulfilling, constants.OrderStatusPaid}, {constants.OrderStatusFulfilling, constants.OrderStatusDelivered}} {
+				written, err := reader.UpdateStatusIfCurrent(order.ID, []string{change.from}, change.to, nil)
+				if err != nil || written {
+					t.Fatalf("stale local transition accepted: %v %v", written, err)
+				}
+			}
+			var reloaded orderdomain.Order
+			if err := db.First(&reloaded, order.ID).Error; err != nil || reloaded.Status != status {
+				t.Fatalf("terminal order changed: %s %v", reloaded.Status, err)
+			}
+		})
+	}
 }

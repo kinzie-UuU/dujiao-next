@@ -9,7 +9,7 @@ import (
 type Source interface {
 	GetByID(id uint) (*orderdomain.Order, error)
 	GetByIDs(ids []uint) ([]orderdomain.Order, error)
-	UpdateStatus(id uint, status string, updates map[string]interface{}) error
+	UpdateStatusIfCurrent(id uint, fromStatuses []string, status string, updates map[string]interface{}) (bool, error)
 }
 
 type Reader struct {
@@ -46,8 +46,8 @@ func (r *Reader) GetByIDs(ids []uint) ([]procurementdomain.LocalOrder, error) {
 	return result, nil
 }
 
-func (r *Reader) UpdateStatus(id uint, status string, updates map[string]interface{}) error {
-	return r.source.UpdateStatus(id, status, updates)
+func (r *Reader) UpdateStatusIfCurrent(id uint, fromStatuses []string, status string, updates map[string]interface{}) (bool, error) {
+	return r.source.UpdateStatusIfCurrent(id, fromStatuses, status, updates)
 }
 
 // MapOrder 将订单域的持久化实体收窄为采购上下文快照。

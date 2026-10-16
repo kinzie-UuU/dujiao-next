@@ -54,14 +54,26 @@ func (s *Service) HandleUpstreamCallback(procurementOrderID uint, upstreamStatus
 		if fulfillment != nil {
 			updates["upstream_payload"] = fulfillment.Payload
 		}
-		if err := s.procRepo.UpdateStatus(procOrder.ID, "fulfilled", updates); err != nil {
+		fulfilled, err := s.procRepo.UpdateStatus(procOrder.ID, procOrder.Status, constants.ProcurementStatusFulfilled, updates)
+		if err != nil {
 			return fmt.Errorf("update procurement status: %w", err)
+		}
+		if !fulfilled {
+			// 回调与轮询/巡检并发：已由另一路径完成交付，避免重复通知
+			return nil
 		}
 
 		// 更新本地订单状态
-		_ = s.orderRepo.UpdateStatus(procOrder.LocalOrderID, constants.OrderStatusDelivered, map[string]interface{}{
+		delivered, updateErr := s.orderRepo.UpdateStatusIfCurrent(procOrder.LocalOrderID, []string{constants.OrderStatusPaid, constants.OrderStatusFulfilling}, constants.OrderStatusDelivered, map[string]interface{}{
 			"updated_at": now,
 		})
+
+		if updateErr != nil {
+			return fmt.Errorf("update local delivery status: %w", updateErr)
+		}
+		if !delivered {
+			return nil
+		}
 
 		// 如果有父订单，同步父订单状态
 		localOrder, _ := s.orderRepo.GetByID(procOrder.LocalOrderID)
@@ -109,8 +121,12 @@ func (s *Service) HandleUpstreamCallback(procurementOrderID uint, upstreamStatus
 		updates := map[string]interface{}{
 			"updated_at": now,
 		}
-		if err := s.procRepo.UpdateStatus(procOrder.ID, "canceled", updates); err != nil {
+		canceled, err := s.procRepo.UpdateStatus(procOrder.ID, procOrder.Status, constants.ProcurementStatusCanceled, updates)
+		if err != nil {
 			return fmt.Errorf("update procurement status: %w", err)
+		}
+		if !canceled {
+			return nil
 		}
 
 		// 回退本地订单状态并通知管理员
@@ -131,7 +147,7 @@ func (s *Service) HandleUpstreamCallback(procurementOrderID uint, upstreamStatus
 		if upstreamStatus == "refunded" {
 			targetStatus = constants.ProcurementStatusRefunded
 		}
-		if err := s.procRepo.UpdateStatus(procOrder.ID, targetStatus, updates); err != nil {
+		if _, err := s.procRepo.UpdateStatus(procOrder.ID, procOrder.Status, targetStatus, updates); err != nil {
 			return fmt.Errorf("update procurement status: %w", err)
 		}
 		logger.Infow("procurement_order_refunded",

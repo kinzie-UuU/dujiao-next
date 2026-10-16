@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -158,4 +159,65 @@ func TestSendVerifyCodePropagatesRequestTenantBrandToSender(t *testing.T) {
 	if sender.brand.SiteName != "White Label Store" || sender.brand.SiteURL != "https://shop.example.test" || sender.brand.FromName != "White Label Store" {
 		t.Fatalf("resolved brand did not reach sender: %+v", sender.brand)
 	}
+}
+
+type toggleVerificationEmailSender struct{ fail bool }
+
+func (s *toggleVerificationEmailSender) SendVerifyCode(_, _, _, _ string, _ mailbrand.Brand) error {
+	if s.fail {
+		return errors.New("smtp timeout")
+	}
+	return nil
+}
+
+// 邮件没发出去时，验证码不能占用发送间隔，用户应能立即重发。
+func TestSendVerifyCodeFailedSendDoesNotBlockResend(t *testing.T) {
+	sender := &toggleVerificationEmailSender{fail: true}
+	svc, _, _ := newRegistrationDomainPolicyAuthServiceWithSender(t, sender)
+
+	if err := svc.SendVerifyCode(context.Background(), "resend@example.com", constants.VerifyPurposeRegister, constants.LocaleZhCN); err == nil {
+		t.Fatal("expected send failure")
+	}
+	sender.fail = false
+	if err := svc.SendVerifyCode(context.Background(), "resend@example.com", constants.VerifyPurposeRegister, constants.LocaleZhCN); err != nil {
+		t.Fatalf("resend after failed send should succeed, got %v", err)
+	}
+}
+
+func TestSendVerifyCodeConcurrentRequestsSendOnce(t *testing.T) {
+	sender := &concurrentVerificationSender{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	svc, _, _ := newRegistrationDomainPolicyAuthServiceWithSender(t, sender)
+	results := make(chan error, 2)
+	go func() {
+		results <- svc.SendVerifyCode(context.Background(), "concurrent-send@example.com", constants.VerifyPurposeRegister, constants.LocaleZhCN)
+	}()
+	<-sender.entered
+	go func() {
+		results <- svc.SendVerifyCode(context.Background(), "concurrent-send@example.com", constants.VerifyPurposeRegister, constants.LocaleZhCN)
+	}()
+	close(sender.release)
+	successes := 0
+	for i := 0; i < 2; i++ {
+		if err := <-results; err == nil {
+			successes++
+		} else if !errors.Is(err, userauthapp.ErrVerifyCodeTooFrequent) {
+			t.Fatal(err)
+		}
+	}
+	if successes != 1 || sender.calls.Load() != 1 {
+		t.Fatalf("successes=%d sends=%d", successes, sender.calls.Load())
+	}
+}
+
+type concurrentVerificationSender struct {
+	entered chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (s *concurrentVerificationSender) SendVerifyCode(_, _, _, _ string, _ mailbrand.Brand) error {
+	s.calls.Add(1)
+	s.entered <- struct{}{}
+	<-s.release
+	return nil
 }

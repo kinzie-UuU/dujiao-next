@@ -188,3 +188,24 @@ func TestInvalidChallengeCountsFailureWithoutExposingToken(t *testing.T) {
 		t.Fatal("invalid challenge not counted")
 	}
 }
+
+type enableCodeStub struct{ TOTPService }
+
+func (enableCodeStub) Enable(uint, string) (*TOTPEnableResult, error) {
+	return &TOTPEnableResult{EnabledAt: time.Now(), RecoveryCodes: []string{"recovery"}}, nil
+}
+func TestEnable2FAReissuesCurrentSession(t *testing.T) {
+	h := NewAdmin2FAHandler(enableCodeStub{}, twoFAAuthStub{}, nil, nil)
+	c, w := loginContext(`{"code":"123456"}`)
+	c.Set("admin_id", uint(7))
+	h.Enable2FA(c)
+	var body struct {
+		Data TOTPEnableResult `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Data.Token != finalLoginResult().Token || len(body.Data.RecoveryCodes) != 1 {
+		t.Fatalf("session/recovery response: %s", w.Body.String())
+	}
+}

@@ -46,6 +46,8 @@ type TOTPSetupResult struct {
 
 // TOTPEnableResult /2fa/enable 响应。
 type TOTPEnableResult struct {
+	Token         string    `json:"token,omitempty"`
+	ExpiresAt     time.Time `json:"expires_at,omitempty"`
 	EnabledAt     time.Time `json:"enabled_at"`
 	RecoveryCodes []string  `json:"recovery_codes"`
 }
@@ -208,6 +210,10 @@ func (h *Admin2FAHandler) Enable2FA(c *gin.Context) {
 			ginutil.RespondError(c, response.CodeInternal, "error.internal_error", err)
 		}
 		return
+	}
+	// Keep the verified current device signed in after revoking earlier sessions.
+	if login, err := h.auth.CompleteLoginAfter2FA(adminID); err == nil && login != nil {
+		res.Token, res.ExpiresAt = login.Token, login.ExpiresAt
 	}
 	h.writeLoginLog(c, adminID, adminUsername(c), constants.AdminLoginEvent2FAEnabled, constants.AdminLoginStatusSuccess, "", nil)
 	response.Success(c, res)

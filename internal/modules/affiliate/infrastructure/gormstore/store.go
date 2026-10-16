@@ -8,6 +8,8 @@ import (
 	"github.com/dujiao-next/internal/constants"
 	affiliatecontract "github.com/dujiao-next/internal/modules/affiliate/contract"
 	affiliatedomain "github.com/dujiao-next/internal/modules/affiliate/domain"
+	orderdomain "github.com/dujiao-next/internal/modules/order/domain"
+	"github.com/dujiao-next/internal/shared/money"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -623,3 +625,40 @@ func applyPagination(query *gorm.DB, page, pageSize int) *gorm.DB {
 }
 
 var _ affiliatecontract.Store = (*Store)(nil)
+
+// CreateOrderCommission serializes commission retries with refunds on the order
+// row. A late retry uses the remaining paid amount, not the pre-refund snapshot.
+func (r *Store) CreateOrderCommission(commission *affiliatedomain.Commission) error {
+	if commission == nil || commission.OrderID == 0 {
+		return nil
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var order orderdomain.Order
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", commission.OrderID).First(&order).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		switch order.Status {
+		case constants.OrderStatusPaid, constants.OrderStatusFulfilling, constants.OrderStatusPartiallyDelivered, constants.OrderStatusDelivered, constants.OrderStatusCompleted, constants.OrderStatusPartiallyRefunded:
+		default:
+			return nil
+		}
+		total := order.TotalAmount.Decimal.Round(2)
+		remaining := total.Sub(order.RefundedAmount.Decimal.Round(2))
+		if total.LessThanOrEqual(decimal.Zero) || remaining.LessThanOrEqual(decimal.Zero) {
+			return nil
+		}
+		row := *commission
+		if remaining.LessThan(total) {
+			row.BaseAmount = money.FromDecimal(row.BaseAmount.Decimal.Mul(remaining).Div(total).Round(2))
+			row.CommissionAmount = money.FromDecimal(row.CommissionAmount.Decimal.Mul(remaining).Div(total).Round(2))
+		}
+		if row.CommissionAmount.Decimal.LessThanOrEqual(decimal.Zero) {
+			return nil
+		}
+		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error
+	})
+}
