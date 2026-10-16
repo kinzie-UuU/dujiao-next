@@ -1,8 +1,10 @@
 package paymenthttp
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -139,7 +141,7 @@ func TestGetPaymentChannelRedactsSecrets(t *testing.T) {
 			"token":          "usdt",
 		},
 	}}
-	handler := NewAdminChannelHandler(catalog)
+	handler := NewAdminChannelHandler(catalog, &fakeChannelSecurity{})
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Params = gin.Params{{Key: "id", Value: "1"}}
@@ -175,7 +177,7 @@ func TestUpdatePaymentChannelPreservesRedactedSecrets(t *testing.T) {
 			"webhook_secret": "webhook-secret-value",
 		},
 	}}
-	handler := NewAdminChannelHandler(catalog)
+	handler := NewAdminChannelHandler(catalog, &fakeChannelSecurity{})
 	payload, err := json.Marshal(map[string]interface{}{
 		"name": "Updated",
 		"config_json": map[string]interface{}{
@@ -192,6 +194,7 @@ func TestUpdatePaymentChannelPreservesRedactedSecrets(t *testing.T) {
 	ctx.Params = gin.Params{{Key: "id", Value: "1"}}
 	ctx.Request = httptest.NewRequest(http.MethodPut, "/admin/payment-channels/1", strings.NewReader(string(payload)))
 	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Set("admin_id", uint(1))
 
 	handler.UpdatePaymentChannel(ctx)
 
@@ -606,5 +609,113 @@ func TestGetAdminPaymentsBadQueryReturnsBadRequestCode(t *testing.T) {
 	}
 	if resp.StatusCode != 400 {
 		t.Fatalf("status_code want 400 got %d", resp.StatusCode)
+	}
+}
+
+type fakeChannelSecurity struct {
+	err     error
+	calls   int
+	changes int
+	fields  []string
+}
+
+func (s *fakeChannelSecurity) Verify(context.Context, uint, string) error { s.calls++; return s.err }
+func (s *fakeChannelSecurity) Changed(_ uint, _ string, _ string, _ uint, fields []string) {
+	s.changes++
+	s.fields = fields
+}
+func TestAllChannelWritesRequireStepUp(t *testing.T) {
+	for _, method := range []string{"POST", "PUT", "DELETE"} {
+		t.Run(method, func(t *testing.T) {
+			catalog := &fakeAdminChannelCatalog{channel: &paymentdomain.PaymentChannel{ID: 1, Name: "original"}}
+			security := &fakeChannelSecurity{err: errors.New("denied")}
+			h := NewAdminChannelHandler(catalog, security)
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Set("admin_id", uint(1))
+			c.Params = gin.Params{{Key: "id", Value: "1"}}
+			c.Request = httptest.NewRequest(method, "/", strings.NewReader(`{"name":"changed","provider_type":"epay","channel_type":"alipay","interaction_mode":"redirect"}`))
+			c.Request.Header.Set("Content-Type", "application/json")
+			switch method {
+			case "POST":
+				h.CreatePaymentChannel(c)
+			case "PUT":
+				h.UpdatePaymentChannel(c)
+			case "DELETE":
+				h.DeletePaymentChannel(c)
+			}
+			if security.calls != 1 || security.changes != 0 || catalog.channel.Name != "original" {
+				t.Fatal("unauthorized mutation or notice")
+			}
+		})
+	}
+}
+func TestChannelChangeFieldsNeverExposeConfigValues(t *testing.T) {
+	old := &paymentdomain.PaymentChannel{ConfigJSON: jsonmap.JSON{"address": "old-secret"}}
+	next := &paymentdomain.PaymentChannel{ConfigJSON: jsonmap.JSON{"address": "new-secret"}}
+	fields := channelChangedFields(old, next)
+	if len(fields) != 1 || fields[0] != "config_json" {
+		t.Fatalf("unexpected fields: %v", fields)
+	}
+}
+
+type countedChannelCatalog struct {
+	*fakeAdminChannelCatalog
+	writes   int
+	writeErr error
+}
+
+func (c *countedChannelCatalog) Create(ch *paymentdomain.PaymentChannel) error {
+	c.writes++
+	return c.writeErr
+}
+func (c *countedChannelCatalog) Update(ch *paymentdomain.PaymentChannel) error {
+	c.writes++
+	return c.writeErr
+}
+func (c *countedChannelCatalog) Delete(id uint) error { c.writes++; return c.writeErr }
+func TestChannelNoticeOnlyAfterSuccessfulWrite(t *testing.T) {
+	for _, method := range []string{"POST", "PUT", "DELETE"} {
+		for _, failed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/fail=%v", method, failed), func(t *testing.T) {
+				catalog := &countedChannelCatalog{fakeAdminChannelCatalog: &fakeAdminChannelCatalog{channel: &paymentdomain.PaymentChannel{ID: 1, Name: "original"}}}
+				if failed {
+					catalog.writeErr = errors.New("write failed")
+				}
+				guard := &fakeChannelSecurity{}
+				h := NewAdminChannelHandler(catalog, guard)
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				c.Set("admin_id", uint(1))
+				c.Params = gin.Params{{Key: "id", Value: "1"}}
+				c.Request = httptest.NewRequest(method, "/", strings.NewReader(`{"name":"changed","provider_type":"epay","channel_type":"alipay","interaction_mode":"redirect","config_json":{"address":"sensitive"}}`))
+				c.Request.Header.Set("Content-Type", "application/json")
+				switch method {
+				case "POST":
+					h.CreatePaymentChannel(c)
+				case "PUT":
+					h.UpdatePaymentChannel(c)
+				case "DELETE":
+					h.DeletePaymentChannel(c)
+				}
+				want := 1
+				if failed {
+					want = 0
+				}
+				if catalog.writes != 1 || guard.changes != want {
+					t.Fatalf("writes=%d notices=%d", catalog.writes, guard.changes)
+				}
+			})
+		}
+	}
+}
+func TestMissingChannelSecurityCannotWrite(t *testing.T) {
+	catalog := &countedChannelCatalog{fakeAdminChannelCatalog: &fakeAdminChannelCatalog{channel: &paymentdomain.PaymentChannel{ID: 1}}}
+	h := NewAdminChannelHandler(catalog, nil)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set("admin_id", uint(1))
+	c.Request = httptest.NewRequest("DELETE", "/", nil)
+	c.Params = gin.Params{{Key: "id", Value: "1"}}
+	h.DeletePaymentChannel(c)
+	if catalog.writes != 0 {
+		t.Fatal("missing guard allowed mutation")
 	}
 }

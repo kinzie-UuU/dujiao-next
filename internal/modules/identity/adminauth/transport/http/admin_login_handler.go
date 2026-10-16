@@ -129,6 +129,7 @@ func (h *AdminLoginHandler) AdminLogin(c *gin.Context) {
 		}
 		h.writeLoginLog(c, 0, req.Username, constants.AdminLoginEventLoginPassword, constants.AdminLoginStatusFailed, failReason, nil)
 		if errors.Is(err, ErrInvalidCredentials) {
+			notifyAdminLoginFailure(c, h.notifier, "password")
 			ginutil.RespondError(c, response.CodeUnauthorized, "error.admin_login_invalid", nil)
 			return
 		}
@@ -234,4 +235,16 @@ func notifyAdminLogin(c *gin.Context, notifier AdminLoginNotifier, adminID uint,
 		LoginAt:  time.Now().UTC().Format(time.RFC3339),
 		EventID:  uuid.NewString(),
 	})
+}
+
+// No submitted username, password, OTP, or challenge token crosses this port.
+type AdminLoginFailureNotification struct{ ClientIP, Method string }
+type AdminLoginFailureNotifier interface {
+	NotifyAdminLoginFailure(AdminLoginFailureNotification)
+}
+
+func notifyAdminLoginFailure(c *gin.Context, notifier AdminLoginNotifier, method string) {
+	if n, ok := notifier.(AdminLoginFailureNotifier); ok {
+		n.NotifyAdminLoginFailure(AdminLoginFailureNotification{ClientIP: c.ClientIP(), Method: method})
+	}
 }

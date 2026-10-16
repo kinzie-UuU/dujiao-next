@@ -11,8 +11,10 @@ import (
 
 func TestLoginNoticeReportsDisabledQueue(t *testing.T) {
 	c, _ := NewClient(nil)
-	if c.EnqueueNotificationDispatch(NotificationDispatchPayload{EventType: constants.NotificationEventAdminLoginSuccess}) == nil {
-		t.Fatal("disabled login queue silently accepted")
+	for _, event := range []string{constants.NotificationEventAdminLoginSuccess, constants.NotificationEventAdminLoginFailed, constants.NotificationEventAdminPaymentConfigChanged} {
+		if c.EnqueueNotificationDispatch(NotificationDispatchPayload{EventType: event}) == nil {
+			t.Fatalf("disabled security queue accepted %s", event)
+		}
 	}
 	if err := c.EnqueueNotificationDispatch(NotificationDispatchPayload{EventType: constants.NotificationEventOrderPaidSuccess}); err != nil {
 		t.Fatal("existing event behavior changed")

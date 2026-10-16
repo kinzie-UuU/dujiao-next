@@ -18,7 +18,7 @@ import (
 
 func isNotificationEventSupported(eventType string) bool {
 	switch strings.ToLower(strings.TrimSpace(eventType)) {
-	case constants.NotificationEventAdminLoginSuccess,
+	case constants.NotificationEventAdminLoginFailed, constants.NotificationEventAdminPaymentConfigChanged, constants.NotificationEventAdminLoginSuccess,
 		constants.NotificationEventWalletRechargeSuccess,
 		constants.NotificationEventOrderPaidSuccess,
 		constants.NotificationEventManualFulfillmentPending,

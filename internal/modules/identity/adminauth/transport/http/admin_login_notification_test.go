@@ -13,7 +13,14 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type loginNoticeSpy struct{ items []AdminLoginNotification }
+type loginNoticeSpy struct {
+	items    []AdminLoginNotification
+	failures []AdminLoginFailureNotification
+}
+
+func (s *loginNoticeSpy) NotifyAdminLoginFailure(v AdminLoginFailureNotification) {
+	s.failures = append(s.failures, v)
+}
 
 func (s *loginNoticeSpy) NotifyAdminLogin(v AdminLoginNotification) { s.items = append(s.items, v) }
 
@@ -27,11 +34,12 @@ func (s loginAuthStub) Login(_, _ string) (*AuthLoginResult, error) { return s.r
 
 type twoFAAuthStub struct {
 	AuthService
-	err error
+	parseErr error
+	err      error
 }
 
 func (s twoFAAuthStub) ParseChallengeToken(string) (*ChallengeClaims, error) {
-	return &ChallengeClaims{AdminID: 7, JTI: "challenge"}, nil
+	return &ChallengeClaims{AdminID: 7, JTI: "challenge"}, s.parseErr
 }
 func (s twoFAAuthStub) GetAdminUsername(uint) (string, error) { return "admin", nil }
 func (s twoFAAuthStub) CompleteLoginAfter2FA(uint) (*AuthLoginResult, error) {
@@ -126,5 +134,57 @@ func TestSeparateLoginsHaveSeparateEventIDs(t *testing.T) {
 	notifyAdminLogin(c, spy, 7, "admin", "password")
 	if spy.items[0].EventID == spy.items[1].EventID {
 		t.Fatal("independent logins deduplicated")
+	}
+}
+
+func TestFailureNoticesCoverPasswordAndTwoFAWithoutCredentials(t *testing.T) {
+	for _, username := range []string{"admin", "unknown-private-user"} {
+		spy := &loginNoticeSpy{}
+		h := NewAdminLoginHandler(loginAuthStub{err: ErrInvalidCredentials}, nil, nil, spy)
+		c, _ := loginContext(`{"username":"` + username + `","password":"private-password"}`)
+		h.AdminLogin(c)
+		if len(spy.failures) != 1 || spy.failures[0].Method != "password" {
+			t.Fatal("missing password failure")
+		}
+		raw, _ := json.Marshal(spy.failures)
+		if strings.Contains(string(raw), username) || strings.Contains(string(raw), "private") {
+			t.Fatal("credential/account leaked")
+		}
+	}
+	for _, recovery := range []bool{false, true} {
+		spy := &loginNoticeSpy{}
+		err := ErrTOTPCodeInvalid
+		body := `{"challenge_token":"private-challenge","code":"123456"}`
+		if recovery {
+			err = ErrTOTPRecoveryInvalid
+			body = `{"challenge_token":"private-challenge","recovery_code":"private-recovery"}`
+		}
+		h := NewAdmin2FAHandler(twoFACodeStub{err: err}, twoFAAuthStub{}, nil, nil, spy)
+		c, _ := loginContext(body)
+		h.Verify2FA(c)
+		if len(spy.failures) != 1 || spy.failures[0].ClientIP != "203.0.113.7" {
+			t.Fatal("missing 2FA failure")
+		}
+		raw, _ := json.Marshal(spy.failures)
+		if strings.Contains(string(raw), "private") || strings.Contains(string(raw), "123456") {
+			t.Fatal("2FA secret leaked")
+		}
+	}
+	spy := &loginNoticeSpy{}
+	h := NewAdminLoginHandler(loginAuthStub{err: errors.New("database offline")}, nil, nil, spy)
+	c, _ := loginContext(`{"username":"admin","password":"private"}`)
+	h.AdminLogin(c)
+	if len(spy.failures) != 0 {
+		t.Fatal("internal failure counted as bad credentials")
+	}
+}
+
+func TestInvalidChallengeCountsFailureWithoutExposingToken(t *testing.T) {
+	spy := &loginNoticeSpy{}
+	h := NewAdmin2FAHandler(twoFACodeStub{}, twoFAAuthStub{parseErr: errors.New("invalid")}, nil, nil, spy)
+	c, _ := loginContext(`{"challenge_token":"private-expired-challenge","code":"123456"}`)
+	h.Verify2FA(c)
+	if len(spy.failures) != 1 || spy.failures[0].Method != "2fa_challenge" {
+		t.Fatal("invalid challenge not counted")
 	}
 }

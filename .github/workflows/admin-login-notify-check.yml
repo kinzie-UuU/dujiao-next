@@ -3,7 +3,7 @@ name: Verify admin login notification candidate
 on:
   workflow_dispatch:
   push:
-    branches: [codex/admin-login-notify-20261016, codex/admin-notify-token-redaction-20261016]
+    branches: [codex/admin-login-notify-20261016, codex/admin-notify-token-redaction-20261016, codex/admin-payment-security-20261016]
 
 permissions:
   contents: read
@@ -27,7 +27,7 @@ jobs:
           test -z "$(gofmt -l $(git ls-files '*.go'))"
           go test ./... -count=1
           go vet ./...
-      - name: Build unchanged embedded frontends
+      - name: Build and test embedded frontends
         run: |
           node --test frontend/check-ui-icons.test.mjs
           node frontend/check-ui-icons.mjs
@@ -51,6 +51,8 @@ jobs:
           grep -F 'vcs.modified=false' dist/build-info.txt
           sha256sum dist/dujiao-next | tee dist/SHA256SUMS
           find internal/web/dist -type f -print0 | sort -z | xargs -0 sha256sum > dist/embedded-assets.sha256
+          (cd frontend/admin && npx --yes pnpm@10.34.3 run build)
+          cp -a frontend/admin/dist dist/admin-dist
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -58,7 +60,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish immutable binary carrier for reviewed deployment
         run: |
-          printf 'FROM scratch\nCOPY dujiao-next /app/dujiao-next\nCOPY build-info.txt embedded-assets.sha256 SHA256SUMS /evidence/\n' > dist/Dockerfile
+          printf 'FROM scratch\nCOPY dujiao-next /app/dujiao-next\nCOPY admin-dist /app/admin-dist\nCOPY build-info.txt embedded-assets.sha256 SHA256SUMS /evidence/\n' > dist/Dockerfile
           image="ghcr.io/kinzie-uuu/dujiao-next:notify-binary-$GITHUB_SHA"
           docker build --label "org.opencontainers.image.revision=$GITHUB_SHA" --label 'org.opencontainers.image.source=https://github.com/kinzie-UuU/dujiao-next' -t "$image" dist
           docker push "$image"

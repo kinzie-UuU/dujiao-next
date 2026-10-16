@@ -110,3 +110,17 @@ func AdminLoginTemplate(locale string) settingsmessaging.NotificationLocalizedTe
 		return settingsmessaging.NotificationLocalizedTemplate{Title: "管理员登录成功提醒", Body: "管理员：{{admin_username}}\n时间（UTC）：{{login_at}}\nIP：{{client_ip}}\n方式：{{login_method}}\n如非本人操作，请立即检查管理员账号安全。"}
 	}
 }
+
+// AdminSecurityTemplate never interpolates credentials or editable business templates.
+func AdminSecurityTemplate(event, locale string) settingsmessaging.NotificationLocalizedTemplate {
+	if event == constants.NotificationEventAdminLoginSuccess {
+		return AdminLoginTemplate(locale)
+	}
+	if event == constants.NotificationEventAdminLoginFailed {
+		if locale == constants.LocaleEnUS {
+			return settingsmessaging.NotificationLocalizedTemplate{Title: "Repeated administrator sign-in failures", Body: "IP: {{client_ip}}\nFailures: {{failure_count}} within {{window_minutes}} minutes\nLast method: {{login_method}}\nTime (UTC): {{occurred_at}}\nAccount existence is not disclosed."}
+		}
+		return settingsmessaging.NotificationLocalizedTemplate{Title: "管理员连续登录失败告警", Body: "IP：{{client_ip}}\n{{window_minutes}} 分钟内失败次数：{{failure_count}}\n最近验证方式：{{login_method}}\n时间（UTC）：{{occurred_at}}\n请检查是否存在异常登录；不披露尝试账号是否存在。"}
+	}
+	return settingsmessaging.NotificationLocalizedTemplate{Title: "管理员收款配置变更告警", Body: "管理员：{{admin_username}}\n操作：{{action}}\n支付渠道：{{object_id}}\n变更字段：{{changed_fields}}\nIP：{{client_ip}}\n时间（UTC）：{{occurred_at}}\n如非授权操作，请立即检查收款配置。"}
+}

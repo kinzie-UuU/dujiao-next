@@ -233,6 +233,11 @@ func TestLoginEventDedupeSeparatesLoginsButKeepsRetryIdentity(t *testing.T) {
 	}
 }
 func TestLoginTelegramFailureIsRetryable(t *testing.T) {
+	for _, event := range []string{constants.NotificationEventAdminLoginSuccess, constants.NotificationEventAdminLoginFailed, constants.NotificationEventAdminPaymentConfigChanged} {
+		t.Run(event, func(t *testing.T) { testSecurityTelegramFailureIsRetryable(t, event) })
+	}
+}
+func testSecurityTelegramFailureIsRetryable(t *testing.T, event string) {
 	redis := miniredis.RunT(t)
 	port, err := strconv.Atoi(redis.Port())
 	if err != nil {
@@ -248,7 +253,7 @@ func TestLoginTelegramFailureIsRetryable(t *testing.T) {
 	setting.Channels.Telegram = settingsmessaging.NotificationChannelSetting{Enabled: true, Recipients: []string{"123456789"}}
 	tg := &loginTelegramSpy{err: errors.New("temporary"), cancel: cancel}
 	svc := NewService(notificationSettingsStub{notification: setting}, nil, nil, nil, nil, tg)
-	p := queue.NotificationDispatchPayload{EventType: constants.NotificationEventAdminLoginSuccess, Data: map[string]interface{}{"login_event_id": "retry"}}
+	p := queue.NotificationDispatchPayload{EventType: event, Data: map[string]interface{}{"login_event_id": "retry"}}
 	if svc.Dispatch(ctx, p) == nil {
 		t.Fatal("failure swallowed")
 	}
@@ -271,5 +276,37 @@ func TestLoginTelegramFailureIsRetryable(t *testing.T) {
 	}
 	if len(tg.messages) != 2 {
 		t.Fatal("successful retry sent twice")
+	}
+}
+
+func TestNewSecurityEventsUseFixedTelegramTemplatesAndExceptionSwitch(t *testing.T) {
+	for _, event := range []string{constants.NotificationEventAdminLoginFailed, constants.NotificationEventAdminPaymentConfigChanged} {
+		for _, enabled := range []bool{false, true} {
+			setting := settingsmessaging.NotificationCenterDefaultSetting()
+			setting.Scenes.ExceptionAlert = enabled
+			setting.Channels.Telegram = settingsmessaging.NotificationChannelSetting{Enabled: true, Recipients: []string{"123"}}
+			setting.Channels.Email = settingsmessaging.NotificationChannelSetting{Enabled: true, Recipients: []string{"other@example.com"}}
+			setting.Templates.ExceptionAlert.ZHCN = settingsmessaging.NotificationLocalizedTemplate{Title: "editable", Body: "secret {{password}}"}
+			tg := &loginTelegramSpy{}
+			email := &loginEmailSpy{}
+			svc := NewService(notificationSettingsStub{notification: setting}, email, nil, nil, nil, tg)
+			err := svc.Dispatch(context.Background(), queue.NotificationDispatchPayload{EventType: event, Data: map[string]interface{}{"password": "private-secret", "action": "update", "changed_fields": "config_json", "object_id": "7"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if enabled {
+				want = 1
+			}
+			if len(tg.messages) != want || email.calls != 0 {
+				t.Fatal("channel or scene mismatch")
+			}
+			if enabled && (strings.Contains(tg.messages[0], "private-secret") || strings.Contains(tg.messages[0], "editable")) {
+				t.Fatal("editable template or secret leaked")
+			}
+			if enabled && event == constants.NotificationEventAdminPaymentConfigChanged && !strings.Contains(tg.messages[0], "config_json") {
+				t.Fatal("change field missing")
+			}
+		}
 	}
 }

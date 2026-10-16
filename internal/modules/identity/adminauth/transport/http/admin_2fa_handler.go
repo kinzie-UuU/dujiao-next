@@ -311,11 +311,13 @@ func (h *Admin2FAHandler) Verify2FA(c *gin.Context) {
 	}
 	claims, err := h.auth.ParseChallengeToken(req.ChallengeToken)
 	if err != nil {
+		notifyAdminLoginFailure(c, h.notifier, "2fa_challenge")
 		ginutil.RespondError(c, response.CodeUnauthorized, "error.totp_challenge_invalid", nil)
 		return
 	}
 	ctx := context.Background()
 	if h.challenges != nil && h.challenges.IsRevoked(ctx, claims.JTI) {
+		notifyAdminLoginFailure(c, h.notifier, "2fa_challenge")
 		ginutil.RespondError(c, response.CodeUnauthorized, "error.totp_challenge_invalid", nil)
 		return
 	}
@@ -333,6 +335,9 @@ func (h *Admin2FAHandler) Verify2FA(c *gin.Context) {
 			failReason = constants.AdminLoginFailInvalidRecoveryCode
 		}
 		h.writeLoginLog(c, claims.AdminID, username, event, constants.AdminLoginStatusFailed, failReason, nil)
+		if errors.Is(verifyErr, ErrTOTPCodeInvalid) || errors.Is(verifyErr, ErrTOTPRecoveryInvalid) {
+			notifyAdminLoginFailure(c, h.notifier, event)
+		}
 		if failCnt >= challengeMaxFailures {
 			if h.challenges != nil {
 				h.challenges.Revoke(ctx, claims.JTI)

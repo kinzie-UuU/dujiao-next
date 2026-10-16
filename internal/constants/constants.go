@@ -337,12 +337,14 @@ const (
 
 // 通知中心事件常量
 const (
-	NotificationEventWalletRechargeSuccess    = "wallet_recharge_success"
-	NotificationEventOrderPaidSuccess         = "order_paid_success"
-	NotificationEventManualFulfillmentPending = "manual_fulfillment_pending"
-	NotificationEventExceptionAlert           = "exception_alert"
-	NotificationEventExceptionAlertCheck      = "exception_alert_check"
-	NotificationEventAdminLoginSuccess        = "admin_login_success"
+	NotificationEventWalletRechargeSuccess     = "wallet_recharge_success"
+	NotificationEventOrderPaidSuccess          = "order_paid_success"
+	NotificationEventManualFulfillmentPending  = "manual_fulfillment_pending"
+	NotificationEventExceptionAlert            = "exception_alert"
+	NotificationEventExceptionAlertCheck       = "exception_alert_check"
+	NotificationEventAdminLoginSuccess         = "admin_login_success"
+	NotificationEventAdminLoginFailed          = "admin_login_failed"
+	NotificationEventAdminPaymentConfigChanged = "admin_payment_config_changed"
 )
 
 // 通知中心异常阈值类型常量
@@ -563,3 +565,8 @@ const (
 	PaymentExceptionClosedOrderSucceeded = "closed_order_payment_succeeded"
 	WalletTxnTypeOrderUnderpaidCredit    = "order_underpaid_credit"
 )
+
+// IsAdminSecurityNotification identifies fixed, Telegram-only security events.
+func IsAdminSecurityNotification(event string) bool {
+	return event == NotificationEventAdminLoginSuccess || event == NotificationEventAdminLoginFailed || event == NotificationEventAdminPaymentConfigChanged
+}

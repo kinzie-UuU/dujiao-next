@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { usePaymentStepUpStore } from '@/stores/paymentStepUp'
 import { onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -217,7 +218,9 @@ const handleModalSuccess = () => {
 const handleDelete = async (channel: AdminPaymentChannel) => {
   const confirmed = await confirmAction({ description: t('admin.paymentChannels.confirmDelete', { name: channel.name }), confirmText: t('admin.common.delete'), variant: 'destructive' })
   if (!confirmed) return
-  await adminAPI.deletePaymentChannel(channel.id)
+  const code = await usePaymentStepUpStore().ask()
+  if (!code) return
+  await adminAPI.deletePaymentChannel(channel.id, code)
   fetchChannels(pagination.value.page)
 }
 
