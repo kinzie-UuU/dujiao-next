@@ -1,6 +1,7 @@
 package userauthhttp
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -30,8 +31,8 @@ type UserLoginSettings interface {
 
 // UserLoginAuth 是注册/登录端点所需的认证端口。
 type UserLoginAuth interface {
-	Register(email, password, code string, agreementAccepted, emailVerificationEnabled bool) (*userdomain.User, string, time.Time, error)
-	LoginStep1(email, password string, rememberMe bool) (*AuthLoginResult, error)
+	Register(ctx context.Context, email, password, code string, agreementAccepted, emailVerificationEnabled bool) (*userdomain.User, string, time.Time, error)
+	LoginStep1(ctx context.Context, email, password string, rememberMe bool) (*AuthLoginResult, error)
 }
 
 // UserLoginHandler 处理公开的注册与登录 HTTP 请求。
@@ -105,7 +106,7 @@ func (h *UserLoginHandler) UserRegister(c *gin.Context) {
 		return
 	}
 
-	user, token, expiresAt, err := h.auth.Register(req.Email, req.Password, req.Code, req.AgreementAccepted, emailVerificationEnabled)
+	user, token, expiresAt, err := h.auth.Register(c.Request.Context(), req.Email, req.Password, req.Code, req.AgreementAccepted, emailVerificationEnabled)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrInvalidEmail):
@@ -169,7 +170,7 @@ func (h *UserLoginHandler) UserLogin(c *gin.Context) {
 		}
 	}
 
-	res, err := h.auth.LoginStep1(req.Email, req.Password, req.RememberMe)
+	res, err := h.auth.LoginStep1(c.Request.Context(), req.Email, req.Password, req.RememberMe)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrInvalidEmail):

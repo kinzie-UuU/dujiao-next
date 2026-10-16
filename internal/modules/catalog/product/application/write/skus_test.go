@@ -202,3 +202,16 @@ func newSyncSingleSKURepo(t *testing.T) SKURepository {
 	t.Helper()
 	return &memorySKURepository{}
 }
+
+func (repo *memorySKURepository) UpdateKeepingStock(item *productdomain.ProductSKU) error {
+	copy := *item
+	for _, old := range repo.rows {
+		if old.ID == item.ID {
+			copy.ManualStockTotal = old.ManualStockTotal
+			copy.ManualStockLocked = old.ManualStockLocked
+			copy.ManualStockSold = old.ManualStockSold
+			break
+		}
+	}
+	return repo.Update(&copy)
+}

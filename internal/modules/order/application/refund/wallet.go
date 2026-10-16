@@ -66,7 +66,7 @@ func (s *Service) AdminRefundToWallet(
 
 	err := s.orderStore.WithinTransaction(func(tx ordercontract.Transaction) error {
 		orderRepository := tx.Orders()
-		locked, err := orderRepository.GetByIDForUpdate(input.OrderID)
+		locked, err := lockRefundOrder(orderRepository, input.OrderID)
 		if err != nil {
 			return err
 		}
@@ -91,6 +91,10 @@ func (s *Service) AdminRefundToWallet(
 		refundable := order.TotalAmount.Decimal.Sub(refundedBefore).Round(2)
 		if amount.GreaterThan(refundable) {
 			return walletcontract.ErrRefundExceeded
+		}
+
+		if err := reserveParentRefund(orderRepository, &order, amount, time.Now()); err != nil {
+			return err
 		}
 
 		_, transaction, err := s.wallets.CreditInTransaction(

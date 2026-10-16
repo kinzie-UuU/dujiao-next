@@ -31,8 +31,12 @@ func (s *Service) RetryManual(id uint) error {
 		"error_message": "",
 		"updated_at":    now,
 	}
-	if err := s.procRepo.UpdateStatus(procOrder.ID, "pending", updates); err != nil {
+	reset, err := s.procRepo.UpdateStatus(procOrder.ID, procOrder.Status, constants.ProcurementStatusPending, updates)
+	if err != nil {
 		return fmt.Errorf("reset procurement status: %w", err)
+	}
+	if !reset {
+		return procurementcontract.ErrStatusInvalid
 	}
 
 	logger.Infow("procurement_manual_retry",
@@ -85,8 +89,12 @@ func (s *Service) CancelManual(id uint) error {
 		"error_message": "manually canceled",
 		"updated_at":    now,
 	}
-	if err := s.procRepo.UpdateStatus(procOrder.ID, "canceled", updates); err != nil {
+	canceled, err := s.procRepo.UpdateStatus(procOrder.ID, procOrder.Status, constants.ProcurementStatusCanceled, updates)
+	if err != nil {
 		return fmt.Errorf("update procurement status: %w", err)
+	}
+	if !canceled {
+		return procurementcontract.ErrStatusInvalid
 	}
 
 	logger.Infow("procurement_manual_cancel",

@@ -106,6 +106,8 @@ func (r *Store) UpdateTOTPEnabled(adminID uint, encSecret string, enabledAt time
 		"totp_pending_secret":     "",
 		"totp_pending_expires_at": nil,
 		"recovery_codes":          recoveryCodesJSON,
+		"token_version":           gorm.Expr("token_version + 1"),
+		"token_invalid_before":    enabledAt,
 	}).Error
 }
 

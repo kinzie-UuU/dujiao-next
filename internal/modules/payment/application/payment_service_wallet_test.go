@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"go.uber.org/zap"
 	"strconv"
 	"sync"
 	"testing"
@@ -1512,5 +1513,36 @@ func TestRechargeSameStatusCallbackDoesNotOverwriteConcurrentSuccess(t *testing.
 	}
 	if saved.Status != constants.PaymentStatusSuccess {
 		t.Fatalf("stored recharge success overwritten: %s", saved.Status)
+	}
+}
+
+type failingAffiliate struct{}
+
+func (failingAffiliate) HandleOrderPaid(uint) error { return errors.New("db busy") }
+
+type affiliateRetryQueue struct {
+	paymentcontract.Queue
+	retried []uint
+}
+
+func (q *affiliateRetryQueue) Enabled() bool                         { return true }
+func (q *affiliateRetryQueue) EnqueueOrderAutoFulfill(uint) error    { return nil }
+func (q *affiliateRetryQueue) EnqueueStatusEmail(uint, string) error { return nil }
+func (q *affiliateRetryQueue) EnqueueTimeoutCancel(uint, time.Duration) error {
+	return nil
+}
+func (q *affiliateRetryQueue) EnqueueAffiliateOrderPaid(orderID uint) error {
+	q.retried = append(q.retried, orderID)
+	return nil
+}
+
+// 支付已提交后佣金写入失败，必须交给队列重试，而不是只记日志导致佣金永久丢失。
+func TestEnqueueOrderPaidAsyncRetriesFailedAffiliateCommission(t *testing.T) {
+	queue := &affiliateRetryQueue{}
+	svc := &PaymentService{affiliateSvc: failingAffiliate{}, queue: queue}
+	order := &orderdomain.Order{ID: 42, Items: []orderdomain.OrderItem{{FulfillmentType: constants.FulfillmentTypeAuto}}}
+	svc.enqueueOrderPaidAsync(order, nil, zap.NewNop().Sugar())
+	if len(queue.retried) != 1 || queue.retried[0] != 42 {
+		t.Fatalf("expected affiliate retry enqueued for order 42, got %v", queue.retried)
 	}
 }

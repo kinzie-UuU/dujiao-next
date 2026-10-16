@@ -3,7 +3,6 @@ package httpserver
 import (
 	"fmt"
 	"net/http"
-	"path"
 	"sort"
 	"strings"
 
@@ -243,13 +242,7 @@ func SetupRouter(cfg *config.Config, c *container.Container) *gin.Engine {
 	r.Use(middleware.CallbackRouteMiddleware(c.SettingService, paymentCallbackHandler, paymentWebhookHandler, upstreamHandler))
 
 	// 静态文件服务（上传的图片）必须放在前面。
-	r.Group("/uploads", func(c *gin.Context) {
-		if strings.EqualFold(path.Ext(c.Request.URL.Path), ".svg") {
-			c.Header("Content-Disposition", "attachment")
-			c.Header("Content-Security-Policy", "sandbox; script-src 'none'")
-			c.Header("X-Content-Type-Options", "nosniff")
-		}
-	}).Static("/", "./uploads")
+	r.Group("/uploads", uploadSecurityHeaders).Static("/", "./uploads")
 
 	// SEO 资源（动态生成）。
 	sitemaptransport.RegisterRoutes(r, sitemaptransport.NewHandler(c.SitemapService, sitemapbrand.New(c.SettingService)))

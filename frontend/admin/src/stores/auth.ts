@@ -92,6 +92,10 @@ export const useAdminAuthStore = defineStore('adminAuth', {
     requiresTotp: false as boolean,
   }),
   actions: {
+    replaceToken(token: string) {
+      this.token = token
+      localStorage.setItem(TOKEN_KEY, token)
+    },
     async login(payload: AdminLoginRequest): Promise<{ requiresTotp: boolean }> {
       this.loading = true
       try {

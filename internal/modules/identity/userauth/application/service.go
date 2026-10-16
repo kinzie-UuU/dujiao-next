@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"github.com/dujiao-next/internal/telegramidentity"
@@ -110,7 +111,36 @@ type UserJWTClaims struct {
 	Email        string `json:"email"`
 	TokenVersion uint64 `json:"token_version"`
 	Typ          string `json:"typ,omitempty"`
+	// ResellerID 签发时所在的分销站点（主站为 0）。令牌只在同一站点有效，
+	// 防止分销商在自己的域名上截获的令牌被拿到主站或其他分销站使用。
+	ResellerID uint `json:"rid,omitempty"`
 	jwt.RegisteredClaims
+}
+
+// BindUserTokenTenant 将访问令牌绑定到签发请求所在的分销站点；主站（resellerID=0）原样返回。
+func (s *Service) BindUserTokenTenant(tokenString string, resellerID uint) (string, error) {
+	if resellerID == 0 || tokenString == "" {
+		return tokenString, nil
+	}
+	claims, err := s.ParseUserJWT(tokenString)
+	if err != nil {
+		return "", err
+	}
+	claims.ResellerID = resellerID
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(s.cfg.UserJWT.SecretKey))
+}
+
+// BindUserChallengeTenant keeps the pre-login challenge within its issuing site.
+func (s *Service) BindUserChallengeTenant(tokenString string, resellerID uint) (string, error) {
+	if tokenString == "" {
+		return tokenString, nil
+	}
+	claims, err := s.ParseUserChallengeToken(tokenString)
+	if err != nil {
+		return "", err
+	}
+	claims.ResellerID = resellerID
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(s.cfg.UserJWT.SecretKey))
 }
 
 // UserChallengeClaims 用户 2FA 挑战 token claims
@@ -118,6 +148,7 @@ type UserJWTClaims struct {
 // 注：Typ 字段同时占用与 UserJWTClaims 兼容的 typ 键，写入 "2fa_challenge"，
 // 防止挑战 token 在被错误地解析为 UserJWTClaims 时通过中间件的 typ 校验。
 type UserChallengeClaims struct {
+	ResellerID  uint   `json:"rid,omitempty"`
 	UserID      uint   `json:"user_id"`
 	JTI         string `json:"jti"`
 	Purpose     string `json:"purpose"`
@@ -495,23 +526,36 @@ func (s *Service) verifyCode(email, purpose, code string) (*emailverificationdom
 		return nil, ErrVerifyCodeExpired
 	}
 
-	maxAttempts := resolveMaxAttempts(s.cfg.Email.VerifyCode)
-	if maxAttempts > 0 && record.AttemptCount >= maxAttempts {
+	// 先原子占用一次尝试机会再比对：并发猜测请求无法共享同一个"剩余次数"。
+	reserved, err := s.codeRepo.ReserveAttempt(record.ID, resolveMaxAttempts(s.cfg.Email.VerifyCode))
+	if err != nil {
+		return nil, err
+	}
+	if !reserved {
 		return nil, ErrVerifyCodeAttemptsExceeded
 	}
 
-	if strings.TrimSpace(record.Code) != strings.TrimSpace(code) {
-		_ = s.codeRepo.IncrementAttempt(record.ID)
+	if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(record.Code)), []byte(strings.TrimSpace(code))) != 1 {
 		return nil, ErrVerifyCodeInvalid
 	}
 
-	if err := s.codeRepo.MarkVerified(record.ID, now); err != nil {
+	marked, err := s.codeRepo.MarkVerified(record.ID, now)
+	if err != nil {
 		return nil, err
+	}
+	if !marked {
+		return nil, ErrVerifyCodeInvalid
 	}
 	return record, nil
 }
 
 func (s *Service) sendVerifyCode(ctx context.Context, email, purpose, locale string) error {
+	release, err := reserveVerificationSend(ctx, email, purpose, time.Duration(resolveSendIntervalSeconds(s.cfg.Email.VerifyCode))*time.Second)
+	if err != nil {
+		return err
+	}
+	sent := false
+	defer func() { release(sent) }()
 	latest, err := s.codeRepo.GetLatest(email, purpose)
 	if err != nil {
 		return err
@@ -544,14 +588,16 @@ func (s *Service) sendVerifyCode(ctx context.Context, email, purpose, locale str
 		SentAt:    now,
 		CreatedAt: now,
 	}
-	if err := s.emailService.SendVerifyCode(email, code, purpose, locale, brand); err != nil {
-		return err
-	}
-
+	// Reserve the interval before reading/creating; persist before sending.
 	if err := s.codeRepo.Create(record); err != nil {
 		return err
 	}
-
+	if err := s.emailService.SendVerifyCode(email, code, purpose, locale, brand); err != nil {
+		// 未送达的验证码不能占用发送间隔，也不能顶替用户手里仍有效的上一封；删除失败只退回旧行为，不掩盖发信错误
+		_ = s.codeRepo.Delete(record.ID)
+		return err
+	}
+	sent = true
 	return nil
 }
 
@@ -610,9 +656,9 @@ func resolveRememberMeExpireHours(cfg config.JWTConfig) int {
 func resolveNicknameFromEmail(email string) string {
 	parts := strings.SplitN(email, "@", 2)
 	if len(parts) == 2 && strings.TrimSpace(parts[0]) != "" {
-		return strings.TrimSpace(parts[0])
+		return userdomain.SanitizeDisplayName(parts[0])
 	}
-	return email
+	return userdomain.SanitizeDisplayName(email)
 }
 
 func resolveExpireMinutes(cfg config.VerifyCodeConfig) int {

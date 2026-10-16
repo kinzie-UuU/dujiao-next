@@ -84,6 +84,7 @@ type Store interface {
 
 	GetCommissionByOrderAndProfile(orderID, profileID uint, commissionType string) (*domain.Commission, error)
 	CreateCommission(commission *domain.Commission) error
+	CreateOrderCommission(commission *domain.Commission) error
 	UpdateCommission(commission *domain.Commission) error
 	ListCommissions(filter CommissionListFilter) ([]domain.Commission, int64, error)
 	ListCommissionsByOrder(orderID uint, statuses []string) ([]domain.Commission, error)
