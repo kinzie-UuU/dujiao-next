@@ -3,8 +3,13 @@ package application
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/alicebob/miniredis/v2"
+	"github.com/dujiao-next/internal/cache"
+	"github.com/dujiao-next/internal/config"
 
 	"github.com/dujiao-next/internal/constants"
 	"github.com/dujiao-next/internal/modules/notification/contract"
@@ -163,5 +168,108 @@ func TestServiceDispatchSingleEventRecordsPerRecipientResult(t *testing.T) {
 	}
 	if statuses["failure@example.com"] != notificationLogStatusFailed {
 		t.Fatalf("failure recipient status mismatch: %v", statuses)
+	}
+}
+
+type loginTelegramSpy struct {
+	messages []string
+	err      error
+	cancel   context.CancelFunc
+}
+
+func (s *loginTelegramSpy) SendMessage(_ context.Context, target, message string) error {
+	s.messages = append(s.messages, target+":"+message)
+	if s.cancel != nil {
+		s.cancel()
+	}
+	return s.err
+}
+
+type loginEmailSpy struct{ calls int }
+
+func (s *loginEmailSpy) SendCustomEmail(_, _, _ string) error { s.calls++; return nil }
+
+func TestLoginNotificationUsesExceptionSwitchFixedTemplateAndTelegramOnly(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "disabled", true: "enabled"}[enabled], func(t *testing.T) {
+			setting := settingsmessaging.NotificationCenterDefaultSetting()
+			setting.Scenes.ExceptionAlert = enabled
+			setting.Channels.Telegram = settingsmessaging.NotificationChannelSetting{Enabled: true, Recipients: []string{"123456789"}}
+			setting.Channels.Email = settingsmessaging.NotificationChannelSetting{Enabled: true, Recipients: []string{"other@example.com"}}
+			setting.Templates.ExceptionAlert.ZHCN = settingsmessaging.NotificationLocalizedTemplate{Title: "business", Body: "editable template"}
+			tg := &loginTelegramSpy{}
+			email := &loginEmailSpy{}
+			svc := NewService(notificationSettingsStub{notification: setting}, email, nil, nil, nil, tg)
+			payload := queue.NotificationDispatchPayload{EventType: constants.NotificationEventAdminLoginSuccess, BizType: "admin_login", BizID: 7, Data: map[string]interface{}{"admin_username": "admin", "login_at": "2026-10-16T12:00:00Z", "client_ip": "203.0.113.7", "login_method": "password", "login_event_id": "unique"}}
+			if err := svc.Dispatch(context.Background(), payload); err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if enabled {
+				want = 1
+			}
+			if len(tg.messages) != want || email.calls != 0 {
+				t.Fatalf("telegram=%d email=%d", len(tg.messages), email.calls)
+			}
+			if enabled && (!strings.Contains(tg.messages[0], "管理员登录成功") || strings.Contains(tg.messages[0], "editable template") || !strings.Contains(tg.messages[0], "203.0.113.7") || !strings.Contains(tg.messages[0], "2026-10-16T12:00:00Z")) {
+				t.Fatal(tg.messages)
+			}
+			// Configuration round trips through the existing UI schema retain its controlling switch.
+			if setting.Scenes.IsSceneEnabled(constants.NotificationEventAdminLoginSuccess) != enabled {
+				t.Fatal("scene switch mismatch")
+			}
+		})
+	}
+}
+func TestLoginEventDedupeSeparatesLoginsButKeepsRetryIdentity(t *testing.T) {
+	p := queue.NotificationDispatchPayload{EventType: constants.NotificationEventAdminLoginSuccess, BizID: 7, Data: map[string]interface{}{"login_event_id": "one"}}
+	first := buildNotificationDedupeKey(p)
+	if first != buildNotificationDedupeKey(p) {
+		t.Fatal("unstable retry identity")
+	}
+	p.Data["login_event_id"] = "two"
+	if first == buildNotificationDedupeKey(p) {
+		t.Fatal("second login suppressed")
+	}
+}
+func TestLoginTelegramFailureIsRetryable(t *testing.T) {
+	redis := miniredis.RunT(t)
+	port, err := strconv.Atoi(redis.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = cache.InitRedis(&config.RedisConfig{Enabled: true, Host: redis.Host(), Port: port, Prefix: "login-test"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cache.Client().Close(); _ = cache.InitRedis(nil) })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	setting := settingsmessaging.NotificationCenterDefaultSetting()
+	setting.Channels.Telegram = settingsmessaging.NotificationChannelSetting{Enabled: true, Recipients: []string{"123456789"}}
+	tg := &loginTelegramSpy{err: errors.New("temporary"), cancel: cancel}
+	svc := NewService(notificationSettingsStub{notification: setting}, nil, nil, nil, nil, tg)
+	p := queue.NotificationDispatchPayload{EventType: constants.NotificationEventAdminLoginSuccess, Data: map[string]interface{}{"login_event_id": "retry"}}
+	if svc.Dispatch(ctx, p) == nil {
+		t.Fatal("failure swallowed")
+	}
+	if len(redis.Keys()) != 0 {
+		t.Fatalf("failed send left dedupe lock after cancellation: %v", redis.Keys())
+	}
+	tg.err = nil
+	tg.cancel = nil
+	if err := svc.Dispatch(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if len(tg.messages) != 2 {
+		t.Fatal("retry was skipped")
+	}
+	if len(redis.Keys()) != 1 {
+		t.Fatal("successful send did not preserve dedupe")
+	}
+	if err := svc.Dispatch(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if len(tg.messages) != 2 {
+		t.Fatal("successful retry sent twice")
 	}
 }
