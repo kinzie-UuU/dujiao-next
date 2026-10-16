@@ -411,7 +411,7 @@ func (s NotificationSceneSetting) IsSceneEnabled(eventType string) bool {
 		return s.OrderPaidSuccess
 	case constants.NotificationEventManualFulfillmentPending:
 		return s.ManualFulfillmentPending
-	case constants.NotificationEventAdminLoginSuccess, constants.NotificationEventExceptionAlert, constants.NotificationEventExceptionAlertCheck:
+	case constants.NotificationEventAdminLoginFailed, constants.NotificationEventAdminPaymentConfigChanged, constants.NotificationEventAdminLoginSuccess, constants.NotificationEventExceptionAlert, constants.NotificationEventExceptionAlertCheck:
 		return s.ExceptionAlert
 	default:
 		return false

@@ -113,9 +113,9 @@ func (s *Service) dispatchSingleEvent(ctx context.Context, setting settingsmessa
 
 	locale := format.ResolveLocale(payload.Locale, setting.DefaultLocale)
 	template := setting.Templates.TemplateByEvent(payload.EventType).ResolveLocaleTemplate(locale)
-	if payload.EventType == constants.NotificationEventAdminLoginSuccess {
+	if constants.IsAdminSecurityNotification(payload.EventType) {
 		// Login reminders share the exception switch, but use Telegram and a fixed template.
-		template = format.AdminLoginTemplate(locale)
+		template = format.AdminSecurityTemplate(payload.EventType, locale)
 		setting.Channels.Email.Enabled = false
 	}
 	variables := format.BuildTemplateVariables(payload)
@@ -199,7 +199,7 @@ func (s *Service) dispatchSingleEvent(ctx context.Context, setting settingsmessa
 		}
 	}
 	if firstErr != nil {
-		if payload.EventType == constants.NotificationEventAdminLoginSuccess && !payload.Force {
+		if constants.IsAdminSecurityNotification(payload.EventType) && !payload.Force {
 			// A transient Telegram failure must not consume this login's retry.
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			_ = cache.Del(cleanupCtx, buildNotificationDedupeKey(payload))

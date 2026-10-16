@@ -123,6 +123,7 @@ cors:
     - Cache-Control
     - X-Requested-With
     - X-CSRF-Token
+    - X-Admin-TOTP
   allow_credentials: true
   max_age: 600
 
