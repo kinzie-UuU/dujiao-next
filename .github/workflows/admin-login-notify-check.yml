@@ -3,7 +3,7 @@ name: Verify admin login notification candidate
 on:
   workflow_dispatch:
   push:
-    branches: [codex/admin-login-notify-20261016]
+    branches: [codex/admin-login-notify-20261016, codex/admin-notify-token-redaction-20261016]
 
 permissions:
   contents: read

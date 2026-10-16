@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -44,7 +45,14 @@ func NewWithHTTPClient(client *http.Client) *Client {
 }
 
 // SendWithBotToken 使用显式 bot token 发送 Telegram 消息。
-func (s *Client) SendWithBotToken(ctx context.Context, botToken string, options notifycontract.SendOptions) error {
+func (s *Client) SendWithBotToken(ctx context.Context, botToken string, options notifycontract.SendOptions) (sendErr error) {
+	// Preparation errors can include token-bearing URLs or attachment paths. Never
+	// retain their text or cause in errors consumed by notification logs.
+	defer func() {
+		if sendErr != nil && !errors.Is(sendErr, notifycontract.ErrNotifySendFailed) {
+			sendErr = fmt.Errorf("%w: prepare telegram request failed", notifycontract.ErrNotifySendFailed)
+		}
+	}()
 	chatID := strings.TrimSpace(options.ChatID)
 	message := strings.TrimSpace(options.Message)
 	botToken = strings.TrimSpace(botToken)
@@ -96,7 +104,7 @@ func (s *Client) SendWithBotToken(ctx context.Context, botToken string, options 
 func (s *Client) sendMultipartMedia(ctx context.Context, botToken, method, fieldName, filePath string, options notifycontract.SendOptions) error {
 	file, err := os.Open(filePath)
 	if err != nil {
-		return fmt.Errorf("%w: open attachment failed: %v", notifycontract.ErrNotifySendFailed, err)
+		return fmt.Errorf("%w: open attachment failed", notifycontract.ErrNotifySendFailed)
 	}
 	defer file.Close()
 
@@ -154,16 +162,16 @@ func (s *Client) sendJSONRequest(ctx context.Context, botToken, method string, p
 func (s *Client) doRequest(req *http.Request) error {
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("%w: %v", notifycontract.ErrNotifySendFailed, err)
+		return fmt.Errorf("%w: telegram transport failed", notifycontract.ErrNotifySendFailed)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("%w: %v", notifycontract.ErrNotifySendFailed, err)
+		return fmt.Errorf("%w: read telegram response failed", notifycontract.ErrNotifySendFailed)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%w: telegram status=%d body=%s", notifycontract.ErrNotifySendFailed, resp.StatusCode, strings.TrimSpace(string(body)))
+		return fmt.Errorf("%w: telegram status=%d", notifycontract.ErrNotifySendFailed, resp.StatusCode)
 	}
 
 	var parsed telegramSendMessageResponse
@@ -171,7 +179,7 @@ func (s *Client) doRequest(req *http.Request) error {
 		return fmt.Errorf("%w: parse telegram response failed", notifycontract.ErrNotifySendFailed)
 	}
 	if !parsed.OK {
-		return fmt.Errorf("%w: %s", notifycontract.ErrNotifySendFailed, strings.TrimSpace(parsed.Description))
+		return fmt.Errorf("%w: telegram rejected request", notifycontract.ErrNotifySendFailed)
 	}
 	return nil
 }

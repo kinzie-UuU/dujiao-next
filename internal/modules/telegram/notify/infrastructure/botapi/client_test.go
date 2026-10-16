@@ -3,11 +3,14 @@ package botapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +18,94 @@ import (
 
 	notifycontract "github.com/dujiao-next/internal/modules/telegram/notify/contract"
 )
+
+type failingTelegramTransport func(*http.Request) (*http.Response, error)
+
+func (f failingTelegramTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type tokenEchoReadCloser struct{ token string }
+
+func (r tokenEchoReadCloser) Read([]byte) (int, error) {
+	return 0, fmt.Errorf("read failed: %s", r.token)
+}
+func (r tokenEchoReadCloser) Close() error { return nil }
+
+func TestSendWithBotTokenErrorsNeverExposeCredentials(t *testing.T) {
+	const token = "123456789:synthetic_TEST-secret"
+	t.Chdir(t.TempDir())
+	if err := os.MkdirAll("uploads", 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join("uploads", "photo.png"), []byte("test image"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, attachment, token string
+		transport               failingTelegramTransport
+		nilContext              bool
+	}{
+		{name: "text transport URL", transport: func(req *http.Request) (*http.Response, error) {
+			return nil, fmt.Errorf("transport echoed %s", req.URL.String())
+		}},
+		{name: "photo transport URL", attachment: "https://example.invalid/photo.png", transport: func(req *http.Request) (*http.Response, error) {
+			return nil, &url.Error{Op: "POST", URL: req.URL.String(), Err: errors.New("unavailable")}
+		}},
+		{name: "document transport URL", attachment: "https://example.invalid/doc.txt", transport: func(req *http.Request) (*http.Response, error) {
+			return nil, fmt.Errorf("transport %s", req.URL.String())
+		}},
+		{name: "multipart transport URL", attachment: "/uploads/photo.png", transport: func(req *http.Request) (*http.Response, error) {
+			return nil, fmt.Errorf("transport %s", req.URL.String())
+		}},
+		{name: "response read echo", transport: func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 200, Body: tokenEchoReadCloser{token: token}}, nil
+		}},
+		{name: "HTTP error body echo", transport: func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 502, Body: io.NopCloser(strings.NewReader("proxy URL https://api.telegram.org/bot" + token + "/sendMessage " + url.QueryEscape(token)))}, nil
+		}},
+		{name: "API error description echo", transport: func(*http.Request) (*http.Response, error) {
+			body, _ := json.Marshal(map[string]interface{}{"ok": false, "description": token + " " + url.QueryEscape(token)})
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(body)))}, nil
+		}},
+		{name: "malformed response", transport: func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(token))}, nil
+		}},
+		{name: "request URL construction", token: token + "\ninvalid"},
+		{name: "nil context construction", nilContext: true},
+		{name: "missing local attachment", attachment: "/uploads/" + token + ".txt"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			transport := test.transport
+			if transport == nil {
+				transport = func(*http.Request) (*http.Response, error) {
+					t.Fatal("preparation failure reached network")
+					return nil, nil
+				}
+			}
+			client := NewWithHTTPClient(&http.Client{Transport: transport})
+			ctx := context.Background()
+			if test.nilContext {
+				ctx = nil
+			}
+			secret := token
+			if test.token != "" {
+				secret = test.token
+			}
+			err := client.SendWithBotToken(ctx, secret, notifycontract.SendOptions{ChatID: "123456789", Message: "test", AttachmentURL: test.attachment})
+			if !errors.Is(err, notifycontract.ErrNotifySendFailed) {
+				t.Fatalf("send error classification lost: %v", err)
+			}
+			for cause := err; cause != nil; cause = errors.Unwrap(cause) {
+				for _, sensitive := range []string{token, url.QueryEscape(token), "synthetic_TEST-secret", "api.telegram.org/bot"} {
+					if strings.Contains(fmt.Sprintf("%+v", cause), sensitive) {
+						t.Fatalf("credential retained in returned error: %T", cause)
+					}
+				}
+			}
+		})
+	}
+}
 
 type rewriteTelegramTransport struct {
 	baseURL string
