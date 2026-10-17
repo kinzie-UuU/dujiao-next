@@ -641,7 +641,9 @@
         "withdrawFailed": "Failed to submit withdraw request, please try again later"
       },
       "walletRules": "Only designated GPT products qualify. Each eligible order earns one random whole-yuan reward of CNY 1–5, capped at whole yuan paid for qualifying products; amounts below CNY 1 earn no reward. Rewards can be credited {days} days after payment for purchases of any store product, never cash withdrawals. Refunds reverse the corresponding reward.",
+      "walletRulesAll": "All store products qualify. Each eligible CNY parent order earns one random whole-yuan reward of CNY 1–5, capped at whole yuan paid for qualifying products; amounts below CNY 1 earn no reward. Rewards can be credited {days} days after payment for purchases of any store product, never cash withdrawals. Refunds reverse the corresponding reward.",
       "walletRulesImmediate": "Only designated GPT products qualify. Each eligible order earns one random whole-yuan reward of CNY 1–5, capped at whole yuan paid for qualifying products; amounts below CNY 1 earn no reward. Rewards can be credited to your store balance after staff confirm receipt of payment for purchases of any store product, never cash withdrawals. Refunds reverse the corresponding reward.",
+      "walletRulesAllImmediate": "All store products qualify. Each eligible CNY parent order earns one random whole-yuan reward of CNY 1–5, capped at whole yuan paid for qualifying products; amounts below CNY 1 earn no reward. Rewards can be credited to your store balance after staff confirm receipt of payment for purchases of any store product, never cash withdrawals. Refunds reverse the corresponding reward.",
       "availableReward": "Available rewards",
       "creditedReward": "Credited to wallet",
       "creditTitle": "Credit purchase balance",

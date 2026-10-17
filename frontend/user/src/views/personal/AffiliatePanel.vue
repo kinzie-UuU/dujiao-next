@@ -244,8 +244,8 @@ const isWalletReward = computed(() => appStore.config?.affiliate?.reward_mode ==
 const rewardRulesKey = computed(() => !isWalletReward.value
   ? 'personalCenter.affiliate.subtitle'
   : (appStore.config?.affiliate?.confirm_days ?? 7) <= 0
-    ? 'personalCenter.affiliate.walletRulesImmediate'
-    : 'personalCenter.affiliate.walletRules')
+    ? (appStore.config?.affiliate?.all_products === true ? 'personalCenter.affiliate.walletRulesAllImmediate' : 'personalCenter.affiliate.walletRulesImmediate')
+    : (appStore.config?.affiliate?.all_products === true ? 'personalCenter.affiliate.walletRulesAll' : 'personalCenter.affiliate.walletRules'))
 const crediting = ref(false)
 const creditWallet = async () => {
   if (crediting.value || !isWalletReward.value) return

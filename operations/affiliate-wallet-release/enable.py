@@ -1,4 +1,4 @@
-"""Enable the approved GPT wallet policy after the reviewed API deployment."""
+"""Enable the approved all-product wallet policy after the reviewed API deployment."""
 import argparse
 import fcntl
 import json
@@ -10,11 +10,12 @@ import time
 
 APP = Path('/opt/dujiao-next')
 POLICY = {'enabled': True, 'reward_mode': 'gpt_random_wallet',
-          'eligible_product_ids': [1, 2, 3, 19, 22, 23], 'commission_rate': 0,
+          'all_products': True, 'eligible_product_ids': [], 'commission_rate': 0,
           'confirm_days': 0, 'min_withdraw_amount': 0, 'withdraw_channels': []}
-PREVIOUS_POLICY = dict(POLICY, confirm_days=7)
-SLUGS = [(1, 'gpt-plus-ios-us'), (2, 'gpt-pro-5x-ios-us'), (3, 'gpt-pro-20x-ph'),
-         (19, 'chatgpt-go-recharge'), (22, 'gpt-pro-500'), (23, 'gpt-credits-250')]
+# Only the reviewed, immediately available six-product policy may be upgraded.
+PREVIOUS_POLICY = {key: value for key, value in POLICY.items() if key != 'all_products'}
+PREVIOUS_POLICY['eligible_product_ids'] = [1, 2, 3, 19, 22, 23]
+PREVIOUS_POLICIES = (PREVIOUS_POLICY, dict(PREVIOUS_POLICY, all_products=False))
 
 
 def enable(expected_binary, write):
@@ -26,15 +27,11 @@ def enable(expected_binary, write):
     columns = {row[1] for row in db.execute('pragma table_info(affiliate_commissions)')}
     if not {'reward_order_amounts', 'reward_order_totals'} <= columns:
         raise ValueError('Reward migration missing')
-    placeholders = ','.join('?' for _ in SLUGS)
-    rows = db.execute('select id,slug from products where deleted_at is null and is_active=1 and id in (' + placeholders + ') order by id', [row[0] for row in SLUGS]).fetchall()
-    if rows != SLUGS:
-        raise ValueError('Approved product catalog drift')
     prior = db.execute('select value_json from settings where key=?', ('affiliate_config',)).fetchone()
     previous = json.loads(prior[0]) if prior else None
-    if previous is not None and previous not in (POLICY, PREVIOUS_POLICY):
+    if previous is not None and previous != POLICY and previous not in PREVIOUS_POLICIES:
         raise ValueError('Existing affiliate policy requires review')
-    if previous == PREVIOUS_POLICY:
+    if previous != POLICY:
         # All current collection channels require an administrator to confirm receipt.
         channels = db.execute('select provider_type from payment_channels where deleted_at is null and is_active=1').fetchall()
         if not channels or any(row[0] != 'manual_qr' for row in channels):
@@ -52,17 +49,18 @@ def enable(expected_binary, write):
             current = db.execute('select value_json from settings where key=?', ('affiliate_config',)).fetchone()
             if current != prior:
                 raise ValueError('Affiliate policy changed before write')
-            if previous == PREVIOUS_POLICY:
+            if previous != POLICY:
                 if db.execute("select count(*) from affiliate_commissions where commission_type='gpt_reward' and status='pending_confirm'").fetchone()[0]:
                     raise ValueError('Pending rewards changed before write')
                 channels = db.execute('select provider_type from payment_channels where deleted_at is null and is_active=1').fetchall()
                 if not channels or any(row[0] != 'manual_qr' for row in channels):
                     raise ValueError('Manual receipt channels changed before write')
+            if previous is not None:
                 db.execute('update settings set value_json=? where key=?', (json.dumps(POLICY), 'affiliate_config'))
             else:
                 db.execute('insert into settings(key,value_json) values (?,?)', ('affiliate_config', json.dumps(POLICY)))
     final = db.execute('select value_json from settings where key=?', ('affiliate_config',)).fetchone()
-    print(json.dumps({'write': write, 'policy': json.loads(final[0]) if final else None, 'eligible_products': rows}))
+    print(json.dumps({'write': write, 'policy': json.loads(final[0]) if final else None, 'target_policy': POLICY}))
 
 
 if __name__ == '__main__':

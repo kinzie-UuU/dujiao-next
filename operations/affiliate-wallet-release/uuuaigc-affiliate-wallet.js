@@ -58,7 +58,8 @@
     host.replaceChildren();
     const heading = el('div', null, 'uaw-heading');
     const symbol = el('span', null, 'uaw-symbol'); symbol.append(icon('gift'));
-    const title = el('div'), subtitle = el('p', '邀请好友购买指定 GPT 商品，每单随机奖励 ', 'uaw-muted'); subtitle.append(el('span', '1–5 元。', 'uaw-nowrap')); title.append(el('h2', '推广奖励'), subtitle);
+    const scope = config.all_products === true ? '本站任意商品' : '指定 GPT 商品';
+    const title = el('div'), subtitle = el('p', `邀请好友购买${scope}，每单随机奖励 `, 'uaw-muted'); subtitle.append(el('span', '1–5 元。', 'uaw-nowrap')); title.append(el('h2', '推广奖励'), subtitle);
     heading.append(symbol, title); host.append(heading);
     const status = el('p', '', 'uaw-status'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); host.append(status);
     const days = Number.isInteger(config.confirm_days) ? config.confirm_days : 7;
@@ -114,7 +115,7 @@
     const rules = el('details', null, 'uaw-rules'); rules.open = !d.opened;
     const summary = el('summary'); summary.append(el('span', '奖励规则'), icon('chevron')); rules.append(summary);
     const rulesList = el('ul');
-    for (const text of ['好友通过推广链接购买指定 GPT 商品，每笔符合条件的人民币主订单随机奖励整数 1～5 元。', `${availability}，仅限本站消费，不支持提现。`, '退款将扣回相应奖励；奖励不超过参与商品实付整数金额，不足 1 元不奖励。']) rulesList.append(el('li', text));
+    for (const text of [`好友通过推广链接购买${scope}，每笔符合条件的人民币主订单随机奖励整数 1～5 元。`, `${availability}，仅限本站消费，不支持提现。`, '退款将扣回相应奖励；奖励不超过参与商品实付整数金额，不足 1 元不奖励。']) rulesList.append(el('li', text));
     rules.append(rulesList); host.append(rules);
     if (focusedAction) host.querySelector(`[data-action="${focusedAction}"]`)?.focus();
   }

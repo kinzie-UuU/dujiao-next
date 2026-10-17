@@ -10,8 +10,8 @@ PINS = {
     'admin-payment-security-release/release.py': 'a59d6d2f40bcc6cea67f599d080d1435ccdb4d8efb0d3da7f18a0dc7043a0eb8',
     'admin-repair/deploy.py': '3fae0c4fd2ce89b2d602f798353bea1c987ee7da6e3350d5e35eb277aec47282',
 }
-BASE_REFERENCE = 'dujiao-next:payment-security-ce9c85e91fe8-cc81d6857b10'
-BASE_BINARY = 'cc81d6857b1001690dda2b7087cf835994ea6d5a50d460bea2de716df3f4e01d'
+BASE_REFERENCE = 'dujiao-next:payment-security-179775134a41-27bc44a2ade5'
+BASE_BINARY = '27bc44a2ade595c76b90fcb3298ef4f689e21974062bda6890f5581fb0b1989f'
 
 
 def load_publisher(controls):

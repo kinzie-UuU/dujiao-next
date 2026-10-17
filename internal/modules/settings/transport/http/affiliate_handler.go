@@ -41,13 +41,28 @@ func (h *AffiliateHandler) GetAffiliate(c *gin.Context) {
 
 // UpdateAffiliate 更新推广返利设置。
 func (h *AffiliateHandler) UpdateAffiliate(c *gin.Context) {
-	var req settingsintegration.AffiliateSetting
+	var req struct {
+		settingsintegration.AffiliateSetting
+		AllProducts *bool `json:"all_products"`
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		ginutil.RespondBindError(c, err)
 		return
 	}
 
-	setting, err := h.affiliate.UpdateAffiliateSetting(req)
+	if req.AllProducts == nil {
+		// Older admin clients do not know this field; saving unrelated settings
+		// must not silently narrow an existing all-product reward policy.
+		current, err := h.affiliate.GetAffiliateSetting()
+		if err != nil {
+			ginutil.RespondError(c, response.CodeInternal, "error.settings_fetch_failed", err)
+			return
+		}
+		req.AffiliateSetting.AllProducts = current.AllProducts
+	} else {
+		req.AffiliateSetting.AllProducts = *req.AllProducts
+	}
+	setting, err := h.affiliate.UpdateAffiliateSetting(req.AffiliateSetting)
 	if err != nil {
 		if errors.Is(err, settingsintegration.ErrAffiliateConfigInvalid) {
 			ginutil.RespondError(c, response.CodeBadRequest, "error.bad_request", nil)
