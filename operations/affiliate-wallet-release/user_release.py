@@ -23,6 +23,15 @@ def run(*args):
     return subprocess.check_output(args, text=True)
 
 
+def compose_prefix():
+    try:
+        run('docker', 'compose', 'version')
+        return ('docker', 'compose')
+    except subprocess.CalledProcessError:
+        run('docker-compose', '--version')
+        return ('docker-compose',)
+
+
 def sha(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -77,6 +86,7 @@ def execute(args):
         if args.action == 'inventory':
             return {'state_sha256': digest, 'file_count': len(state['files']), 'image': state['image'], 'script_sha256': sha(script)}
         if digest != args.expected_state_sha256: raise ValueError('Live storefront drift')
+        prefix = compose_prefix()
         before = COMPOSE.read_bytes()
         document = yaml.safe_load(before)
         old_image = document['services']['user']['image']
@@ -130,7 +140,7 @@ def execute(args):
             if snapshot(Path(check)) != state: raise ValueError('Storefront changed during build')
         try:
             write_compose(after.encode())
-            run('docker', 'compose', '-f', str(COMPOSE), 'up', '-d', '--no-deps', 'user')
+            run(*prefix, '-f', str(COMPOSE), 'up', '-d', '--no-deps', 'user')
             for _ in range(20):
                 try:
                     body = run('curl', '-fsS', 'http://127.0.0.1:8081/me/affiliate')
@@ -147,7 +157,7 @@ def execute(args):
         except Exception:
             # Restore the exact captured live image, including preexisting overlays.
             write_compose(old_line.sub(lambda m: m[1] + rollback, before.decode()).encode())
-            run('docker', 'compose', '-f', str(COMPOSE), 'up', '-d', '--no-deps', 'user')
+            run(*prefix, '-f', str(COMPOSE), 'up', '-d', '--no-deps', 'user')
             with tempfile.TemporaryDirectory(prefix='affiliate-rollback-check-') as check:
                 restored = snapshot(Path(check))
                 if restored['files'] != state['files'] or restored['nginx'] != state['nginx']:
