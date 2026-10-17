@@ -117,8 +117,24 @@
     const rulesList = el('ul');
     for (const text of [`好友通过推广链接购买${scope}，每笔符合条件的人民币主订单随机奖励整数 1～5 元。`, `${availability}，仅限本站消费，不支持提现。`, '退款将扣回相应奖励；奖励不超过参与商品实付整数金额，不足 1 元不奖励。']) rulesList.append(el('li', text));
     rules.append(rulesList); host.append(rules);
+    if (window.matchMedia) placeTransfer();
     if (focusedAction) host.querySelector(`[data-action="${focusedAction}"]`)?.focus();
   }
+  function placeTransfer() {
+    if (!host) return;
+    const transfer = host.querySelector('.uaw-transfer');
+    const available = host.querySelector('.uaw-stat[data-kind=available]');
+    if (!transfer || !available) return;
+    let slot = available.querySelector('.uaw-transfer-slot');
+    if (window.matchMedia('(max-width:600px)').matches) {
+      if (!slot) { slot = el('dd', null, 'uaw-transfer-slot'); available.append(slot); }
+      slot.append(transfer);
+    } else {
+      host.querySelector('.uaw-stats').after(transfer);
+      slot?.remove();
+    }
+  }
+  window.matchMedia?.('(max-width:600px)').addEventListener('change', placeTransfer);
   function cleanup() { generation++; host?.remove(); host = null; if (original) original.removeAttribute('data-uaw-hidden'); original = null; }
   async function sync() {
     if (!route()) { if (host || original) cleanup(); return; }
@@ -147,7 +163,17 @@
 .uaw-record-heading{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:20px}.uaw-record-heading p{margin-top:4px}.uaw-quiet{font-size:13px}.uaw-records{width:100%;border-collapse:collapse;text-align:left;font-size:13px;line-height:1.6}.uaw-records th{padding:12px 16px;font-size:12px;font-weight:400;color:var(--uaw-muted);background:var(--uaw-soft);border-block:1px solid var(--uaw-line)}.uaw-records td{padding:17px 16px;border-bottom:1px solid var(--uaw-line)}.uaw-records tbody tr:last-child td{border-bottom:0}.uaw-records th:last-child,.uaw-records td:last-child{text-align:right}.uaw-record-amount{font-weight:500;font-size:15px;font-variant-numeric:tabular-nums}.uaw-record-date{font-size:12px;color:var(--uaw-muted);font-variant-numeric:tabular-nums}.uaw-badge{display:inline-flex;padding:3px 9px;border:1px solid var(--uaw-line);border-radius:6px;font-size:12px;line-height:1.5;white-space:nowrap;background:var(--uaw-soft);color:var(--u-ink-700,var(--ui-text-secondary,#454741))}.uaw-badge[data-state=available]{background:color-mix(in srgb,var(--u-yellow-500,#e6ff57) 10%,var(--ui-bg-elevated,#fff));color:var(--u-ink,var(--ui-text-primary,#171815))}.uaw-badge[data-state=rejected]{color:var(--ui-text-muted,var(--u-ink-500,#6a6c65))}.uaw-empty{display:flex;flex-direction:column;align-items:center;text-align:center;padding:30px 16px 24px;border-top:1px solid var(--uaw-line)}.uaw-empty>svg{width:28px;height:28px;color:var(--uaw-muted);margin-bottom:12px}.uaw-empty>p{font-size:14px;margin-bottom:6px}.uaw-empty>span{max-width:340px}.uaw-record-note{padding-top:14px;border-top:1px solid var(--uaw-line)}
 .uaw-rules{padding:0 4px}.uaw-rules summary{display:flex;align-items:center;justify-content:space-between;min-height:44px;cursor:pointer;font-size:14px;list-style:none}.uaw-rules summary::-webkit-details-marker{display:none}.uaw-rules summary svg{width:16px;height:16px;transition:transform .15s}.uaw-rules[open] summary svg{transform:rotate(90deg)}.uaw-rules ul{margin:8px 0 0;padding-left:18px;color:var(--uaw-muted);font-size:13px;line-height:1.9}.uaw-rules li+li{margin-top:5px}.uaw-welcome{padding:32px}.uaw-welcome .uaw-welcome-value{font-size:44px;line-height:1.2;font-weight:500;letter-spacing:-1px;margin:12px 0 20px}.uaw-welcome h3+p{margin-top:6px}.uaw-welcome button{margin-top:22px}.uaw-nowrap{white-space:nowrap}.uaw-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 @media(max-width:900px){.uaw-stat{padding:18px}.uaw-stat dd{font-size:26px}.uaw-transfer{align-items:flex-start;flex-direction:column}.uaw-actions{align-self:flex-end}}
-@media(max-width:600px){.uaw-heading{margin-bottom:20px;gap:12px}.uaw-panel h2{font-size:20px}.uaw-stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.uaw-stat[data-kind=available]{grid-column:1/-1}.uaw-stat[data-kind=available] dd{font-size:34px}.uaw-stat dd{font-size:25px;margin:10px 0 6px}.uaw-stat{padding:18px 16px}.uaw-stat .uaw-muted{font-size:12px}.uaw-transfer{padding:16px 0 20px;gap:10px}.uaw-actions{width:100%;justify-content:space-between}.uaw-card{padding:20px;margin-bottom:20px}.uaw-link-row{flex-direction:column;gap:10px}.uaw-link-row>.uaw-button{align-self:stretch}.uaw-record-heading{margin-bottom:16px}.uaw-record-heading p{font-size:12px}.uaw-records thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}.uaw-records tr{display:grid;grid-template-columns:1fr auto;padding:16px 0;border-bottom:1px solid var(--uaw-line);gap:6px}.uaw-records tbody tr:last-child{border-bottom:0}.uaw-records td{padding:0;border:0}.uaw-records td:nth-child(2){text-align:right}.uaw-records td:last-child{grid-column:1/-1;text-align:left}.uaw-empty{padding:24px 0 8px}.uaw-welcome{padding:24px}.uaw-rules{padding:0}.uaw-activity{gap:20px}.uaw-activity p{gap:8px}}
+@media(max-width:600px){
+#app main:has(.uaw-panel){padding-bottom:0}
+#app main:has(.uaw-panel)>.relative.min-h-screen{min-height:0;padding-bottom:20px}
+#app main:has(.uaw-panel)>#uuuaigc-support-widget{margin-top:0;margin-bottom:24px}
+.uaw-stat .uaw-transfer-slot{margin:14px 0 0;font-size:inherit;letter-spacing:normal}
+.uaw-transfer-slot .uaw-transfer{padding:14px 0 0;border-top:1px solid var(--uaw-line);gap:8px}
+.uaw-transfer-slot .uaw-transfer>p{display:none}
+.uaw-transfer-slot .uaw-actions{flex-direction:column-reverse;gap:4px}
+.uaw-transfer-slot .uaw-primary{width:100%}
+.uaw-transfer-slot .uaw-wallet{min-height:44px}
+.uaw-heading{margin-bottom:20px;gap:12px}.uaw-panel h2{font-size:20px}.uaw-stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:20px}.uaw-stat[data-kind=available]{grid-column:1/-1}.uaw-stat[data-kind=available] dd{font-size:34px}.uaw-stat dd{font-size:25px;margin:10px 0 6px}.uaw-stat{padding:18px 16px}.uaw-stat .uaw-muted{font-size:12px}.uaw-transfer{padding:16px 0 20px;gap:10px}.uaw-actions{width:100%;justify-content:space-between}.uaw-card{padding:20px;margin-bottom:20px}.uaw-link-row{flex-direction:column;gap:10px}.uaw-link-row>.uaw-button{align-self:stretch}.uaw-record-heading{margin-bottom:16px}.uaw-record-heading p{font-size:12px}.uaw-records thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}.uaw-records tr{display:grid;grid-template-columns:1fr auto;padding:16px 0;border-bottom:1px solid var(--uaw-line);gap:6px}.uaw-records tbody tr:last-child{border-bottom:0}.uaw-records td{padding:0;border:0}.uaw-records td:nth-child(2){text-align:right}.uaw-records td:last-child{grid-column:1/-1;text-align:left}.uaw-empty{padding:24px 0 8px}.uaw-welcome{padding:24px}.uaw-rules{padding:0}.uaw-activity{gap:20px}.uaw-activity p{gap:8px}}
 @media(prefers-reduced-motion:reduce){.uaw-panel *{transition:none}}
 `; document.head.append(style);
   let queued = false;

@@ -6,7 +6,11 @@ const script = fs.readFileSync(__dirname + '/uuuaigc-affiliate-wallet.js', 'utf8
 const pause = () => new Promise(resolve => setTimeout(resolve, 180));
 async function fixture(opened = true, options = {}) {
   const dom = new JSDOM('<div id="app"><main><div class="space-y-6"><div><h2>推广返利</h2></div><form>申请提现</form></div></main></div>', { url: 'https://store.example/me/affiliate', runScripts: 'outside-only' });
-  const { window } = dom; window.localStorage.setItem('user_token', 'fixture-token');
+  const { window } = dom;
+  let mobile = options.mobile ?? false; const mediaListeners = [];
+  window.matchMedia = () => ({get matches() {return mobile;}, addEventListener: (_, callback) => mediaListeners.push(callback)});
+  const setMobile = value => {mobile = value; mediaListeners.forEach(callback => callback());};
+  window.localStorage.setItem('user_token', 'fixture-token');
   const calls = []; let dashboardCalls = 0; let available = options.available ?? '3.00', credited = '0.00';
   window.fetch = async (url, opts) => {
     calls.push({url, opts});
@@ -20,7 +24,7 @@ async function fixture(opened = true, options = {}) {
     return { ok: true, json: async () => ({ status_code: options.failCredit && url.endsWith('/wallet-credit') ? 401 : 200, message: '拒绝操作', data }) };
   };
   window.eval(script); await pause();
-  return {dom, window, calls};
+  return {dom, window, calls, setMobile};
 }
 test('wallet mode hides cash form, reads confirmation days and credits once', async () => {
   const {dom, window, calls} = await fixture();
@@ -146,4 +150,21 @@ test('successful credit with failed readback locks stale transfer until retry su
       assert.match(text, /不足 1 元不奖励/);
     } finally { dom.window.close(); }
   }
+});
+
+test('mobile transfer stays with the balance and moves back on desktop without duplicate actions', async () => {
+ const {dom, window, calls, setMobile} = await fixture(true, {mobile: true});
+ try {
+  const panel = window.document.querySelector('.uaw-panel');
+  const button = panel.querySelector('[data-action="credit"]');
+  assert.ok(button.closest('.uaw-stat[data-kind="available"]'));
+  setMobile(false);
+  assert.equal(button.closest('.uaw-stat'), null);
+  assert.equal(panel.querySelector('.uaw-stats').nextElementSibling.className, 'uaw-transfer');
+  setMobile(true);
+  assert.equal(panel.querySelectorAll('[data-action="credit"]').length, 1);
+  button.click(); await pause();
+  assert.equal(calls.filter(call => call.url.endsWith('/wallet-credit')).length, 1);
+  assert.ok(panel.querySelector('[data-action="credit"]').closest('.uaw-stat[data-kind="available"]'));
+ } finally {dom.window.close();}
 });
