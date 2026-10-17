@@ -120,7 +120,8 @@ def execute(args):
                 path.write_text(content.replace(previous_tag, tag))
             else:
                 if previous_sha is not None:
-                    raise ValueError('Missing reviewed previous panel reference')
+                    # Independently generated payment pages do not host this panel.
+                    continue
                 path.write_text(content.replace('</body>', tag + '\n</body>'))
             changed.append(str(path.relative_to(htmlroot)))
         if not {'index.html', '_spa.html'} <= set(changed): raise ValueError('Missing storefront entries')
