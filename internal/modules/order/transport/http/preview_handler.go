@@ -33,6 +33,7 @@ var (
 	ErrInvalidEmail              = errors.New("invalid email")
 	ErrProductPurchaseNotAllowed = errors.New("product purchase not allowed")
 	ErrGuestCouponNotAllowed     = errors.New("guest coupon not allowed")
+	ErrWalletOutstandingDebt     = errors.New("wallet outstanding debt")
 	ErrManualStockInsufficient   = errors.New("manual stock insufficient")
 	ErrOrderCurrencyMismatch     = errors.New("order currency mismatch")
 	ErrProductNotAvailable       = errors.New("product not available")
@@ -323,6 +324,7 @@ var guestOrderCreateExtraErrorRules = []mappedError{
 }
 
 var userOrderCommonErrorRules = []mappedError{
+	{target: ErrWalletOutstandingDebt, code: response.CodeBadRequest, key: "error.wallet_outstanding_debt"},
 	{target: ErrSalesPaused, code: response.CodeServiceUnavailable, key: "error.sales_paused"},
 	{target: ErrProductSKURequired, code: response.CodeBadRequest, key: "error.order_item_invalid"},
 	{target: productcontract.ErrProductSKUInvalid, code: response.CodeBadRequest, key: "error.order_item_invalid"},

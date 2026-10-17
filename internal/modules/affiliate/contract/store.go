@@ -68,6 +68,8 @@ type ProfileStatsAggregate struct {
 
 type Store interface {
 	WithinTransaction(fn func(Store) error) error
+	GetRewardOrderForUpdate(orderID uint) (*orderdomain.Order, error)
+	AdjustRewardWallet(userID uint, delta decimal.Decimal, reference string, orderID uint) error
 
 	GetProfileByID(id uint) (*domain.Profile, error)
 	UpdateProfileStatus(id uint, status string, updatedAt time.Time) error
@@ -92,7 +94,7 @@ type Store interface {
 	ListCommissionsByWithdrawIDForUpdate(withdrawID uint) ([]domain.Commission, error)
 	MarkPendingCommissionsAvailable(before, now time.Time) (int64, error)
 	CountValidOrdersByProfile(profileID uint) (int64, error)
-	SumCommissionByProfile(profileID uint, statuses []string, unboundOnly bool) (decimal.Decimal, error)
+	SumCommissionByProfile(profileID uint, statuses []string, unboundOnly bool, commissionTypes ...string) (decimal.Decimal, error)
 	ListAvailableCommissionsForUpdate(profileID uint) ([]domain.Commission, error)
 	BatchUpdateCommissions(ids []uint, updates map[string]interface{}) error
 

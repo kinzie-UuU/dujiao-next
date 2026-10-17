@@ -144,6 +144,10 @@ func (h *LatestHandler) respondLatestPayment(c *gin.Context, order *orderdomain.
 
 	payment, err := h.payments.GetLatestPendingByOrder(order.ID, time.Now())
 	if err != nil {
+		if errors.Is(err, ErrWalletOutstandingDebt) {
+			ginutil.RespondError(c, response.CodeBadRequest, "error.wallet_outstanding_debt", err)
+			return
+		}
 		ginutil.RespondError(c, response.CodeInternal, "error.payment_fetch_failed", err)
 		return
 	}

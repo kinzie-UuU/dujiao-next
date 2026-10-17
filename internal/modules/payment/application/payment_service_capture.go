@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	orderapp "github.com/dujiao-next/internal/modules/order/application"
+	walletapp "github.com/dujiao-next/internal/modules/wallet/application"
 	"strings"
 	"time"
 
@@ -74,6 +76,22 @@ func (s *PaymentService) CapturePayment(input CapturePaymentInput) (*paymentdoma
 		return payment, nil
 	}
 
+	// A pending product payment must not capture external funds while in debt.
+	// Recharge payments have no order and remain available to clear that debt.
+	if payment.OrderID != 0 {
+		if err := s.paymentRepo.WithinTransaction(func(tx paymentcontract.Transaction) error {
+			order, err := tx.Orders().GetByIDForUpdateWithChildren(payment.OrderID)
+			if err != nil {
+				return err
+			}
+			if order == nil {
+				return orderapp.ErrOrderNotFound
+			}
+			return walletapp.CheckPurchaseAllowed(tx.Wallets(), order.UserID)
+		}); err != nil {
+			return nil, err
+		}
+	}
 	channel, err := s.channelRepo.GetByID(payment.ChannelID)
 	if err != nil {
 		return nil, ErrPaymentUpdateFailed

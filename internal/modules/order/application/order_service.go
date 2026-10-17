@@ -479,6 +479,9 @@ func (s *OrderService) createOrder(input orderCreateParams) (*orderdomain.Order,
 		if accErr != nil {
 			return nil, walletcontract.ErrOnlyPaymentRequired
 		}
+		if account.Balance.Decimal.IsNegative() {
+			return nil, walletcontract.ErrOutstandingDebt
+		}
 		if account.Balance.Decimal.LessThan(result.TotalAmount) {
 			return nil, walletcontract.ErrInsufficientBalance
 		}
@@ -556,6 +559,9 @@ func (s *OrderService) createOrder(input orderCreateParams) (*orderdomain.Order,
 	}
 
 	err = s.orderStore.WithinTransaction(func(tx ordercontract.Transaction) error {
+		if err := walletapp.CheckPurchaseAllowed(tx.Wallets(), input.UserID); err != nil {
+			return err
+		}
 		orderStore := tx.Orders()
 		productSKURepo := tx.ProductSKUs()
 		if err := orderStore.Create(order, nil); err != nil {
@@ -709,6 +715,9 @@ func (s *OrderService) createOrder(input orderCreateParams) (*orderdomain.Order,
 		}
 		if errors.Is(err, ErrManualStockInsufficient) {
 			return nil, ErrManualStockInsufficient
+		}
+		if errors.Is(err, walletcontract.ErrOutstandingDebt) {
+			return nil, err
 		}
 		return nil, ErrOrderCreateFailed
 	}

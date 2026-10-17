@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "reward_mode": "gpt_random_wallet",
+  "eligible_product_ids": [
+    1,
+    2,
+    3,
+    19,
+    22,
+    23
+  ],
+  "commission_rate": 0,
+  "confirm_days": 7,
+  "min_withdraw_amount": 0,
+  "withdraw_channels": []
+}

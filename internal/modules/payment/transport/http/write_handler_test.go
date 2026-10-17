@@ -62,6 +62,12 @@ func TestRespondPaymentCaptureError(t *testing.T) {
 		msg  string
 	}{
 		{
+			name: "outstanding wallet debt",
+			err:  ErrWalletOutstandingDebt,
+			code: response.CodeBadRequest,
+			msg:  "钱包存在欠额，请先充值补齐后再购买，不能直接在线付款",
+		},
+		{
 			name: "amount mismatch",
 			err:  ErrPaymentAmountMismatch,
 			code: response.CodeBadRequest,

@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	walletapp "github.com/dujiao-next/internal/modules/wallet/application"
 	"strings"
 	"time"
 
@@ -97,6 +98,9 @@ func (s *PaymentService) CreatePayment(input CreatePaymentInput) (*CreatePayment
 			return orderapp.ErrOrderStatusInvalid
 		}
 
+		if err := walletapp.CheckPurchaseAllowed(tx.Wallets(), lockedOrder.UserID); err != nil {
+			return err
+		}
 		paymentRepo := tx.Payments()
 		channelRepo := tx.PaymentChannels()
 		if input.ChannelID != 0 {

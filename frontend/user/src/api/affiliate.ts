@@ -5,6 +5,7 @@ export const affiliateAPI = {
     trackClick: (data: { affiliate_code: string; visitor_key?: string; landing_path?: string; referrer?: string }) =>
         api.post('/public/affiliate/click', data),
     open: () => userApi.post('/affiliate/open'),
+    walletCredit: () => userApi.post('/affiliate/wallet-credit'),
     dashboard: () => userApi.get('/affiliate/dashboard'),
     commissions: (params?: any) => userApi.get('/affiliate/commissions', { params }),
     withdraws: (params?: any) => userApi.get('/affiliate/withdraws', { params }),

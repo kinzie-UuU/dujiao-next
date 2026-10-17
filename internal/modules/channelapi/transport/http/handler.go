@@ -57,6 +57,7 @@ var (
 	ErrPaymentGatewayRequestFailed   = errors.New("payment gateway request failed")
 	ErrPaymentGatewayResponseInvalid = errors.New("payment gateway response invalid")
 	ErrPaymentCurrencyMismatch       = errors.New("payment currency mismatch")
+	ErrWalletOutstandingDebt         = errors.New("wallet outstanding debt")
 	ErrWalletOnlyPaymentRequired     = errors.New("wallet only payment required")
 )
 

@@ -515,6 +515,8 @@
       "title": "My Wallet",
       "subtitle": "Manage balance, top-ups, and transaction details",
       "balanceLabel": "Current Balance",
+      "debtTitle": "Outstanding balance: {amount}",
+      "debtDescription": "Reward adjustments, including refund reversals, may create an outstanding balance. Top-ups repay this debt first; only the remainder is spendable. Purchases and direct online payments are blocked until the debt is fully repaid.",
       "transactionsLabel": "Total Transactions",
       "currentPageLabel": "Current Page",
       "rechargeTitle": "Wallet Top-up",
@@ -561,7 +563,10 @@
         "order_refund": "Order refund",
         "gift_card_redeem": "Gift card redeem",
         "admin_adjust": "Admin adjustment",
-        "admin_refund": "Admin refund"
+        "admin_refund": "Admin refund",
+        "affiliate_reward": "Referral reward",
+        "order_debt_credit": "Payment credited to repay wallet debt",
+        "affiliate_reward_reversal": "Referral reward reversal"
       },
       "errors": {
         "loadFailed": "Failed to load wallet data, please try again later",
@@ -634,7 +639,16 @@
         "withdrawChannelRequired": "Please enter withdraw channel",
         "withdrawAccountRequired": "Please enter withdraw account",
         "withdrawFailed": "Failed to submit withdraw request, please try again later"
-      }
+      },
+      "walletRules": "Only designated GPT products qualify. Each eligible order earns one random whole-yuan reward of CNY 1–5, capped at whole yuan paid for qualifying products; amounts below CNY 1 earn no reward. Rewards can be credited {days} days after payment for purchases of any store product, never cash withdrawals. Refunds reverse the corresponding reward.",
+      "availableReward": "Available rewards",
+      "creditedReward": "Credited to wallet",
+      "creditTitle": "Credit purchase balance",
+      "creditHint": "Transfer all confirmed rewards to your wallet for any store product. Transfers cannot be undone or withdrawn as cash. Refunds reverse rewards. If spent rewards leave a shortfall, your wallet may become negative; later top-ups and rewards first offset that debt.",
+      "creditButton": "Credit all rewards",
+      "crediting": "Crediting…",
+      "creditSuccess": "Credited CNY {amount} to purchase balance",
+      "creditFailed": "Credit failed. Please try again."
     },
     "reseller": {
       "title": "Reseller Finance",
@@ -1239,6 +1253,9 @@
     "walletDeductLabel": "Wallet deduction",
     "onlinePayLabel": "Online payment",
     "walletOnlyHint": "Only wallet balance payment is accepted",
+    "walletDebtBlocked": "Repay your outstanding wallet balance before purchasing. Direct online payment is unavailable until the debt is cleared.",
+    "walletUnavailable": "Unable to verify your wallet balance. Refresh and try again before paying.",
+    "rechargeDebt": "Top up to repay debt",
     "walletInsufficientHint": "Insufficient wallet balance, please recharge first",
     "feeFree": "No fee",
     "channelTypes": {

@@ -3,6 +3,7 @@
     <WalletBalanceCard
       :alert="walletAlert"
       :balance-display="balanceDisplay"
+      :debt-display="debtDisplay"
       :total-transactions="pagination.total"
       :current-page="pagination.page"
       :total-pages="pagination.total_page"
@@ -272,6 +273,12 @@ const selectedChannelFeeAmountDisplay = computed(() => {
 })
 
 const balanceDisplay = computed(() => formatMoney(wallet.value?.balance, String(appStore.config?.currency || 'CNY')))
+const debtDisplay = computed(() => {
+  const cents = amountToCents(wallet.value?.balance)
+  return cents !== null && cents < 0
+    ? formatMoney(centsToAmount(-cents), String(appStore.config?.currency || 'CNY'))
+    : ''
+})
 
 const loadWallet = async () => {
   const response = await walletAPI.account()

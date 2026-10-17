@@ -1,6 +1,7 @@
 package application
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	orderdomain "github.com/dujiao-next/internal/modules/order/domain"
 	paymentcontract "github.com/dujiao-next/internal/modules/payment/contract"
 	paymentdomain "github.com/dujiao-next/internal/modules/payment/domain"
+	walletapp "github.com/dujiao-next/internal/modules/wallet/application"
 	walletcontract "github.com/dujiao-next/internal/modules/wallet/contract"
 
 	"github.com/dujiao-next/internal/constants"
@@ -261,6 +263,16 @@ func (s *PaymentService) applyPaymentUpdate(payment *paymentdomain.Payment, orde
 		}
 
 		orderOpen := lockedOrder.Status == constants.OrderStatusPendingPayment && lockedOrder.PaidAt == nil
+		// 旧支付链接可能在退款产生欠额前已发出；回调时仍须检查当前钱包。
+		debtBlocked := false
+		if status == constants.PaymentStatusSuccess && orderOpen {
+			if err := walletapp.CheckPurchaseAllowed(tx.Wallets(), lockedOrder.UserID); err != nil {
+				if !errors.Is(err, walletcontract.ErrOutstandingDebt) {
+					return err
+				}
+				debtBlocked = true
+			}
+		}
 
 		// 金额守恒：一笔支付只有覆盖订单当前的在线应付额才允许履约。
 		// 混合支付切换渠道会退回余额并抬高在线应付额，而旧链接在网关侧依然可付，
@@ -270,7 +282,7 @@ func (s *PaymentService) applyPaymentUpdate(payment *paymentdomain.Payment, orde
 		underpaid := status == constants.PaymentStatusSuccess && orderOpen &&
 			coveredOnlineAmount.LessThan(requiredOnlineAmount)
 
-		canFulfillOrder := status == constants.PaymentStatusSuccess && orderOpen && !underpaid
+		canFulfillOrder := status == constants.PaymentStatusSuccess && orderOpen && !underpaid && !debtBlocked
 		switch status {
 		case constants.PaymentStatusSuccess:
 			paidAt := now
@@ -279,6 +291,8 @@ func (s *PaymentService) applyPaymentUpdate(payment *paymentdomain.Payment, orde
 			}
 			lockedPayment.PaidAt = &paidAt
 			switch {
+			case debtBlocked:
+				lockedPayment.ExceptionCode = constants.PaymentExceptionDebtBlockedSucceeded
 			case underpaid:
 				lockedPayment.ExceptionCode = constants.PaymentExceptionUnderpaidSucceeded
 			case !canFulfillOrder:
@@ -317,7 +331,20 @@ func (s *PaymentService) applyPaymentUpdate(payment *paymentdomain.Payment, orde
 			}
 			orderPaid = true
 		}
-		if underpaid {
+		if debtBlocked {
+			// 已实际到账不能丢弃：入钱包先抵欠额，订单仍待支付，不自动发货。
+			if s.walletSvc == nil {
+				return walletcontract.ErrTransactionRequired
+			}
+			orderID := lockedOrder.ID
+			if _, _, err := s.walletSvc.CreditInTransaction(tx.Wallets(), walletcontract.CreditInput{
+				UserID: lockedOrder.UserID, Amount: money.FromDecimal(coveredOnlineAmount), Currency: lockedOrder.Currency,
+				Type: constants.WalletTxnTypeOrderDebtCredit, Reference: fmt.Sprintf("payment:%d:debt_credit", lockedPayment.ID),
+				Remark: "支付时存在欠额，订单未完成；到账款项转入余额，优先抵扣欠额", OrderID: &orderID,
+			}); err != nil {
+				return err
+			}
+		} else if underpaid {
 			// 订单不履约，但用户的钱不能吞：转入余额，用户可用余额补齐后重新支付。
 			if err := s.creditUnderpaidToWallet(tx, lockedOrder, lockedPayment, coveredOnlineAmount, requiredOnlineAmount); err != nil {
 				return err
