@@ -46,6 +46,7 @@ const createNotificationSceneTemplate = () => ({
 const notificationData = reactive({
   default_locale: 'zh-CN',
   dedupe_ttl_seconds: 300,
+  inventory_alert_enabled: true,
   inventory_alert_interval_seconds: 1800,
   payment_order_alert_interval_seconds: 1800,
   payment_order_alert_check_interval_seconds: 86400,
@@ -166,6 +167,7 @@ const fetchSettings = async () => {
     const notification = response.data.data as Record<string, unknown>
     notificationData.default_locale = String(notification.default_locale || 'zh-CN')
     notificationData.dedupe_ttl_seconds = normalizeNumber(notification.dedupe_ttl_seconds, 300)
+    notificationData.inventory_alert_enabled = notification.inventory_alert_enabled !== false
     notificationData.inventory_alert_interval_seconds = normalizeNumber(notification.inventory_alert_interval_seconds, 1800)
     notificationData.payment_order_alert_interval_seconds = normalizeNumber(notification.payment_order_alert_interval_seconds ?? notification.payment_failed_alert_interval_seconds, 1800)
     notificationData.payment_order_alert_check_interval_seconds = normalizeNumber(notification.payment_order_alert_check_interval_seconds, 86400)

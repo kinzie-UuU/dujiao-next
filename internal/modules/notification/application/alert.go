@@ -21,20 +21,22 @@ func (s *Service) dispatchExceptionAlertCheck(ctx context.Context, setting setti
 	}
 
 	var firstErr error
-	inventoryAlerts, err := s.dashboardSvc.GetInventoryAlertItems(ctx, dashboardSetting.Alert.LowStockThreshold)
-	if err != nil {
-		return err
-	}
-	for _, itemPayload := range format.BuildInventoryAlertDispatchPayloads(setting, dashboardSetting, payload, inventoryAlerts) {
-		allowed, intervalErr := acquireInventoryAlertInterval(ctx, setting.InventoryAlertIntervalSeconds, itemPayload)
-		if intervalErr != nil {
-			logger.Warnw("notification_inventory_alert_interval_failed", "error", intervalErr)
+	if setting.InventoryAlertEnabled {
+		inventoryAlerts, err := s.dashboardSvc.GetInventoryAlertItems(ctx, dashboardSetting.Alert.LowStockThreshold)
+		if err != nil {
+			return err
 		}
-		if intervalErr == nil && !allowed {
-			continue
-		}
-		if err := s.dispatchSingleEvent(ctx, setting, itemPayload); err != nil && firstErr == nil {
-			firstErr = err
+		for _, itemPayload := range format.BuildInventoryAlertDispatchPayloads(setting, dashboardSetting, payload, inventoryAlerts) {
+			allowed, intervalErr := acquireInventoryAlertInterval(ctx, setting.InventoryAlertIntervalSeconds, itemPayload)
+			if intervalErr != nil {
+				logger.Warnw("notification_inventory_alert_interval_failed", "error", intervalErr)
+			}
+			if intervalErr == nil && !allowed {
+				continue
+			}
+			if err := s.dispatchSingleEvent(ctx, setting, itemPayload); err != nil && firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
 

@@ -101,6 +101,10 @@ func (s *Service) SendTest(ctx context.Context, input contract.TestSendInput) er
 }
 
 func (s *Service) dispatchSingleEvent(ctx context.Context, setting settingsmessaging.NotificationCenterSetting, payload queue.NotificationDispatchPayload) error {
+	// Re-check persisted settings for queued or retried inventory alerts, including forced dispatches.
+	if !setting.InventoryAlertEnabled && strings.EqualFold(strings.TrimSpace(payload.EventType), constants.NotificationEventExceptionAlert) && isInventoryAlertType(format.ResolveInventoryAlertTypeKey(payload.Data)) {
+		return nil
+	}
 	if !payload.Force {
 		ok, err := acquireNotificationDedupe(ctx, setting.DedupeTTLSeconds, payload)
 		if err != nil {

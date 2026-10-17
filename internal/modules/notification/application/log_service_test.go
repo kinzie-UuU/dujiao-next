@@ -3,20 +3,25 @@ package application
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/dujiao-next/internal/cache"
 	"github.com/dujiao-next/internal/config"
 
 	"github.com/dujiao-next/internal/constants"
+	dashboard "github.com/dujiao-next/internal/modules/dashboard/contract"
+	"github.com/dujiao-next/internal/modules/notification/application/format"
 	"github.com/dujiao-next/internal/modules/notification/contract"
 	"github.com/dujiao-next/internal/modules/notification/domain"
 	settingsmessaging "github.com/dujiao-next/internal/modules/settings/schema/messaging"
 	settingsstorefront "github.com/dujiao-next/internal/modules/settings/schema/storefront"
 	"github.com/dujiao-next/internal/queue"
+	"github.com/dujiao-next/internal/shared/jsonmap"
 )
 
 type notificationSettingsStub struct {
@@ -308,5 +313,114 @@ func TestNewSecurityEventsUseFixedTelegramTemplatesAndExceptionSwitch(t *testing
 				t.Fatal("change field missing")
 			}
 		}
+	}
+}
+
+func TestInventoryAlertSwitchCompatibilityAndScopedPatch(t *testing.T) {
+	original := settingsmessaging.NotificationCenterDefaultSetting()
+	legacy := settingsmessaging.DecodeNotificationCenterSetting(jsonmap.JSON{"dedupe_ttl_seconds": 300}, original)
+	if !legacy.InventoryAlertEnabled {
+		t.Fatal("legacy settings must retain enabled inventory alerts")
+	}
+	disabled := false
+	updated, err := settingsmessaging.ApplyNotificationCenterSettingPatch(original, settingsmessaging.NotificationCenterSettingPatch{InventoryAlertEnabled: &disabled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.InventoryAlertEnabled {
+		t.Fatal("false patch was lost")
+	}
+	expected := settingsmessaging.NormalizeNotificationCenterSetting(original)
+	expected.InventoryAlertEnabled = false
+	if !reflect.DeepEqual(expected, updated) {
+		t.Fatal("inventory patch changed unrelated settings")
+	}
+	raw := settingsmessaging.NotificationCenterSettingToMap(updated)
+	restored := settingsmessaging.DecodeNotificationCenterSetting(raw, original)
+	if restored.InventoryAlertEnabled {
+		t.Fatal("stored false was lost")
+	}
+	restored, err = settingsmessaging.ApplyNotificationCenterSettingPatch(restored, settingsmessaging.NotificationCenterSettingPatch{})
+	if err != nil || restored.InventoryAlertEnabled {
+		t.Fatalf("omitted patch must preserve false: %v", err)
+	}
+}
+
+func TestInventorySwitchDropsQueuedAlertsOnly(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		for _, tc := range []struct {
+			name, event, key string
+			inventory        bool
+		}{
+			{"low", constants.NotificationEventExceptionAlert, constants.NotificationAlertTypeLowStockProducts, true},
+			{"sold-out", constants.NotificationEventExceptionAlert, constants.NotificationAlertTypeOutOfStockProducts, true},
+			{"legacy-localized", constants.NotificationEventExceptionAlert, "低库存商品", true},
+			{"payment-failed", constants.NotificationEventExceptionAlert, constants.NotificationAlertTypePaymentsFailed, false},
+			{"pending-payment", constants.NotificationEventExceptionAlert, constants.NotificationAlertTypePendingOrders, false},
+			{"generic-exception", constants.NotificationEventExceptionAlert, "other", false},
+			{"login", constants.NotificationEventAdminLoginSuccess, "", false},
+			{"login-failed", constants.NotificationEventAdminLoginFailed, "", false},
+			{"payment-config", constants.NotificationEventAdminPaymentConfigChanged, "", false},
+			{"order", constants.NotificationEventOrderPaidSuccess, "", false},
+			{"recharge", constants.NotificationEventWalletRechargeSuccess, "", false},
+			{"manual", constants.NotificationEventManualFulfillmentPending, "", false},
+		} {
+			t.Run(tc.name+strconv.FormatBool(enabled), func(t *testing.T) {
+				setting := settingsmessaging.NotificationCenterDefaultSetting()
+				setting.InventoryAlertEnabled = enabled
+				setting.Channels.Telegram = settingsmessaging.NotificationChannelSetting{Enabled: true, Recipients: []string{"123"}}
+				tg := &loginTelegramSpy{}
+				svc := NewService(notificationSettingsStub{notification: setting}, nil, nil, nil, nil, tg)
+				payload := queue.NotificationDispatchPayload{EventType: tc.event, Force: true, Data: map[string]interface{}{"alert_type": tc.key}}
+				if err := svc.Dispatch(context.Background(), payload); err != nil {
+					t.Fatal(err)
+				}
+				want := 1
+				if tc.inventory && !enabled {
+					want = 0
+				}
+				if len(tg.messages) != want {
+					t.Fatalf("messages=%d want=%d", len(tg.messages), want)
+				}
+			})
+		}
+	}
+}
+
+type inventorySwitchDashboardSpy struct{ inventoryCalls, paymentCalls int }
+
+func (s *inventorySwitchDashboardSpy) LoadDashboardAlertSetting() settingsstorefront.DashboardAlertSetting {
+	return settingsstorefront.DashboardAlertSetting{}
+}
+func (s *inventorySwitchDashboardSpy) GetInventoryAlertItems(context.Context, int64) ([]dashboard.InventoryAlertRow, error) {
+	s.inventoryCalls++
+	return nil, errors.New("inventory unavailable")
+}
+func (s *inventorySwitchDashboardSpy) GetPaymentOrderAlertCounts(context.Context, time.Time, time.Time) (dashboard.PaymentOrderAlertCountsRow, error) {
+	s.paymentCalls++
+	return dashboard.PaymentOrderAlertCountsRow{PendingPaymentOrders: 2, PaymentsFailed: 2}, nil
+}
+func TestDisabledInventoryKeepsPaymentInspectionAndStopsBuilder(t *testing.T) {
+	setting := settingsmessaging.NotificationCenterDefaultSetting()
+	setting.InventoryAlertEnabled = false
+	setting.Channels.Telegram = settingsmessaging.NotificationChannelSetting{Enabled: true, Recipients: []string{"123"}}
+	dashboardSetting := settingsstorefront.DashboardSetting{Alert: settingsstorefront.DashboardAlertSetting{PendingPaymentOrdersThreshold: 1, PaymentsFailedThreshold: 1}}
+	rows := []dashboard.InventoryAlertRow{{ProductID: 1, AlertType: constants.NotificationAlertTypeLowStockProducts}, {ProductID: 2, AlertType: constants.NotificationAlertTypeOutOfStockProducts}}
+	if got := format.BuildInventoryAlertDispatchPayloads(setting, dashboardSetting, queue.NotificationDispatchPayload{}, rows); len(got) != 0 {
+		t.Fatal("disabled builder produced inventory alerts")
+	}
+	enabled := setting
+	enabled.InventoryAlertEnabled = true
+	if got := format.BuildInventoryAlertDispatchPayloads(enabled, dashboardSetting, queue.NotificationDispatchPayload{}, rows); len(got) != 2 {
+		t.Fatal("enabled builder lost inventory alerts")
+	}
+	reader := &inventorySwitchDashboardSpy{}
+	tg := &loginTelegramSpy{}
+	svc := NewService(notificationSettingsStub{notification: setting, dashboard: dashboardSetting}, nil, nil, reader, nil, tg)
+	if err := svc.Dispatch(context.Background(), queue.NotificationDispatchPayload{EventType: constants.NotificationEventExceptionAlertCheck, Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if reader.inventoryCalls != 0 || reader.paymentCalls != 1 || len(tg.messages) != 2 {
+		t.Fatalf("inventory=%d payment=%d sent=%d", reader.inventoryCalls, reader.paymentCalls, len(tg.messages))
 	}
 }
