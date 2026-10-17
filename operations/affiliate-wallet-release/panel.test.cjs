@@ -11,7 +11,7 @@ async function fixture(opened = true, options = {}) {
   window.fetch = async (url, opts) => {
     calls.push({url, opts});
     let data = {};
-    if (url.endsWith('/public/config')) data = { affiliate: { enabled: true, reward_mode: 'gpt_random_wallet', confirm_days: 7 } };
+    if (url.endsWith('/public/config')) data = { affiliate: { enabled: true, reward_mode: 'gpt_random_wallet', confirm_days: options.confirmDays ?? 7 } };
     else if (url.endsWith('/affiliate/dashboard')) data = { opened, affiliate_code: 'ABCD1234', available_commission: available, wallet_credited_commission: credited };
     else if (url.includes('/affiliate/commissions')) data = [{ commission_amount: '3', status: 'wallet_credited', created_at: '2026-10-17' }];
     else if (url.endsWith('/affiliate/open')) { opened = true; }
@@ -44,4 +44,15 @@ test('API envelope error is shown without false success', async () => {
   const {dom, window} = await fixture(true, {failCredit: true});
   try { [...window.document.querySelectorAll('.uaw-panel button')].find(b => b.textContent === '转入消费余额').click(); await pause(); assert.match(window.document.querySelector('[role=status]').textContent, /拒绝操作/); }
   finally { dom.window.close(); }
+});
+
+test('zero-day policy explains manual payment confirmation and preserves refund rules', async () => {
+  const {dom, window} = await fixture(true, {confirmDays: 0});
+  try {
+    const rules = window.document.querySelector('.uaw-rules').textContent;
+    assert.match(rules, /人工确认收款后可转入本站消费余额/);
+    assert.match(rules, /退款将扣回相应奖励/);
+    assert.match(rules, /不支持提现/);
+    assert.doesNotMatch(rules, /付款满|0 天|7 天/);
+  } finally { dom.window.close(); }
 });

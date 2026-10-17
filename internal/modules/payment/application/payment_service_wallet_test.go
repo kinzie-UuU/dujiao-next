@@ -43,8 +43,13 @@ import (
 	walletgormstore "github.com/dujiao-next/internal/modules/wallet/infrastructure/gormstore"
 
 	"github.com/dujiao-next/internal/constants"
+	affiliateapp "github.com/dujiao-next/internal/modules/affiliate/application"
+	affiliatecontract "github.com/dujiao-next/internal/modules/affiliate/contract"
+	affiliatedomain "github.com/dujiao-next/internal/modules/affiliate/domain"
+	affiliatestore "github.com/dujiao-next/internal/modules/affiliate/infrastructure/gormstore"
 	paymentcontract "github.com/dujiao-next/internal/modules/payment/contract"
 	"github.com/dujiao-next/internal/modules/payment/infrastructure/gateway/provider"
+	settingsintegration "github.com/dujiao-next/internal/modules/settings/schema/integration"
 	"github.com/dujiao-next/internal/platform/database/gormdb"
 	"github.com/dujiao-next/internal/shared/jsonmap"
 	"github.com/dujiao-next/internal/shared/money"
@@ -1707,6 +1712,117 @@ func TestOldPaymentLinkWithRewardDebtCreditsWithoutFulfillment(t *testing.T) {
 			}
 			if !result.OrderPaid || walletBalance(t, db, user.ID) != "0.00" {
 				t.Fatal("repaid wallet purchase failed")
+			}
+		})
+	}
+}
+
+// The zero-day policy uses the existing administrator-confirmed payment event;
+// visiting the reward endpoint before confirmation must never unlock a reward.
+type immediateGPTRewardSettings struct{}
+
+func (immediateGPTRewardSettings) GetAffiliateSetting() (settingsintegration.AffiliateSetting, error) {
+	return settingsintegration.AffiliateSetting{Enabled: true, RewardMode: settingsintegration.AffiliateRewardModeGPTWallet, EligibleProductIDs: []uint{1}, ConfirmDays: 0}, nil
+}
+
+func TestManualPaymentImmediatelyUnlocksGPTRewardAndRefundClawsBack(t *testing.T) {
+	for _, split := range []bool{false, true} {
+		t.Run(fmt.Sprintf("split=%v", split), func(t *testing.T) {
+			svc, db := setupPaymentServiceWalletTest(t)
+			if err := db.AutoMigrate(&affiliatedomain.Profile{}, &affiliatedomain.Commission{}); err != nil {
+				t.Fatal(err)
+			}
+			amount := func(n int64) money.Amount { return money.FromDecimal(decimal.NewFromInt(n)) }
+			profile := affiliatedomain.Profile{UserID: 100, AffiliateCode: "MANUAL01", Status: constants.AffiliateProfileStatusActive}
+			if err := db.Create(&profile).Error; err != nil {
+				t.Fatal(err)
+			}
+			product := productdomain.Product{ID: 1, Slug: "gpt-plus-ios-us", TitleJSON: jsonmap.JSON{"en": "GPT"}}
+			if err := db.Create(&product).Error; err != nil {
+				t.Fatal(err)
+			}
+			order := orderdomain.Order{OrderNo: "manual-reward", UserID: 0, AffiliateProfileID: &profile.ID, Status: constants.OrderStatusPendingPayment, Currency: "CNY", OriginalAmount: amount(100), TotalAmount: amount(100), Items: []orderdomain.OrderItem{{ProductID: 1, TitleJSON: jsonmap.JSON{"en": "GPT"}, Quantity: 1, TotalPrice: amount(100)}}}
+			if split {
+				order.Children = []orderdomain.Order{{OrderNo: "manual-reward-child", Status: constants.OrderStatusPendingPayment, Currency: "CNY", OriginalAmount: amount(100), TotalAmount: amount(100), Items: order.Items}}
+				order.Items = nil
+			}
+			if err := db.Create(&order).Error; err != nil {
+				t.Fatal(err)
+			}
+			payment := paymentdomain.Payment{OrderID: order.ID, ChannelID: 1, ProviderType: manualQRProviderType, ChannelType: constants.PaymentChannelTypeWechat, InteractionMode: constants.PaymentInteractionQR, Amount: amount(100), Currency: "CNY", Status: constants.PaymentStatusPending}
+			if err := db.Create(&payment).Error; err != nil {
+				t.Fatal(err)
+			}
+			repo := affiliatestore.New(db)
+			rewards := affiliateapp.NewService(repo, nil, ordergormstore.New(db, "test-guest-credential-secret-with-32-bytes"), productgormstore.NewProductStore(db), immediateGPTRewardSettings{})
+			svc.affiliateSvc = rewards
+			if err := rewards.HandleOrderPaid(order.ID); err != nil {
+				t.Fatal(err)
+			}
+			rows, err := repo.ListCommissionsByOrder(order.ID, nil)
+			if err != nil || len(rows) != 0 {
+				t.Fatalf("unconfirmed payment earned reward: %v %v", rows, err)
+			}
+			credit, err := rewards.CreditRewardsToWallet(profile.UserID)
+			if err != nil || !credit.Decimal.IsZero() {
+				t.Fatalf("unconfirmed reward spendable: %v %v", credit, err)
+			}
+			confirmed, err := svc.ConfirmManualPayment(payment.ID)
+			if err != nil || confirmed.Status != constants.PaymentStatusSuccess {
+				t.Fatalf("confirmation failed: %v %v", confirmed, err)
+			}
+			rows, err = repo.ListCommissionsByOrder(order.ID, nil)
+			if err != nil || len(rows) != 1 {
+				t.Fatalf("confirmation did not create exactly one reward: %v %v", rows, err)
+			}
+			reward := rows[0]
+			if reward.Status != constants.AffiliateCommissionStatusAvailable || reward.ConfirmAt != nil || reward.AvailableAt == nil {
+				t.Fatalf("reward still locked: %+v", reward)
+			}
+			if reward.CommissionAmount.Decimal.LessThan(decimal.NewFromInt(1)) || reward.CommissionAmount.Decimal.GreaterThan(decimal.NewFromInt(5)) {
+				t.Fatalf("reward out of bounds: %s", reward.CommissionAmount)
+			}
+			for i := 0; i < 2; i++ {
+				if _, err := svc.ConfirmManualPayment(payment.ID); err != nil {
+					t.Fatal(err)
+				}
+				if err := rewards.HandleOrderPaid(order.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			credit, err = rewards.CreditRewardsToWallet(profile.UserID)
+			if err != nil || !credit.Decimal.Equal(reward.CommissionAmount.Decimal) {
+				t.Fatalf("immediate wallet credit: %v %v", credit, err)
+			}
+			credit, err = rewards.CreditRewardsToWallet(profile.UserID)
+			if err != nil || !credit.Decimal.IsZero() {
+				t.Fatalf("duplicate wallet credit: %v %v", credit, err)
+			}
+			paidOrder, err := repo.GetRewardOrderForUpdate(order.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sourceID := order.ID
+			if split {
+				sourceID = paidOrder.Children[0].ID
+			}
+			for i := 0; i < 2; i++ {
+				if err := repo.WithinTransaction(func(tx affiliatecontract.Store) error {
+					return rewards.HandleOrderRefunded(tx, paidOrder, decimal.NewFromInt(100), decimal.Zero, "manual-reward-refund", sourceID)
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var account walletdomain.Account
+			if err := db.Where("user_id = ?", profile.UserID).First(&account).Error; err != nil {
+				t.Fatal(err)
+			}
+			if !account.Balance.Decimal.IsZero() {
+				t.Fatalf("refund failed to claw back exactly once: %s", account.Balance)
+			}
+			rows, err = repo.ListCommissionsByOrder(order.ID, nil)
+			if err != nil || len(rows) != 1 || !rows[0].CommissionAmount.Decimal.IsZero() {
+				t.Fatalf("refund/retry changed reward count or amount: %v %v", rows, err)
 			}
 		})
 	}

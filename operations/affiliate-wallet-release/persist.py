@@ -70,13 +70,15 @@ def write_file(path, data, metadata):
         temporary.unlink(missing_ok=True)
 
 
-def candidate(content, script):
+def candidate(content, script, previous_sha=None):
+    if previous_sha is not None and not re.fullmatch(r'[0-9a-f]{64}', previous_sha):
+        raise ValueError('Previous script digest must be 64 lowercase hexadecimal characters')
     template = content['template.html'].decode()
     refresh = content['refresh.sh'].decode()
     if template.count('</body>') != 1:
         raise ValueError('Expected one template body ending')
     tag_prefix = '<script defer src="/' + ASSET + '?v='
-    old_tag = tag_prefix + sha(script)[:16] + '"></script>'
+    old_tag = tag_prefix + (previous_sha[:17] if previous_sha else sha(script)[:16]) + '"></script>'
     tag = tag_prefix + sha(script)[:17] + '"></script>'
     # Only the actual persistent asset loop is eligible for this one-token edit.
     pattern = re.compile(r'(?m)^(for asset_name in [A-Za-z0-9_. -]+)(; do)$')
@@ -84,13 +86,16 @@ def candidate(content, script):
     if len(loops) != 1 or '"$runtime_asset_dir/$asset_name"' not in refresh:
         raise ValueError('Expected one known runtime asset loop')
     if content[PATHS[2]] is not None:
-        # This upgrade changes only a cached URL, never existing script bytes or the loop.
-        if (content[PATHS[2]] != script or template.count(ASSET) != 1 or
+        # Accept only the reviewed previous bytes and exact tag; preserve the asset loop.
+        expected_sha = previous_sha or sha(script)
+        if (sha(content[PATHS[2]]) != expected_sha or template.count(ASSET) != 1 or
                 template.count(old_tag) != 1 or refresh.count(ASSET) != 1 or
                 loops[0][1].split()[3:].count(ASSET) != 1):
             raise ValueError('Existing affiliate persistence differs from exact supported upgrade')
         template = template.replace(old_tag, tag)
     else:
+        if previous_sha is not None:
+            raise ValueError('Missing reviewed previous panel asset')
         if ASSET in template or ASSET in refresh:
             raise ValueError('Incomplete affiliate persistence')
         template = template.replace('</body>', tag + '\n</body>')
@@ -112,6 +117,9 @@ def refresh_guard():
 
 
 def execute(args):
+    previous_sha = getattr(args, 'previous_script_sha256', None)
+    if previous_sha is not None and not re.fullmatch(r'[0-9a-f]{64}', previous_sha):
+        raise ValueError('Previous script digest must be 64 lowercase hexadecimal characters')
     regular(args.script)
     script = args.script.read_bytes()
     if not script or sha(script) != args.script_sha256:
@@ -122,9 +130,11 @@ def execute(args):
         return {'state_sha256': state_hash, 'files': state, 'script_sha256': sha(script)}
     if state_hash != args.expected_state_sha256:
         raise ValueError('Persistent source drift')
-    proposed = candidate(content, script)
+    proposed = candidate(content, script, previous_sha)
     plan = {'state_sha256': state_hash, 'script_sha256': sha(script),
             'files': {name: sha(data) for name, data in proposed.items()}}
+    if previous_sha is not None:
+        plan['previous_script_sha256'] = previous_sha
     plan_hash = digest(plan)
     if args.action == 'plan':
         return dict(plan, plan_sha256=plan_hash)
@@ -167,6 +177,7 @@ if __name__ == '__main__':
     parser.add_argument('action', choices=['inventory', 'plan', 'deploy'])
     parser.add_argument('--script', type=Path, required=True)
     parser.add_argument('--script-sha256', required=True)
+    parser.add_argument('--previous-script-sha256')
     parser.add_argument('--expected-state-sha256')
     parser.add_argument('--expected-plan-sha256')
     parser.add_argument('--production-write', action='store_true')

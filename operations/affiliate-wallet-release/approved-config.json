@@ -10,7 +10,7 @@
     23
   ],
   "commission_rate": 0,
-  "confirm_days": 7,
+  "confirm_days": 0,
   "min_withdraw_amount": 0,
   "withdraw_channels": []
 }
