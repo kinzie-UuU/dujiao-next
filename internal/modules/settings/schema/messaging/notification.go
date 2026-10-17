@@ -83,6 +83,7 @@ type NotificationCenterSetting struct {
 	Scenes                           NotificationSceneSetting     `json:"scenes"`
 	Templates                        NotificationTemplatesSetting `json:"templates"`
 	DedupeTTLSeconds                 int                          `json:"dedupe_ttl_seconds"`
+	InventoryAlertEnabled            bool                         `json:"inventory_alert_enabled"`
 	InventoryAlertIntervalSeconds    int                          `json:"inventory_alert_interval_seconds"`
 	PaymentOrderAlertIntervalSeconds int                          `json:"payment_order_alert_interval_seconds"`
 	PaymentOrderAlertCheckSeconds    int                          `json:"payment_order_alert_check_interval_seconds"`
@@ -96,6 +97,7 @@ type NotificationCenterSettingPatch struct {
 	Scenes                           *NotificationScenePatch     `json:"scenes"`
 	Templates                        *NotificationTemplatesPatch `json:"templates"`
 	DedupeTTLSeconds                 *int                        `json:"dedupe_ttl_seconds"`
+	InventoryAlertEnabled            *bool                       `json:"inventory_alert_enabled"`
 	InventoryAlertIntervalSeconds    *int                        `json:"inventory_alert_interval_seconds"`
 	PaymentOrderAlertIntervalSeconds *int                        `json:"payment_order_alert_interval_seconds"`
 	PaymentOrderAlertCheckSeconds    *int                        `json:"payment_order_alert_check_interval_seconds"`
@@ -222,6 +224,7 @@ func NotificationCenterDefaultSetting() NotificationCenterSetting {
 			},
 		},
 		DedupeTTLSeconds:                 300,
+		InventoryAlertEnabled:            true,
 		InventoryAlertIntervalSeconds:    notificationInventoryAlertIntervalDefaultSeconds,
 		PaymentOrderAlertIntervalSeconds: notificationPaymentOrderAlertIntervalDefaultSeconds,
 		PaymentOrderAlertCheckSeconds:    notificationPaymentOrderAlertCheckDefaultSeconds,
@@ -314,6 +317,7 @@ func NotificationCenterSettingToMap(setting NotificationCenterSetting) map[strin
 			"exception_alert":            notificationSceneTemplateToMap(normalized.Templates.ExceptionAlert),
 		},
 		"dedupe_ttl_seconds":                         normalized.DedupeTTLSeconds,
+		"inventory_alert_enabled":                    normalized.InventoryAlertEnabled,
 		"inventory_alert_interval_seconds":           normalized.InventoryAlertIntervalSeconds,
 		"payment_order_alert_interval_seconds":       normalized.PaymentOrderAlertIntervalSeconds,
 		"payment_order_alert_check_interval_seconds": normalized.PaymentOrderAlertCheckSeconds,
@@ -335,6 +339,9 @@ func ApplyNotificationCenterSettingPatch(current NotificationCenterSetting, patc
 	}
 	if patch.DedupeTTLSeconds != nil {
 		next.DedupeTTLSeconds = *patch.DedupeTTLSeconds
+	}
+	if patch.InventoryAlertEnabled != nil {
+		next.InventoryAlertEnabled = *patch.InventoryAlertEnabled
 	}
 	if patch.InventoryAlertIntervalSeconds != nil {
 		next.InventoryAlertIntervalSeconds = *patch.InventoryAlertIntervalSeconds
@@ -455,6 +462,7 @@ func DecodeNotificationCenterSetting(raw jsonmap.JSON, fallback NotificationCent
 	legacyEnabled := settingsvalue.ReadBool(raw, "enabled", true)
 	next.DefaultLocale = settingsvalue.ReadString(raw, "default_locale", next.DefaultLocale)
 	next.DedupeTTLSeconds = settingsvalue.ReadInt(raw, "dedupe_ttl_seconds", next.DedupeTTLSeconds)
+	next.InventoryAlertEnabled = settingsvalue.ReadBool(raw, "inventory_alert_enabled", next.InventoryAlertEnabled)
 	next.InventoryAlertIntervalSeconds = settingsvalue.ReadInt(raw, "inventory_alert_interval_seconds", next.InventoryAlertIntervalSeconds)
 	next.PaymentOrderAlertIntervalSeconds = settingsvalue.ReadInt(raw, "payment_order_alert_interval_seconds", settingsvalue.ReadInt(raw, "payment_failed_alert_interval_seconds", next.PaymentOrderAlertIntervalSeconds))
 	next.PaymentOrderAlertCheckSeconds = settingsvalue.ReadInt(raw, "payment_order_alert_check_interval_seconds", next.PaymentOrderAlertCheckSeconds)

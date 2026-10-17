@@ -3128,6 +3128,8 @@ const messages = {
           dedupeTTLSeconds: '去重时长（秒）',
           inventory: {
             title: '库存告警设置',
+            enabled: '启用库存提醒',
+            enabledHint: '仅控制低库存和售罄提醒，不影响登录、登录失败、收款配置变更或其他通知。',
             intervalSeconds: '库存告警最小发送间隔（秒）',
             intervalHint: '库存类异常会按该频率限流，避免同一批缺货/低库存商品反复提醒。',
             ignoredProducts: '忽略商品',
@@ -7498,6 +7500,8 @@ const messages = {
           dedupeTTLSeconds: '去重時長（秒）',
           inventory: {
             title: '庫存告警設定',
+            enabled: '啟用庫存提醒',
+            enabledHint: '僅控制低庫存和售罄提醒，不影響登入、登入失敗、收款設定變更或其他通知。',
             intervalSeconds: '庫存告警最小發送間隔（秒）',
             intervalHint: '庫存類異常會依此頻率限流，避免同一批缺貨/低庫存商品重複提醒。',
             ignoredProducts: '忽略商品',
@@ -11868,6 +11872,8 @@ const messages = {
           dedupeTTLSeconds: 'Dedupe TTL (seconds)',
           inventory: {
             title: 'Inventory Alert Settings',
+            enabled: 'Enable inventory alerts',
+            enabledHint: 'Controls only low-stock and out-of-stock alerts. Login, failed login, payment configuration changes and other notifications are unaffected.',
             intervalSeconds: 'Minimum inventory alert interval (seconds)',
             intervalHint: 'Inventory alerts are rate-limited by this interval to avoid repeated reminders for the same stock situation.',
             ignoredProducts: 'Ignored products',
