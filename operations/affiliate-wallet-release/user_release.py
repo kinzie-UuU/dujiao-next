@@ -76,6 +76,9 @@ def snapshot(directory):
 
 
 def execute(args):
+    previous_sha = getattr(args, 'previous_script_sha256', None)
+    if previous_sha is not None and not re.fullmatch(r'[0-9a-f]{64}', previous_sha):
+        raise ValueError('Previous script digest must be 64 lowercase hexadecimal characters')
     if args.script.is_symlink() or not args.script.is_file(): raise ValueError('Script must be regular')
     script = args.script.read_bytes()
     if sha(script) != args.script_sha256: raise ValueError('Script digest mismatch')
@@ -97,10 +100,14 @@ def execute(args):
         expected = yaml.safe_load(before); expected['services']['user']['image'] = image
         if yaml.safe_load(after) != expected: raise ValueError('Unrelated compose change')
         htmlroot = folder / 'html'
-        if (htmlroot / ASSET).exists() and (htmlroot / ASSET).read_bytes() != script:
+        existing_asset = htmlroot / ASSET
+        if previous_sha is not None:
+            if not existing_asset.is_file() or sha(existing_asset.read_bytes()) != previous_sha:
+                raise ValueError('Existing panel differs from reviewed previous digest')
+        elif existing_asset.exists() and existing_asset.read_bytes() != script:
             raise ValueError('Different existing panel requires review')
         tag = '<script defer src="/' + ASSET + '?v=' + sha(script)[:17] + '"></script>'
-        previous_tag = '<script defer src="/' + ASSET + '?v=' + sha(script)[:16] + '"></script>'
+        previous_tag = '<script defer src="/' + ASSET + '?v=' + (previous_sha[:17] if previous_sha else sha(script)[:16]) + '"></script>'
         changed = []
         for path in sorted(htmlroot.rglob('*.html')):
             # AppleDouble metadata is binary, not a storefront entry. Preserve it.
@@ -112,6 +119,8 @@ def execute(args):
                     raise ValueError('Unexpected existing panel reference')
                 path.write_text(content.replace(previous_tag, tag))
             else:
+                if previous_sha is not None:
+                    raise ValueError('Missing reviewed previous panel reference')
                 path.write_text(content.replace('</body>', tag + '\n</body>'))
             changed.append(str(path.relative_to(htmlroot)))
         if not {'index.html', '_spa.html'} <= set(changed): raise ValueError('Missing storefront entries')
@@ -121,6 +130,8 @@ def execute(args):
         htmlroot.chmod(0o755)
         dockerfile(folder, state['image'])
         plan = {'state_sha256': digest, 'image': image, 'script_sha256': sha(script), 'changed_html': changed, 'preserved_files': len(state['files']) - len(changed)}
+        if previous_sha is not None:
+            plan['previous_script_sha256'] = previous_sha
         plan_hash = sha(json.dumps(plan, sort_keys=True).encode())
         if args.action == 'plan': return dict(plan, plan_sha256=plan_hash)
         if not args.production_write or args.expected_plan_sha256 != plan_hash: raise ValueError('Exact approved plan required')
@@ -177,6 +188,7 @@ if __name__ == '__main__':
     parser.add_argument('action', choices=['inventory', 'plan', 'deploy'])
     parser.add_argument('--script', type=Path, required=True)
     parser.add_argument('--script-sha256', required=True)
+    parser.add_argument('--previous-script-sha256')
     parser.add_argument('--expected-state-sha256')
     parser.add_argument('--expected-plan-sha256')
     parser.add_argument('--production-write', action='store_true')

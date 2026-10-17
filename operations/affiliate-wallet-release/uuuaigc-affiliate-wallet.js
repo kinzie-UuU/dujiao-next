@@ -43,7 +43,8 @@
     host.replaceChildren();
     host.append(el('h2', '推广消费奖励'));
     const days = Number.isInteger(config.confirm_days) ? config.confirm_days : 7;
-    host.append(el('p', `好友通过推广链接购买指定 GPT 商品，每笔符合条件的人民币主订单随机奖励整数 1～5 元。付款满 ${days} 天后可转入消费余额，抵扣本站商品，不支持提现。退款将扣回相应奖励；奖励不超过参与商品实付整数金额，不足 1 元不奖励。`, 'uaw-rules'));
+    const availability = days <= 0 ? '人工确认收款后可转入本站消费余额' : `付款满 ${days} 天后可转入消费余额`;
+    host.append(el('p', `好友通过推广链接购买指定 GPT 商品，每笔符合条件的人民币主订单随机奖励整数 1～5 元。${availability}，抵扣本站商品，不支持提现。退款将扣回相应奖励；奖励不超过参与商品实付整数金额，不足 1 元不奖励。`, 'uaw-rules'));
     const status = el('p', '', 'uaw-status'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); host.append(status);
     if (!d.opened) { host.append(button('开通推广', () => mutate('/affiliate/open', () => '推广已开通，可以复制链接分享。'))); return; }
     const url = new URL(d.promotion_path || `/?aff=${encodeURIComponent(d.affiliate_code || '')}`, location.origin);

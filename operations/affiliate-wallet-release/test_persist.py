@@ -76,6 +76,58 @@ class PersistTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 persist.candidate(bad, self.script.read_bytes())
 
+    def install_previous(self):
+        previous = b'window.previous = true;\n'
+        self.args.previous_script_sha256 = persist.sha(previous)
+        for name, data in persist.candidate(self.original[1], previous).items():
+            (self.root / name).write_bytes(data)
+
+    def test_reviewed_content_upgrade_preserves_loop(self):
+        self.install_previous()
+        before = persist.snapshot()
+        self.prepare()
+        result = persist.execute(self.args)
+        self.assertEqual(result['previous_script_sha256'], self.args.previous_script_sha256)
+        current = persist.snapshot()[1]
+        self.assertEqual(current['refresh.sh'], before[1]['refresh.sh'])
+        self.assertEqual(current[persist.PATHS[2]], self.script.read_bytes())
+        self.assertIn(('?v=' + self.args.script_sha256[:17] + '"').encode(), current['template.html'])
+        self.assertEqual(current['template.html'].count(persist.ASSET.encode()), 1)
+
+    def test_reviewed_upgrade_failure_restores_old_asset_and_tag(self):
+        self.install_previous()
+        before = persist.snapshot()
+        self.prepare()
+        real_write = persist.write_file
+        attempts = 0
+        def fail_once(path, data, metadata):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 3:
+                raise OSError('injected failure')
+            return real_write(path, data, metadata)
+        with patch.object(persist, 'write_file', fail_once), self.assertRaises(OSError):
+            persist.execute(self.args)
+        self.assertEqual(persist.snapshot(), before)
+
+    def test_reviewed_upgrade_refuses_missing_drift_and_malformed_digest(self):
+        self.install_previous()
+        content = persist.snapshot()[1]
+        for case in ('missing', 'different', 'tag', 'duplicate', 'loop', 'invalid-digest'):
+            changed = dict(content)
+            previous_sha = self.args.previous_script_sha256
+            if case == 'missing': changed[persist.PATHS[2]] = None
+            if case == 'different': changed[persist.PATHS[2]] = b'unreviewed'
+            if case == 'tag': changed['template.html'] = changed['template.html'].replace(b'?v=', b'?wrong=')
+            if case == 'duplicate': changed['template.html'] *= 2
+            if case == 'loop': changed['refresh.sh'] = changed['refresh.sh'].replace(persist.ASSET.encode(), b'other.js')
+            if case == 'invalid-digest': previous_sha = 'g' * 64
+            with self.subTest(case=case), self.assertRaises(ValueError):
+                persist.candidate(changed, self.script.read_bytes(), previous_sha)
+        self.args.previous_script_sha256 = 'invalid'
+        with self.assertRaisesRegex(ValueError, '64 lowercase'):
+            persist.execute(self.args)
+
     def test_write_failure_restores_contents_modes_and_absence(self):
         self.prepare()
         real_write = persist.write_file

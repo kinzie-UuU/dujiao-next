@@ -116,6 +116,57 @@ class UserReleaseTests(unittest.TestCase):
         self.assertIn('?v=' + release.sha(script)[:17] + '"', (self.live / 'html' / '_spa.html').read_text())
         self.assertEqual((self.live / 'html' / release.ASSET).read_bytes(), script)
 
+    def install_previous(self):
+        previous = b'window.previous = true;\n'
+        self.args.previous_script_sha256 = release.sha(previous)
+        tag = '<script defer src="/' + release.ASSET + '?v=' + release.sha(previous)[:17] + '"></script>'
+        for path in (self.live / 'html').glob('*.html'):
+            if not path.name.startswith('._'):
+                path.write_text(path.read_text().replace('</body>', tag + '</body>'))
+        (self.live / 'html' / release.ASSET).write_bytes(previous)
+
+    def test_reviewed_content_upgrade_preserves_overlays(self):
+        self.install_previous()
+        self.prepare()
+        result = release.execute(self.args)
+        self.assertEqual(result['previous_script_sha256'], self.args.previous_script_sha256)
+        self.assertEqual((self.live / 'html' / release.ASSET).read_bytes(), self.script.read_bytes())
+        for name in ('index.html', '_spa.html', 'guide.html'):
+            content = (self.live / 'html' / name).read_text()
+            self.assertIn('live overlay', content)
+            self.assertEqual(content.count(release.ASSET), 1)
+            self.assertIn('?v=' + self.args.script_sha256[:17] + '"', content)
+
+    def test_reviewed_upgrade_failure_restores_previous_asset_and_tags(self):
+        self.install_previous()
+        before = release.files(self.live / 'html')
+        self.prepare()
+        self.fail_publication = True
+        with patch.object(release.time, 'sleep'), self.assertRaisesRegex(ValueError, 'lacks panel'):
+            release.execute(self.args)
+        self.assertEqual(release.files(self.live / 'html'), before)
+
+    def test_reviewed_upgrade_rejects_unexpected_asset_tag_and_digest(self):
+        self.install_previous()
+        asset = self.live / 'html' / release.ASSET
+        page = self.live / 'html' / '_spa.html'
+        original_asset, original_page = asset.read_bytes(), page.read_text()
+        for case in ('missing', 'different', 'tag', 'duplicate', 'no-tag', 'invalid-digest'):
+            with self.subTest(case=case):
+                asset.write_bytes(original_asset)
+                page.write_text(original_page)
+                self.args.previous_script_sha256 = release.sha(original_asset)
+                if case == 'missing': asset.unlink()
+                if case == 'different': asset.write_bytes(b'unreviewed')
+                if case == 'tag': page.write_text(original_page.replace('?v=', '?wrong='))
+                if case == 'duplicate': page.write_text(original_page * 2)
+                if case == 'no-tag': page.write_text('<body>missing</body>')
+                if case == 'invalid-digest': self.args.previous_script_sha256 = 'g' * 64
+                self.args.action = 'inventory'
+                with self.assertRaises(ValueError):
+                    self.prepare()
+                self.assertFalse(any(c[:2] == ('docker', 'build') for c in self.commands))
+
     def test_legacy_compose_publishes_and_rolls_back(self):
         self.compose_v2 = False
         self.prepare()

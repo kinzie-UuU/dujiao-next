@@ -1,7 +1,7 @@
 <template>
   <div class="space-y-6">
     <div class="rounded-2xl border bg-card p-7 shadow-sm">
-      <PanelHeading :title="t('personalCenter.affiliate.title')" :description="t(isWalletReward ? 'personalCenter.affiliate.walletRules' : 'personalCenter.affiliate.subtitle', { days: appStore.config?.affiliate?.confirm_days ?? 7 })" :icon="Megaphone">
+      <PanelHeading :title="t('personalCenter.affiliate.title')" :description="t(rewardRulesKey, { days: appStore.config?.affiliate?.confirm_days ?? 7 })" :icon="Megaphone">
         <template #actions>
           <Badge variant="accent" size="sm">{{ t('personalCenter.tabs.affiliate') }}</Badge>
         </template>
@@ -241,6 +241,11 @@ const { t } = useI18n()
 const appStore = useAppStore()
 
 const isWalletReward = computed(() => appStore.config?.affiliate?.reward_mode === 'gpt_random_wallet')
+const rewardRulesKey = computed(() => !isWalletReward.value
+  ? 'personalCenter.affiliate.subtitle'
+  : (appStore.config?.affiliate?.confirm_days ?? 7) <= 0
+    ? 'personalCenter.affiliate.walletRulesImmediate'
+    : 'personalCenter.affiliate.walletRules')
 const crediting = ref(false)
 const creditWallet = async () => {
   if (crediting.value || !isWalletReward.value) return
