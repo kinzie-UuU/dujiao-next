@@ -91,6 +91,8 @@ def execute(args):
         tag = '<script defer src="/' + ASSET + '?v=' + sha(script)[:16] + '"></script>'
         changed = []
         for path in sorted(htmlroot.rglob('*.html')):
+            # AppleDouble metadata is binary, not a storefront entry. Preserve it.
+            if path.name.startswith('._'): continue
             content = path.read_text()
             if '</body>' not in content: continue
             if ASSET in content: raise ValueError('Unexpected existing panel reference')

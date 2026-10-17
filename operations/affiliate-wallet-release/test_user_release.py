@@ -26,6 +26,7 @@ class UserReleaseTests(unittest.TestCase):
         for name in ('index.html', '_spa.html', 'guide.html'):
             (self.live / 'html' / name).write_text('<body>live overlay</body>')
         (self.live / 'html' / 'old.js').write_text('preserve overlay')
+        (self.live / 'html' / '._index.html').write_bytes(b'\x00\xa3metadata')
         (self.live / 'nginx' / 'nginx.conf').write_text('preserve all nginx configuration')
         (self.live / 'nginx' / 'modules').symlink_to('/usr/lib/nginx/modules')
         self.script = self.root / 'panel.js'
@@ -87,6 +88,8 @@ class UserReleaseTests(unittest.TestCase):
         finally:
             os.umask(previous)
         self.assertTrue(result['deployed'])
+        self.assertEqual((self.live / 'html' / '._index.html').read_bytes(), b'\x00\xa3metadata')
+        self.assertNotIn('._index.html', result['changed_html'])
         self.assertEqual((self.live / 'html' / release.ASSET).stat().st_mode & 0o777, 0o644)
         self.assertEqual((self.live / 'html' / 'old.js').read_text(), 'preserve overlay')
         self.assertTrue((self.live / 'nginx' / 'modules').is_symlink())
