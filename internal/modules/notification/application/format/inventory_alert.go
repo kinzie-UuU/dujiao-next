@@ -20,6 +20,9 @@ func BuildInventoryAlertDispatchPayloads(
 	payload queue.NotificationDispatchPayload,
 	rows []dashboard.InventoryAlertRow,
 ) []queue.NotificationDispatchPayload {
+	if !setting.InventoryAlertEnabled {
+		return nil
+	}
 	filtered := filterInventoryAlertRows(rows, setting.IgnoredProductIDs)
 	if len(filtered) == 0 {
 		return nil
