@@ -103,6 +103,19 @@ class UserReleaseTests(unittest.TestCase):
         self.assertEqual(release.yaml.safe_load(self.compose.read_text())['services']['api']['image'], 'untouched-api')
         self.assertEqual(len([c for c in self.commands if c[:2] == ('docker', 'build')]), 2)
 
+    def test_upgrades_identical_panel_url_version(self):
+        script = self.script.read_bytes()
+        old = '<script defer src="/' + release.ASSET + '?v=' + release.sha(script)[:16] + '"></script>'
+        for path in (self.live / 'html').glob('*.html'):
+            if path.name.startswith('._'): continue
+            path.write_text(path.read_text().replace('</body>', old + '</body>'))
+        (self.live / 'html' / release.ASSET).write_bytes(script)
+        self.prepare()
+        result = release.execute(self.args)
+        self.assertTrue(result['deployed'])
+        self.assertIn('?v=' + release.sha(script)[:17] + '"', (self.live / 'html' / '_spa.html').read_text())
+        self.assertEqual((self.live / 'html' / release.ASSET).read_bytes(), script)
+
     def test_legacy_compose_publishes_and_rolls_back(self):
         self.compose_v2 = False
         self.prepare()

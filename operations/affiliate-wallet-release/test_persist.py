@@ -47,7 +47,7 @@ class PersistTests(unittest.TestCase):
         self.assertTrue(result['deployed'])
         self.assertFalse(result['refresh_executed'])
         template = (self.root / 'template.html').read_text()
-        tag = '<script defer src="/uuuaigc-affiliate-wallet.js?v=' + self.args.script_sha256[:16] + '"></script>'
+        tag = '<script defer src="/uuuaigc-affiliate-wallet.js?v=' + self.args.script_sha256[:17] + '"></script>'
         self.assertEqual(template, '<body>existing overlay' + tag + '\n</body>\n')
         self.assertIn('old.js other.css uuuaigc-affiliate-wallet.js; do', (self.root / 'refresh.sh').read_text())
         self.assertEqual((self.root / 'refresh.sh').stat().st_mode & 0o777, 0o755)
@@ -55,6 +55,26 @@ class PersistTests(unittest.TestCase):
         self.assertEqual((self.root / 'runtime-assets' / 'old.js').read_text(), 'existing')
         self.assertFalse(persist.REFRESH_LOCK.exists())
         self.assertEqual((Path(result['backup']) / 'template.html').read_bytes(), self.original[1]['template.html'])
+
+    def test_upgrades_exact_old_query_without_duplicating_asset(self):
+        first = persist.candidate(self.original[1], self.script.read_bytes())
+        new_query = self.args.script_sha256[:17]
+        old_query = self.args.script_sha256[:16]
+        first['template.html'] = first['template.html'].replace(new_query.encode(), old_query.encode())
+        for name, data in first.items():
+            (self.root / name).write_bytes(data)
+        old_refresh = (self.root / 'refresh.sh').read_bytes()
+        self.prepare()
+        persist.execute(self.args)
+        self.assertIn('?v=' + new_query, (self.root / 'template.html').read_text())
+        self.assertEqual((self.root / 'template.html').read_text().count(persist.ASSET), 1)
+        self.assertEqual((self.root / 'refresh.sh').read_bytes(), old_refresh)
+        self.assertEqual((self.root / persist.PATHS[2]).read_bytes(), self.script.read_bytes())
+        for name, bad in [('script', dict(first, **{persist.PATHS[2]: b'drift'})),
+                          ('duplicate', dict(first, **{'template.html': first['template.html'] + first['template.html']})),
+                          ('loop', dict(first, **{'refresh.sh': first['refresh.sh'].replace(persist.ASSET.encode(), b'other.js')}))]:
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                persist.candidate(bad, self.script.read_bytes())
 
     def test_write_failure_restores_contents_modes_and_absence(self):
         self.prepare()
