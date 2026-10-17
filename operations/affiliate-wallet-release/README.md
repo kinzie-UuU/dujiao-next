@@ -9,3 +9,5 @@ API/admin 控制沿用 `../security-backports-release/README.md` 中 SHA 固定�
 API 上线且前台入口验证后，运行 `enable.py --binary-sha256 <新版本实际SHA>` 作只读检查，再加 `--production-write` 写入唯一 `affiliate_config`。脚本持有生产锁、校验二进制/迁移列/商品名单、拒绝覆盖不同的现存配置、先备份数据库；不修改价格库存、支付配置或用户账目。配置读取直达数据库，无需清空 Redis。不要启用旧现金返利商品开关。
 
 `approved-config.json` 是用户批准的目标配置，不代表已应用生产。旧 `docs/gpt-wallet-rewards.disabled.json` 保留为原分支历史草案。发布实测结果另记录，单元测试不可宣称真实支付验收。
+
+定时刷新持久化：`persist.py` 以相同脚本摘要更新 `/opt/uuuaigc-prerender/template.html`、刷新资产列表和持久 JS，使用全局生产锁及刷新任务 mkdir 锁、三个文件的精确哈希计划、备份和失败恢复。发布窗口应记录并暂时停止当前 active 的 prerender/reset/price 定时器，等待正在运行的刷新完成，重新盘点用户资源后执行 user_release 和 persist，再恢复原有定时器；禁止忽略状态漂移继续部署。强制一次跳过索引提交的 prerender 刷新并回读脚本，验证不会被下周期覆盖。
