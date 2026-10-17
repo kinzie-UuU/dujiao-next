@@ -62,7 +62,7 @@ func (s rewardSettings) GetAffiliateSetting() (settingsintegration.AffiliateSett
 }
 
 func TestGPTRewardEligibilityAndIdempotency(t *testing.T) {
-	for _, scenario := range []string{"eligible", "mixed", "other-product", "not-listed", "child", "unpaid", "self", "usd", "disabled", "zero", "low-value", "refunded", "partial-refund", "child-refund", "stale-reader"} {
+	for _, scenario := range []string{"all-rounding-cap", "all-other-product", "all-future-product", "all-mixed", "eligible", "mixed", "other-product", "not-listed", "child", "unpaid", "self", "usd", "disabled", "zero", "low-value", "refunded", "partial-refund", "child-refund", "stale-reader"} {
 		t.Run(scenario, func(t *testing.T) {
 			_, db, store := setupAffiliateServiceTest(t)
 			if err := db.AutoMigrate(&orderdomain.Order{}, &orderdomain.OrderItem{}, &affiliatedomain.Commission{}); err != nil {
@@ -77,6 +77,29 @@ func TestGPTRewardEligibilityAndIdempotency(t *testing.T) {
 			setting := settingsintegration.AffiliateSetting{Enabled: true, RewardMode: settingsintegration.AffiliateRewardModeGPTWallet, EligibleProductIDs: []uint{1, 2}, ConfirmDays: 7}
 			wantReward := false
 			switch scenario {
+			case "all-rounding-cap", "all-other-product", "all-future-product", "all-mixed":
+				wantReward = true
+				setting.AllProducts = true
+				setting.EligibleProductIDs = nil
+				setting.ConfirmDays = 0
+				order.Items[0].ProductID = 2
+				products[1].IsAffiliateEnabled = false
+				if scenario == "all-future-product" {
+					order.Items[0].ProductID = 999
+					products = nil // New/deleted catalog entries do not affect paid snapshots.
+				}
+				if scenario == "all-rounding-cap" {
+					order.TotalAmount = money.FromDecimal(decimal.RequireFromString("2.99"))
+					order.Children = nil
+					order.Items = nil
+					for id := uint(11); id <= 13; id++ {
+						order.Children = append(order.Children, orderdomain.Order{ID: id, TotalAmount: m(100), Items: []orderdomain.OrderItem{{ProductID: 2, TotalPrice: m(100)}}})
+					}
+				}
+				if scenario == "all-mixed" {
+					order.Children = []orderdomain.Order{{ID: 11, TotalAmount: m(100), Items: []orderdomain.OrderItem{{ProductID: 1, TotalPrice: m(100)}}}, {ID: 12, TotalAmount: m(100), Items: order.Items}}
+					order.TotalAmount = m(200)
+				}
 			case "eligible":
 				wantReward = true
 			case "mixed":
@@ -166,6 +189,14 @@ func TestGPTRewardEligibilityAndIdempotency(t *testing.T) {
 			if scenario == "mixed" && (first.RewardOrderAmounts["11"] != "100.00" || first.RewardOrderAmounts["12"] != "0.00") {
 				t.Fatalf("wrong mixed snapshot: %+v", first.RewardOrderAmounts)
 			}
+			if scenario == "all-rounding-cap" {
+				if first.RewardOrderAmounts["10"] != "2.99" || first.RewardOrderAmounts["11"] != "1.00" || first.RewardOrderAmounts["12"] != "1.00" || first.RewardOrderAmounts["13"] != "0.99" {
+					t.Fatalf("rounded shares exceeded paid amount or were unstable: %+v", first.RewardOrderAmounts)
+				}
+				if first.CommissionAmount.Decimal.GreaterThan(decimal.NewFromInt(2)) {
+					t.Fatal("reward exceeded paid whole yuan")
+				}
+			}
 			value := first.CommissionAmount.Decimal
 			if value.LessThan(decimal.NewFromInt(1)) || value.GreaterThan(decimal.NewFromInt(5)) || !value.Equal(value.Truncate(0)) {
 				t.Fatalf("not integer 1-5: %s", value)
@@ -173,7 +204,11 @@ func TestGPTRewardEligibilityAndIdempotency(t *testing.T) {
 			if scenario == "low-value" && !value.Equal(decimal.NewFromInt(1)) {
 				t.Fatal("reward exceeded spend")
 			}
-			if first.Status != constants.AffiliateCommissionStatusPendingConfirm || first.ConfirmAt == nil {
+			if setting.AllProducts {
+				if first.Status != constants.AffiliateCommissionStatusAvailable || first.AvailableAt == nil {
+					t.Fatal("zero-day all-product reward is not immediately available")
+				}
+			} else if first.Status != constants.AffiliateCommissionStatusPendingConfirm || first.ConfirmAt == nil {
 				t.Fatal("confirmation window ignored")
 			}
 			for i := 0; i < 5; i++ {
@@ -184,6 +219,31 @@ func TestGPTRewardEligibilityAndIdempotency(t *testing.T) {
 			rows, err = store.ListCommissionsByOrder(order.ID, nil)
 			if err != nil || len(rows) != 1 || !rows[0].CommissionAmount.Decimal.Equal(value) {
 				t.Fatal("repeated callback rerolled reward")
+			}
+			if scenario == "all-mixed" {
+				if first.RewardOrderAmounts["11"] != "100.00" || first.RewardOrderAmounts["12"] != "100.00" || first.RewardOrderAmounts["10"] != "200.00" {
+					t.Fatalf("all-product mixed snapshot: %+v", first.RewardOrderAmounts)
+				}
+				// A later policy/catalog change cannot exempt the non-GPT child's refund.
+				changed := affiliateapp.NewService(store, nil, rewardOrderReader{order}, nil, rewardSettings{settingsintegration.AffiliateSetting{}})
+				if err := store.WithinTransaction(func(tx affiliatecontract.Store) error {
+					return changed.HandleOrderRefunded(tx, order, decimal.NewFromInt(100), decimal.Zero, "other-refund", 12)
+				}); err != nil {
+					t.Fatal(err)
+				}
+				rows, _ = store.ListCommissionsByOrder(order.ID, nil)
+				if !rows[0].CommissionAmount.Decimal.Equal(value.Sub(value.Div(decimal.NewFromInt(2)).Round(2))) {
+					t.Fatal("non-GPT child refund did not use frozen all-product snapshot")
+				}
+				if err := store.WithinTransaction(func(tx affiliatecontract.Store) error {
+					return changed.HandleOrderRefunded(tx, order, decimal.NewFromInt(100), decimal.NewFromInt(100), "remaining-refund", 11)
+				}); err != nil {
+					t.Fatal(err)
+				}
+				rows, _ = store.ListCommissionsByOrder(order.ID, nil)
+				if !rows[0].CommissionAmount.Decimal.IsZero() {
+					t.Fatal("full refund did not revoke all-product reward")
+				}
 			}
 			if scenario == "mixed" {
 				// Product eligibility changes after payment must not alter the stored refund basis.

@@ -434,21 +434,28 @@ func (s *Service) calculateCommissionBaseAmountForSetting(order *orderdomain.Ord
 // rewardOrderSnapshot freezes the eligible net spend of every checkout order.
 func (s *Service) rewardOrderSnapshot(order *orderdomain.Order, setting settingsintegration.AffiliateSetting) (decimal.Decimal, map[string]string, map[string]string, error) {
 	amounts, totals := map[string]string{}, map[string]string{}
-	if order == nil || s.productRepo == nil {
+	if order == nil {
 		return decimal.Zero, amounts, totals, nil
 	}
-	products, err := s.productRepo.ListByIDs(collectAffiliateProductIDs(order))
-	if err != nil {
-		return decimal.Zero, nil, nil, err
-	}
-	listed := map[uint]bool{}
-	for _, id := range setting.EligibleProductIDs {
-		listed[id] = true
-	}
 	eligible := map[uint]bool{}
-	for _, p := range products {
-		slug := strings.ToLower(p.Slug)
-		eligible[p.ID] = listed[p.ID] && (strings.HasPrefix(slug, "gpt-") || strings.HasPrefix(slug, "chatgpt-"))
+	// All-product rewards use the paid order snapshot, including products later
+	// removed from the catalog. Existing allowlist policies retain their semantics.
+	if !setting.AllProducts {
+		if s.productRepo == nil {
+			return decimal.Zero, amounts, totals, nil
+		}
+		products, err := s.productRepo.ListByIDs(collectAffiliateProductIDs(order))
+		if err != nil {
+			return decimal.Zero, nil, nil, err
+		}
+		listed := map[uint]bool{}
+		for _, id := range setting.EligibleProductIDs {
+			listed[id] = true
+		}
+		for _, p := range products {
+			slug := strings.ToLower(p.Slug)
+			eligible[p.ID] = listed[p.ID] && (strings.HasPrefix(slug, "gpt-") || strings.HasPrefix(slug, "chatgpt-"))
+		}
 	}
 	orders := order.Children
 	if len(orders) == 0 {
@@ -458,7 +465,7 @@ func (s *Service) rewardOrderSnapshot(order *orderdomain.Order, setting settings
 	for _, current := range orders {
 		net := decimal.Zero
 		for _, item := range current.Items {
-			if eligible[item.ProductID] {
+			if setting.AllProducts || eligible[item.ProductID] {
 				value := item.TotalPrice.Decimal.Sub(item.CouponDiscount.Decimal)
 				if value.IsPositive() {
 					net = net.Add(value)
@@ -479,10 +486,18 @@ func (s *Service) rewardOrderSnapshot(order *orderdomain.Order, setting settings
 	if total.GreaterThan(order.TotalAmount.Decimal) && total.IsPositive() {
 		factor := order.TotalAmount.Decimal.Div(total)
 		total = decimal.Zero
-		for key, value := range amounts {
-			scaled := decimal.RequireFromString(value).Mul(factor).Round(2)
+		remaining := order.TotalAmount.Decimal.Round(2)
+		// Rounded child shares must never add up beyond the actual parent payment.
+		// Use checkout order rather than map iteration for stable allocation.
+		for _, current := range orders {
+			key := strconv.FormatUint(uint64(current.ID), 10)
+			scaled := decimal.RequireFromString(amounts[key]).Mul(factor).Round(2)
+			if scaled.GreaterThan(remaining) {
+				scaled = remaining
+			}
 			amounts[key] = scaled.StringFixed(2)
 			total = total.Add(scaled)
+			remaining = remaining.Sub(scaled)
 		}
 	}
 	key := strconv.FormatUint(uint64(order.ID), 10)

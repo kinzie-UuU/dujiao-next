@@ -15,6 +15,7 @@ const loading = ref(false)
 const form = reactive({
   enabled: false,
   reward_mode: '',
+  all_products: false,
   eligible_product_ids_text: '',
   commission_rate: 0,
   confirm_days: 0,
@@ -58,6 +59,7 @@ const fetchSettings = async () => {
     if (res.data && res.data.data) {
       const data = res.data.data as AdminAffiliateSetting
       form.reward_mode = data.reward_mode || ''
+      form.all_products = data.all_products === true
       form.eligible_product_ids_text = (data.eligible_product_ids || []).join(', ')
       form.enabled = Boolean(data.enabled)
       form.commission_rate = clampNumber(data.commission_rate, 0, 100, 0)
@@ -73,7 +75,7 @@ const fetchSettings = async () => {
 }
 
 const saveSettings = async () => {
-  const ids = form.eligible_product_ids_text.split(/[\s,，]+/).filter(Boolean).map(Number)
+  const ids = (form.all_products ? '' : form.eligible_product_ids_text).split(/[\s,，]+/).filter(Boolean).map(Number)
   if (ids.some(id => !Number.isSafeInteger(id) || id <= 0)) {
     notifyError(t('admin.settings.affiliate.invalidProductIds'))
     return
@@ -82,6 +84,7 @@ const saveSettings = async () => {
   try {
     const payload = {
       reward_mode: form.reward_mode,
+      all_products: form.all_products,
       eligible_product_ids: [...new Set(ids)],
       enabled: form.enabled,
       commission_rate: clampNumber(form.commission_rate, 0, 100, 0),
@@ -93,6 +96,7 @@ const saveSettings = async () => {
     const data = response.data?.data as AdminAffiliateSetting | undefined
     if (data) {
       form.reward_mode = data.reward_mode || ''
+      form.all_products = data.all_products === true
       form.eligible_product_ids_text = (data.eligible_product_ids || []).join(', ')
       form.enabled = Boolean(data.enabled)
       form.commission_rate = clampNumber(data.commission_rate, 0, 100, payload.commission_rate)
@@ -136,9 +140,16 @@ onMounted(fetchSettings)
         </div>
         <div v-if="form.reward_mode === 'gpt_random_wallet'" class="space-y-2">
           <p class="text-sm text-muted-foreground">{{ t('admin.settings.affiliate.walletRules') }}</p>
-          <Label for="affiliate-products">{{ t('admin.settings.affiliate.eligibleProducts') }}</Label>
-          <Input id="affiliate-products" v-model="form.eligible_product_ids_text" />
-          <p class="text-xs text-muted-foreground">{{ t('admin.settings.affiliate.eligibleProductsHint') }}</p>
+          <div class="flex items-center gap-3 rounded-lg border border-border bg-muted/20 px-4 py-3">
+            <Switch id="affiliate-all-products" v-model="form.all_products" />
+            <Label for="affiliate-all-products">{{ t('admin.settings.affiliate.allProducts') }}</Label>
+          </div>
+          <p v-if="form.all_products" class="text-xs text-muted-foreground">{{ t('admin.settings.affiliate.allProductsHint') }}</p>
+          <div v-else class="space-y-2">
+            <Label for="affiliate-products">{{ t('admin.settings.affiliate.eligibleProducts') }}</Label>
+            <Input id="affiliate-products" v-model="form.eligible_product_ids_text" />
+            <p class="text-xs text-muted-foreground">{{ t('admin.settings.affiliate.eligibleProductsHint') }}</p>
+          </div>
         </div>
         <div class="grid grid-cols-1 gap-6 md:grid-cols-3">
           <div v-if="form.reward_mode !== 'gpt_random_wallet'" class="space-y-2">
@@ -149,7 +160,7 @@ onMounted(fetchSettings)
           <div class="space-y-2">
             <label class="text-xs font-medium text-muted-foreground">{{ t('admin.settings.affiliate.confirmDays') }}</label>
             <Input v-model.number="form.confirm_days" type="number" min="0" max="3650" step="1" />
-            <p class="text-xs text-muted-foreground">{{ t('admin.settings.affiliate.confirmDaysHint') }}</p>
+            <p class="text-xs text-muted-foreground">{{ t(form.reward_mode === 'gpt_random_wallet' ? 'admin.settings.affiliate.walletConfirmDaysHint' : 'admin.settings.affiliate.confirmDaysHint') }}</p>
           </div>
           <div v-if="form.reward_mode !== 'gpt_random_wallet'" class="space-y-2">
             <label class="text-xs font-medium text-muted-foreground">{{ t('admin.settings.affiliate.minWithdrawAmount') }}</label>

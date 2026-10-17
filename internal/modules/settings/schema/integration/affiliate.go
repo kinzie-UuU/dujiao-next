@@ -27,6 +27,7 @@ const AffiliateRewardModeGPTWallet = "gpt_random_wallet"
 
 // AffiliateSetting 是推广返利设置的 typed representation。
 type AffiliateSetting struct {
+	AllProducts        bool     `json:"all_products"`
 	RewardMode         string   `json:"reward_mode"`
 	EligibleProductIDs []uint   `json:"eligible_product_ids"`
 	Enabled            bool     `json:"enabled"`
@@ -87,8 +88,8 @@ func ValidateAffiliateSetting(setting AffiliateSetting) error {
 	if normalized.RewardMode != "" && normalized.RewardMode != AffiliateRewardModeGPTWallet {
 		return fmt.Errorf("%w: 未知奖励模式", ErrAffiliateConfigInvalid)
 	}
-	if normalized.Enabled && normalized.RewardMode == AffiliateRewardModeGPTWallet && len(normalized.EligibleProductIDs) == 0 {
-		return fmt.Errorf("%w: 请配置参与奖励的 GPT 商品", ErrAffiliateConfigInvalid)
+	if normalized.Enabled && normalized.RewardMode == AffiliateRewardModeGPTWallet && !normalized.AllProducts && len(normalized.EligibleProductIDs) == 0 {
+		return fmt.Errorf("%w: 请配置参与奖励的商品范围", ErrAffiliateConfigInvalid)
 	}
 	if normalized.CommissionRate < affiliateCommissionRateMin || normalized.CommissionRate > affiliateCommissionRateMax {
 		return fmt.Errorf("%w: 返利比例必须在 0-100 之间", ErrAffiliateConfigInvalid)
@@ -105,6 +106,9 @@ func ValidateAffiliateSetting(setting AffiliateSetting) error {
 // DecodeAffiliateSetting 从持久化 JSON 解码，并对缺失字段使用 fallback。
 func DecodeAffiliateSetting(raw jsonmap.JSON, fallback AffiliateSetting) AffiliateSetting {
 	result := fallback
+	if value, exists := raw["all_products"]; exists {
+		result.AllProducts = settingsvalue.ParseBool(value)
+	}
 	if value, exists := raw["reward_mode"]; exists {
 		result.RewardMode, _ = value.(string)
 	}
@@ -142,6 +146,7 @@ func DecodeAffiliateSetting(raw jsonmap.JSON, fallback AffiliateSetting) Affilia
 func EncodeAffiliateSetting(setting AffiliateSetting) jsonmap.JSON {
 	normalized := NormalizeAffiliateSetting(setting)
 	return jsonmap.JSON{
+		"all_products":         normalized.AllProducts,
 		"reward_mode":          normalized.RewardMode,
 		"eligible_product_ids": normalized.EligibleProductIDs,
 		"enabled":              normalized.Enabled,

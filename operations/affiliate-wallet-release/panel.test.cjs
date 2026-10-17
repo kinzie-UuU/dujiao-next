@@ -12,7 +12,7 @@ async function fixture(opened = true, options = {}) {
     calls.push({url, opts});
     if (url.endsWith('/affiliate/dashboard') && ++dashboardCalls === 2 && options.failRefreshOnce) throw new Error('余额刷新失败');
     let data = {};
-    if (url.endsWith('/public/config')) data = { affiliate: { enabled: true, reward_mode: 'gpt_random_wallet', confirm_days: options.confirmDays ?? 7 } };
+    if (url.endsWith('/public/config')) data = { affiliate: { enabled: true, reward_mode: 'gpt_random_wallet', confirm_days: options.confirmDays ?? 7, all_products: options.allProducts ?? false } };
     else if (url.endsWith('/affiliate/dashboard')) data = { opened, affiliate_code: 'ABCD1234', available_commission: available, wallet_credited_commission: credited };
     else if (url.includes('/affiliate/commissions')) data = options.records ?? [{ commission_amount: '3', status: 'wallet_credited', created_at: '2026-10-17' }];
     else if (url.endsWith('/affiliate/open')) { opened = true; }
@@ -133,4 +133,17 @@ test('successful credit with failed readback locks stale transfer until retry su
     assert.equal(panel.querySelector('[data-action="credit"]').disabled, true);
     assert.equal(panel.querySelector('[role="status"]').textContent, '');
   } finally { dom.window.close(); }
+});
+
+ test('all-products policy is explicit and legacy scope stays accurate', async () => {
+  for (const allProducts of [true, false]) {
+    const {dom, window} = await fixture(true, {allProducts, confirmDays: 0});
+    try {
+      const text = window.document.querySelector('.uaw-panel').textContent;
+      assert.match(text, allProducts ? /本站任意商品/ : /指定 GPT 商品/);
+      if (allProducts) assert.doesNotMatch(text, /GPT/);
+      assert.match(text, /人民币主订单/);
+      assert.match(text, /不足 1 元不奖励/);
+    } finally { dom.window.close(); }
+  }
 });

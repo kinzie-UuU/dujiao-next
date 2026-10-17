@@ -145,3 +145,20 @@ func TestTypedSettingJSONNormalizersComposeDefaultDecodeAndEncode(t *testing.T) 
 		t.Fatalf("upstream JSON normalizer did not restore minimum: %#v", upstream)
 	}
 }
+
+func TestAffiliateAllProductsCodecExplicitOptIn(t *testing.T) {
+	legacy := DecodeAffiliateSetting(jsonmap.JSON{"reward_mode": AffiliateRewardModeGPTWallet, "eligible_product_ids": []uint{1}}, DefaultAffiliateSetting())
+	if legacy.AllProducts {
+		t.Fatal("legacy settings widened implicitly")
+	}
+	all := DecodeAffiliateSetting(jsonmap.JSON{"all_products": true}, legacy)
+	if !all.AllProducts || EncodeAffiliateSetting(all)["all_products"] != true {
+		t.Fatal("all-product flag lost")
+	}
+	if !DecodeAffiliateSetting(jsonmap.JSON{}, all).AllProducts {
+		t.Fatal("missing field ignored fallback")
+	}
+	if DecodeAffiliateSetting(jsonmap.JSON{"all_products": false}, all).AllProducts {
+		t.Fatal("explicit disable ignored")
+	}
+}

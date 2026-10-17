@@ -96,3 +96,19 @@ func TestUpdateAffiliateSettingNormalize(t *testing.T) {
 		t.Fatalf("expected saved commission rate 100, got %v", saved["commission_rate"])
 	}
 }
+
+func TestAllProductsWalletSettingRoundTrip(t *testing.T) {
+	svc := NewService(newMockSettingRepo())
+	_, err := svc.UpdateAffiliateSetting(settingsintegration.AffiliateSetting{Enabled: true, RewardMode: settingsintegration.AffiliateRewardModeGPTWallet, AllProducts: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, err := svc.GetAffiliateSetting()
+	if err != nil || !actual.AllProducts || !actual.Enabled || len(actual.EligibleProductIDs) != 0 {
+		t.Fatalf("all-product policy lost: %+v, %v", actual, err)
+	}
+	actual.AllProducts = false
+	if _, err := svc.UpdateAffiliateSetting(actual); err == nil {
+		t.Fatal("empty legacy allowlist became all-products implicitly")
+	}
+}
