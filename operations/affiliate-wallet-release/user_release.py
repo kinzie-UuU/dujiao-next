@@ -97,16 +97,22 @@ def execute(args):
         expected = yaml.safe_load(before); expected['services']['user']['image'] = image
         if yaml.safe_load(after) != expected: raise ValueError('Unrelated compose change')
         htmlroot = folder / 'html'
-        if (htmlroot / ASSET).exists(): raise ValueError('Panel already exists; review upgrade separately')
-        tag = '<script defer src="/' + ASSET + '?v=' + sha(script)[:16] + '"></script>'
+        if (htmlroot / ASSET).exists() and (htmlroot / ASSET).read_bytes() != script:
+            raise ValueError('Different existing panel requires review')
+        tag = '<script defer src="/' + ASSET + '?v=' + sha(script)[:17] + '"></script>'
+        previous_tag = '<script defer src="/' + ASSET + '?v=' + sha(script)[:16] + '"></script>'
         changed = []
         for path in sorted(htmlroot.rglob('*.html')):
             # AppleDouble metadata is binary, not a storefront entry. Preserve it.
             if path.name.startswith('._'): continue
             content = path.read_text()
             if '</body>' not in content: continue
-            if ASSET in content: raise ValueError('Unexpected existing panel reference')
-            path.write_text(content.replace('</body>', tag + '\n</body>'))
+            if ASSET in content:
+                if content.count(previous_tag) != 1 or content.count(ASSET) != 1:
+                    raise ValueError('Unexpected existing panel reference')
+                path.write_text(content.replace(previous_tag, tag))
+            else:
+                path.write_text(content.replace('</body>', tag + '\n</body>'))
             changed.append(str(path.relative_to(htmlroot)))
         if not {'index.html', '_spa.html'} <= set(changed): raise ValueError('Missing storefront entries')
         (htmlroot / ASSET).write_bytes(script)

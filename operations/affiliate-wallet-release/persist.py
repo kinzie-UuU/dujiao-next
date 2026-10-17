@@ -73,17 +73,28 @@ def write_file(path, data, metadata):
 def candidate(content, script):
     template = content['template.html'].decode()
     refresh = content['refresh.sh'].decode()
-    if content[PATHS[2]] is not None or ASSET in template or ASSET in refresh:
-        raise ValueError('Existing affiliate persistence requires separate upgrade review')
     if template.count('</body>') != 1:
         raise ValueError('Expected one template body ending')
-    tag = '<script defer src="/' + ASSET + '?v=' + sha(script)[:16] + '"></script>'
-    template = template.replace('</body>', tag + '\n</body>')
+    tag_prefix = '<script defer src="/' + ASSET + '?v='
+    old_tag = tag_prefix + sha(script)[:16] + '"></script>'
+    tag = tag_prefix + sha(script)[:17] + '"></script>'
     # Only the actual persistent asset loop is eligible for this one-token edit.
     pattern = re.compile(r'(?m)^(for asset_name in [A-Za-z0-9_. -]+)(; do)$')
-    refresh, count = pattern.subn(lambda match: match[1] + ' ' + ASSET + match[2], refresh)
-    if count != 1 or '"$runtime_asset_dir/$asset_name"' not in refresh:
+    loops = list(pattern.finditer(refresh))
+    if len(loops) != 1 or '"$runtime_asset_dir/$asset_name"' not in refresh:
         raise ValueError('Expected one known runtime asset loop')
+    if content[PATHS[2]] is not None:
+        # This upgrade changes only a cached URL, never existing script bytes or the loop.
+        if (content[PATHS[2]] != script or template.count(ASSET) != 1 or
+                template.count(old_tag) != 1 or refresh.count(ASSET) != 1 or
+                loops[0][1].split()[3:].count(ASSET) != 1):
+            raise ValueError('Existing affiliate persistence differs from exact supported upgrade')
+        template = template.replace(old_tag, tag)
+    else:
+        if ASSET in template or ASSET in refresh:
+            raise ValueError('Incomplete affiliate persistence')
+        template = template.replace('</body>', tag + '\n</body>')
+        refresh = pattern.sub(lambda match: match[1] + ' ' + ASSET + match[2], refresh)
     subprocess.run(['sh', '-n'], input=refresh, text=True, check=True)
     return {'template.html': template.encode(), 'refresh.sh': refresh.encode(), PATHS[2]: script}
 
