@@ -127,8 +127,13 @@ class UserReleaseTests(unittest.TestCase):
 
     def test_reviewed_content_upgrade_preserves_overlays(self):
         self.install_previous()
+        payment_page = self.live / 'html' / 'recharge-pay.html'
+        payment_bytes = b'<body>independent payment page</body>'
+        payment_page.write_bytes(payment_bytes)
         self.prepare()
         result = release.execute(self.args)
+        self.assertEqual(payment_page.read_bytes(), payment_bytes)
+        self.assertNotIn('recharge-pay.html', result['changed_html'])
         self.assertEqual(result['previous_script_sha256'], self.args.previous_script_sha256)
         self.assertEqual((self.live / 'html' / release.ASSET).read_bytes(), self.script.read_bytes())
         for name in ('index.html', '_spa.html', 'guide.html'):
