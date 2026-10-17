@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -36,6 +37,7 @@ class UserReleaseTests(unittest.TestCase):
         self.commands = []
         self.fail_publication = False
         self.mounts = []
+        self.compose_v2 = True
         for name, value in [('APP', self.root), ('COMPOSE', self.compose), ('run', self.fake_run)]:
             p = patch.object(release, name, value)
             p.start()
@@ -46,6 +48,11 @@ class UserReleaseTests(unittest.TestCase):
 
     def fake_run(self, *args):
         self.commands.append(args)
+        if args == ('docker', 'compose', 'version'):
+            if not self.compose_v2: raise subprocess.CalledProcessError(125, args)
+            return 'v2'
+        if args == ('docker-compose', '--version'): return '1.29.2'
+        if args[0] == 'docker-compose': args = ('docker', 'compose') + args[1:]
         if args[:2] == ('docker', 'cp'):
             source = 'nginx' if args[2].endswith('/etc/nginx') else 'html'
             shutil.copytree(self.live / source, args[3], symlinks=True)
@@ -95,6 +102,16 @@ class UserReleaseTests(unittest.TestCase):
         self.assertTrue((self.live / 'nginx' / 'modules').is_symlink())
         self.assertEqual(release.yaml.safe_load(self.compose.read_text())['services']['api']['image'], 'untouched-api')
         self.assertEqual(len([c for c in self.commands if c[:2] == ('docker', 'build')]), 2)
+
+    def test_legacy_compose_publishes_and_rolls_back(self):
+        self.compose_v2 = False
+        self.prepare()
+        self.fail_publication = True
+        before = release.files(self.live / 'html')
+        with patch.object(release.time, 'sleep'), self.assertRaisesRegex(ValueError, 'lacks panel'):
+            release.execute(self.args)
+        self.assertEqual(release.files(self.live / 'html'), before)
+        self.assertEqual(len([c for c in self.commands if c[0] == 'docker-compose' and '-f' in c]), 2)
 
     def test_rolls_back_full_live_tree_with_persistent_image(self):
         self.prepare()
