@@ -90,7 +90,11 @@ func TestGPTRewardEligibilityAndIdempotency(t *testing.T) {
 				}
 				if scenario == "all-rounding-cap" {
 					order.TotalAmount = money.FromDecimal(decimal.RequireFromString("2.99"))
-					order.Children = []orderdomain.Order{{ID: 11, TotalAmount: m(100), Items: order.Items}, {ID: 12, TotalAmount: m(100), Items: order.Items}, {ID: 13, TotalAmount: m(100), Items: order.Items}}
+					order.Children = nil
+					order.Items = nil
+					for id := uint(11); id <= 13; id++ {
+						order.Children = append(order.Children, orderdomain.Order{ID: id, TotalAmount: m(100), Items: []orderdomain.OrderItem{{ProductID: 2, TotalPrice: m(100)}}})
+					}
 				}
 				if scenario == "all-mixed" {
 					order.Children = []orderdomain.Order{{ID: 11, TotalAmount: m(100), Items: []orderdomain.OrderItem{{ProductID: 1, TotalPrice: m(100)}}}, {ID: 12, TotalAmount: m(100), Items: order.Items}}
