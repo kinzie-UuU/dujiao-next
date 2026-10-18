@@ -117,15 +117,15 @@ func receiptEvidence(t *testing.T, db *gorm.DB, id uint) paymentdomain.ManualPay
 	if err := db.First(&payment, id).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Exec(`CREATE TABLE IF NOT EXISTS payment_risk_reservations (order_no TEXT PRIMARY KEY, identity_hash TEXT, amount_cents INTEGER, status TEXT, policy_version TEXT, created_at INTEGER)`).Error; err != nil {
+	if err := db.Exec(`CREATE TABLE IF NOT EXISTS payment_risk_reservations (order_no TEXT PRIMARY KEY, identity_hash TEXT, amount_cents INTEGER, status TEXT, policy_version TEXT, created_at REAL)`).Error; err != nil {
 		t.Fatal(err)
 	}
 	if payment.OrderID > 0 {
-		if err := db.Exec(`INSERT OR REPLACE INTO payment_risk_reservations SELECT order_no, '', CAST(ROUND(total_amount*100) AS INTEGER),'allowed','2026-10-18',? FROM orders WHERE id=?`, time.Now().Unix(), payment.OrderID).Error; err != nil {
+		if err := db.Exec(`INSERT OR REPLACE INTO payment_risk_reservations SELECT order_no, '', CAST(ROUND(total_amount*100) AS INTEGER),'allowed','2026-10-18',? FROM orders WHERE id=?`, float64(time.Now().UnixNano())/1e9, payment.OrderID).Error; err != nil {
 			t.Fatal(err)
 		}
 	} else {
-		if err := db.Exec(`INSERT OR REPLACE INTO payment_risk_reservations SELECT recharge_no, '', CAST(ROUND(amount*100) AS INTEGER),'allowed','2026-10-18',? FROM wallet_recharge_orders WHERE payment_id=?`, time.Now().Unix(), payment.ID).Error; err != nil {
+		if err := db.Exec(`INSERT OR REPLACE INTO payment_risk_reservations SELECT recharge_no, '', CAST(ROUND(amount*100) AS INTEGER),'allowed','2026-10-18',? FROM wallet_recharge_orders WHERE payment_id=?`, float64(time.Now().UnixNano())/1e9, payment.ID).Error; err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -292,6 +292,8 @@ func (r *Store) ManualPaymentRiskAllowed(paymentID uint) (bool, error) {
 		UserID       uint
 		GuestEmail   string
 	}
+	// Python persists fractional Unix seconds; use the same precision and one clock read.
+	now := float64(time.Now().UnixNano()) / 1e9
 	err := r.db.Raw(`SELECT risk.identity_hash, CASE WHEN payment.order_id > 0 THEN ord.user_id ELSE recharge.user_id END AS user_id, COALESCE(ord.guest_email,'') AS guest_email FROM payment_risk_reservations risk
  JOIN payments payment ON payment.id = ?
  LEFT JOIN orders ord ON ord.id = payment.order_id AND ord.deleted_at IS NULL
@@ -299,7 +301,7 @@ func (r *Store) ManualPaymentRiskAllowed(paymentID uint) (bool, error) {
  WHERE payment.deleted_at IS NULL AND risk.order_no = CASE WHEN payment.order_id > 0 THEN ord.order_no ELSE recharge.recharge_no END
  AND risk.status = 'allowed' AND risk.policy_version = '2026-10-18'
  AND risk.created_at > ? AND risk.created_at <= ?
- AND risk.amount_cents = CAST(ROUND(CASE WHEN payment.order_id > 0 THEN ord.total_amount ELSE recharge.amount END * 100) AS INTEGER)`, paymentID, time.Now().Add(-24*time.Hour).Unix(), time.Now().Unix()).Scan(&rows).Error
+ AND risk.amount_cents = CAST(ROUND(CASE WHEN payment.order_id > 0 THEN ord.total_amount ELSE recharge.amount END * 100) AS INTEGER)`, paymentID, now-86400, now).Scan(&rows).Error
 	if err != nil || len(rows) != 1 {
 		return false, err
 	}
