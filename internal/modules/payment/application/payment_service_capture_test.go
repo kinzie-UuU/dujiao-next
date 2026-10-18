@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	paymentcontract "github.com/dujiao-next/internal/modules/payment/contract"
 
@@ -116,15 +117,15 @@ func receiptEvidence(t *testing.T, db *gorm.DB, id uint) paymentdomain.ManualPay
 	if err := db.First(&payment, id).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Exec(`CREATE TABLE IF NOT EXISTS payment_risk_reservations (order_no TEXT PRIMARY KEY, identity_hash TEXT, amount_cents INTEGER, status TEXT, policy_version TEXT)`).Error; err != nil {
+	if err := db.Exec(`CREATE TABLE IF NOT EXISTS payment_risk_reservations (order_no TEXT PRIMARY KEY, identity_hash TEXT, amount_cents INTEGER, status TEXT, policy_version TEXT, created_at REAL)`).Error; err != nil {
 		t.Fatal(err)
 	}
 	if payment.OrderID > 0 {
-		if err := db.Exec(`INSERT OR REPLACE INTO payment_risk_reservations SELECT order_no, '', CAST(ROUND(total_amount*100) AS INTEGER),'allowed','2026-10-18' FROM orders WHERE id=?`, payment.OrderID).Error; err != nil {
+		if err := db.Exec(`INSERT OR REPLACE INTO payment_risk_reservations SELECT order_no, '', CAST(ROUND(total_amount*100) AS INTEGER),'allowed','2026-10-18',? FROM orders WHERE id=?`, float64(time.Now().UnixNano())/1e9, payment.OrderID).Error; err != nil {
 			t.Fatal(err)
 		}
 	} else {
-		if err := db.Exec(`INSERT OR REPLACE INTO payment_risk_reservations SELECT recharge_no, '', CAST(ROUND(amount*100) AS INTEGER),'allowed','2026-10-18' FROM wallet_recharge_orders WHERE payment_id=?`, payment.ID).Error; err != nil {
+		if err := db.Exec(`INSERT OR REPLACE INTO payment_risk_reservations SELECT recharge_no, '', CAST(ROUND(amount*100) AS INTEGER),'allowed','2026-10-18',? FROM wallet_recharge_orders WHERE payment_id=?`, float64(time.Now().UnixNano())/1e9, payment.ID).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -242,7 +243,7 @@ func TestManualReceiptUniqueAcrossPaymentsAndRetries(t *testing.T) {
 }
 
 func TestManualReceiptRiskHoldMissingPolicyAndChangedAmount(t *testing.T) {
-	for _, scenario := range []string{"missing", "hold", "stale", "amount_changed", "identity_changed"} {
+	for _, scenario := range []string{"missing", "hold", "stale", "amount_changed", "identity_changed", "expired_reservation", "future_reservation"} {
 		t.Run(scenario, func(t *testing.T) {
 			svc, db := setupPaymentServiceWalletTest(t)
 			order := orderdomain.Order{OrderNo: "risk-order", Status: constants.OrderStatusPendingPayment, Currency: "CNY", TotalAmount: money.FromDecimal(decimal.NewFromInt(100))}
@@ -255,6 +256,10 @@ func TestManualReceiptRiskHoldMissingPolicyAndChangedAmount(t *testing.T) {
 			}
 			proof := receiptEvidence(t, db, p.ID)
 			switch scenario {
+			case "expired_reservation":
+				db.Exec("UPDATE payment_risk_reservations SET created_at=?", time.Now().Add(-25*time.Hour).Unix())
+			case "future_reservation":
+				db.Exec("UPDATE payment_risk_reservations SET created_at=?", time.Now().Add(time.Hour).Unix())
 			case "missing":
 				db.Exec("DELETE FROM payment_risk_reservations")
 			case "hold":
@@ -361,5 +366,153 @@ func TestManualSettlementUsesLockedTWDAndUSDTQuotes(t *testing.T) {
 				t.Fatal("stale CNY ledger quote accepted")
 			}
 		})
+	}
+}
+
+// Expiry between receipt reservation and credit must fail closed in the second transaction.
+type expireManualRiskAfterClaimStore struct {
+	paymentcontract.Store
+	afterClaim func()
+}
+
+func (s *expireManualRiskAfterClaimStore) WithinTransaction(fn func(paymentcontract.Transaction) error) error {
+	err := s.Store.WithinTransaction(fn)
+	if err == nil && s.afterClaim != nil {
+		change := s.afterClaim
+		s.afterClaim = nil
+		change()
+	}
+	return err
+}
+
+func TestManualRechargeReservationExpiryAndSuccessRetry(t *testing.T) {
+	for _, scenario := range []string{"expired", "expires_after_claim", "success_retry_after_expiry"} {
+		t.Run(scenario, func(t *testing.T) {
+			svc, db := setupPaymentServiceWalletTest(t)
+			payment, recharge := createWalletRechargeFixture(t, db, constants.PaymentStatusPending, constants.WalletRechargeStatusPending)
+			if err := db.Model(payment).Update("provider_type", manualQRProviderType).Error; err != nil {
+				t.Fatal(err)
+			}
+			proof := receiptEvidence(t, db, payment.ID)
+			expire := func() {
+				if err := db.Exec("UPDATE payment_risk_reservations SET created_at=?", time.Now().Add(-25*time.Hour).Unix()).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			if scenario == "expired" {
+				expire()
+			}
+			if scenario == "expires_after_claim" {
+				svc.paymentRepo = &expireManualRiskAfterClaimStore{Store: svc.paymentRepo, afterClaim: expire}
+			}
+			got, err := svc.ConfirmManualPayment(payment.ID, proof)
+			if scenario == "success_retry_after_expiry" {
+				if err != nil || got.Status != constants.PaymentStatusSuccess {
+					t.Fatalf("initial confirmation: payment=%+v err=%v", got, err)
+				}
+				expire()
+				if _, err := svc.ConfirmManualPayment(payment.ID, proof); err != nil {
+					t.Fatalf("idempotent retry rejected: %v", err)
+				}
+				if balance := walletBalance(t, db, recharge.UserID); balance != "88.00" {
+					t.Fatalf("duplicate credit: %s", balance)
+				}
+			} else {
+				if !errors.Is(err, ErrPaymentStatusInvalid) {
+					t.Fatalf("stale policy accepted: %v", err)
+				}
+				var actual paymentdomain.Payment
+				if err := db.First(&actual, payment.ID).Error; err != nil {
+					t.Fatal(err)
+				}
+				if actual.Status != constants.PaymentStatusPending {
+					t.Fatalf("stale policy changed status: %s", actual.Status)
+				}
+				var credits int64
+				if err := db.Model(&walletdomain.Transaction{}).Where("user_id=?", recharge.UserID).Count(&credits).Error; err != nil {
+					t.Fatal(err)
+				}
+				if credits != 0 {
+					t.Fatalf("stale policy credited wallet: %d", credits)
+				}
+				if scenario == "expires_after_claim" && actual.ManualReceiptKey == nil {
+					t.Fatal("receipt reservation released after failed credit")
+				}
+				if scenario == "expires_after_claim" {
+					if err := db.Exec("UPDATE payment_risk_reservations SET created_at=?", time.Now().Unix()).Error; err != nil {
+						t.Fatal(err)
+					}
+					if _, err := svc.ConfirmManualPayment(payment.ID, proof); err != nil {
+						t.Fatalf("revalidated retry failed: %v", err)
+					}
+					if balance := walletBalance(t, db, recharge.UserID); balance != "88.00" {
+						t.Fatalf("revalidated retry credit=%s", balance)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestManualReceiptNamespaceAcrossOrderAndRecharge(t *testing.T) {
+	svc, db := setupPaymentServiceWalletTest(t)
+	sqlDB, _ := db.DB()
+	sqlDB.SetMaxOpenConns(1)
+	order := createUnderpaidOrder(t, db, "CROSS-RECEIPT", 0, 88)
+	item := paymentdomain.Payment{OrderID: order.ID, ChannelID: 1, ProviderType: manualQRProviderType, ChannelType: "wechat", Amount: order.TotalAmount, Currency: "CNY", Status: constants.PaymentStatusPending}
+	if err := db.Create(&item).Error; err != nil {
+		t.Fatal(err)
+	}
+	recharge, _ := createWalletRechargeFixture(t, db, constants.PaymentStatusPending, constants.WalletRechargeStatusPending)
+	if err := db.Model(recharge).Updates(map[string]interface{}{"provider_type": manualQRProviderType, "channel_id": 2}).Error; err != nil {
+		t.Fatal(err)
+	}
+	proofA, proofB := receiptEvidence(t, db, item.ID), receiptEvidence(t, db, recharge.ID)
+	proofA.TransactionID = " Mixed-Platform-Receipt "
+	proofB.TransactionID = "mixed-platform-receipt"
+	start, done := make(chan struct{}), make(chan error, 2)
+	for _, test := range []struct {
+		id    uint
+		proof paymentdomain.ManualPaymentEvidence
+	}{{item.ID, proofA}, {recharge.ID, proofB}} {
+		go func(id uint, proof paymentdomain.ManualPaymentEvidence) {
+			<-start
+			_, err := svc.ConfirmManualPayment(id, proof)
+			done <- err
+		}(test.id, test.proof)
+	}
+	close(start)
+	successes := 0
+	for i := 0; i < 2; i++ {
+		if <-done == nil {
+			successes++
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("same channel receipt across order/recharge successes=%d", successes)
+	}
+	var payments []paymentdomain.Payment
+	if err := db.Find(&payments).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range payments {
+		if p.Status != constants.PaymentStatusSuccess {
+			continue
+		}
+		proof := paymentdomain.ManualPaymentEvidence{TransactionID: p.ProviderRef, PayerVerified: true, Amount: p.Amount.String(), Currency: p.Currency}
+		for _, field := range []string{"amount", "currency", "payer"} {
+			bad := proof
+			switch field {
+			case "amount":
+				bad.Amount = "89"
+			case "currency":
+				bad.Currency = "USD"
+			case "payer":
+				bad.PayerVerified = false
+			}
+			if _, err := svc.ConfirmManualPayment(p.ID, bad); err == nil {
+				t.Fatalf("successful replay accepted invalid %s", field)
+			}
+		}
 	}
 }
