@@ -440,7 +440,9 @@ func fillWebhookResult(result *WebhookResult, eventType string, objectRaw map[st
 			paidAt := time.Unix(created, 0)
 			result.PaidAt = &paidAt
 		}
-		if status, ok := mapEventTypeStatus(eventType); ok {
+		// checkout.session.completed 对延迟到账支付方式会在 payment_status=unpaid 时触发，
+		// 该事件以 session 自身的 payment_status 为准。
+		if status, ok := mapEventTypeStatus(eventType); ok && strings.ToLower(strings.TrimSpace(eventType)) != stripeEventCheckoutSessionCompleted {
 			result.Status = status
 		} else {
 			result.Status = mapCheckoutSessionStatus(strings.TrimSpace(readString(objectRaw, "payment_status")), strings.TrimSpace(readString(objectRaw, "status")))

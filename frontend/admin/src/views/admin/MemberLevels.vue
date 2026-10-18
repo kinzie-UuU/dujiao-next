@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { UserRound } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import type { AdminMemberLevel } from '@/api/types'
@@ -39,16 +40,6 @@ const editingId = ref<number | null>(null)
 
 const supportedLocales = ['zh-CN', 'zh-TW', 'en-US']
 
-const iconMode = ref<'emoji' | 'image'>('emoji')
-const iconCache = reactive({ emoji: '', image: '' })
-
-const switchIconMode = (mode: 'emoji' | 'image') => {
-  if (mode === iconMode.value) return
-  iconCache[iconMode.value] = form.icon
-  iconMode.value = mode
-  form.icon = iconCache[mode]
-}
-
 const form = reactive({
   name: {} as Record<string, string>,
   slug: '',
@@ -61,6 +52,11 @@ const form = reactive({
   is_active: true,
 })
 
+const iconImage = computed({
+  get: () => isImagePath(form.icon) ? form.icon : '',
+  set: (value: string | string[]) => { form.icon = typeof value === 'string' ? value : value[0] || '' },
+})
+
 const resetForm = () => {
   form.name = {}
   form.slug = ''
@@ -71,9 +67,6 @@ const resetForm = () => {
   form.is_default = false
   form.sort_order = 0
   form.is_active = true
-  iconMode.value = 'emoji'
-  iconCache.emoji = ''
-  iconCache.image = ''
 }
 
 const fetchLevels = async (options: ListFetchOptions = {}) => {
@@ -119,9 +112,6 @@ const openEditModal = (level: AdminMemberLevel) => {
   form.is_default = Boolean(level.is_default)
   form.sort_order = level.sort_order || 0
   form.is_active = Boolean(level.is_active)
-  iconMode.value = isImagePath(form.icon) ? 'image' : 'emoji'
-  iconCache.emoji = iconMode.value === 'emoji' ? form.icon : ''
-  iconCache.image = iconMode.value === 'image' ? form.icon : ''
   showModal.value = true
 }
 
@@ -267,8 +257,7 @@ onMounted(() => {
             </TableCell>
             <TableCell class="min-w-[88px] px-6 py-4">
               <img v-if="level.icon && isImagePath(level.icon)" :src="getImageUrl(level.icon)" class="h-8 w-8 shrink-0 rounded object-cover" :alt="getLocalizedText(level.name)" @error="($event.target as HTMLImageElement).style.display = 'none'" />
-              <span v-else-if="level.icon" class="text-lg">{{ level.icon }}</span>
-              <span v-else class="text-xs text-muted-foreground">-</span>
+              <UserRound v-else class="h-8 w-8 text-muted-foreground" aria-hidden="true" />
             </TableCell>
             <TableCell class="min-w-[90px] px-6 py-4 text-foreground font-medium">
               <div class="flex items-center gap-2">
@@ -357,26 +346,8 @@ onMounted(() => {
               <label class="mb-1.5 block text-xs font-medium text-muted-foreground">
                 {{ t('admin.memberLevels.form.icon') }}
               </label>
-              <div class="flex items-center gap-2 mb-2">
-                <button
-                  type="button"
-                  class="rounded-md px-3 py-1.5 text-xs font-medium transition-colors"
-                  :class="iconMode === 'emoji' ? 'bg-primary text-primary-foreground shadow-sm' : 'bg-muted text-muted-foreground hover:text-foreground'"
-                  @click="switchIconMode('emoji')"
-                >
-                  Emoji
-                </button>
-                <button
-                  type="button"
-                  class="rounded-md px-3 py-1.5 text-xs font-medium transition-colors"
-                  :class="iconMode === 'image' ? 'bg-primary text-primary-foreground shadow-sm' : 'bg-muted text-muted-foreground hover:text-foreground'"
-                  @click="switchIconMode('image')"
-                >
-                  {{ t('admin.memberLevels.form.iconImage') }}
-                </button>
-              </div>
-              <Input v-if="iconMode === 'emoji'" v-model="form.icon" :placeholder="t('admin.memberLevels.form.iconPlaceholder')" />
-              <MediaPicker v-else v-model="form.icon" scene="common" />
+              <MediaPicker v-model="iconImage" scene="common" />
+              <p class="mt-1.5 text-xs text-muted-foreground">{{ t('admin.memberLevels.form.iconHint') }}</p>
             </div>
 
             <div>

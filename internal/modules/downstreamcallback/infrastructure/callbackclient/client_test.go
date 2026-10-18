@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -42,7 +43,7 @@ func TestClientSendsSignedCallback(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	client := New()
+	client := NewWithHTTPClient(server.Client())
 	err := client.Send(context.Background(), downstreamcontract.DeliveryRequest{
 		URL:       server.URL,
 		APIKey:    "downstream-key",
@@ -65,11 +66,53 @@ func TestClientRejectsNonSuccessContract(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	err := New().Send(context.Background(), downstreamcontract.DeliveryRequest{
+	err := NewWithHTTPClient(server.Client()).Send(context.Background(), downstreamcontract.DeliveryRequest{
 		URL:     server.URL,
 		Payload: downstreamcontract.CallbackPayload{Timestamp: 1_700_000_000},
 	})
 	if err == nil {
 		t.Fatal("Send() should reject non-success response")
+	}
+}
+
+func TestDefaultClientRejectsLoopbackTarget(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		t.Errorf("loopback callback target must not be reached")
+		_, _ = writer.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(server.Close)
+
+	err := New().Send(context.Background(), downstreamcontract.DeliveryRequest{
+		URL:     server.URL,
+		APIKey:  "downstream-key",
+		Payload: downstreamcontract.CallbackPayload{Event: "order.fulfilled", Timestamp: 1_700_000_000},
+	})
+	if err == nil {
+		t.Fatalf("Send() to loopback target should fail")
+	}
+}
+
+func TestIsPublicIP(t *testing.T) {
+	for _, tc := range []struct {
+		ip   string
+		want bool
+	}{
+		{"127.0.0.1", false}, {"10.1.2.3", false}, {"192.168.1.1", false}, {"172.16.0.9", false},
+		{"169.254.169.254", false}, {"100.64.0.1", false}, {"0.0.0.0", false}, {"::1", false}, {"fd00::1", false},
+		{"8.8.8.8", true}, {"1.1.1.1", true}, {"2606:4700::1111", true},
+	} {
+		if got := isPublicIP(net.ParseIP(tc.ip)); got != tc.want {
+			t.Errorf("isPublicIP(%s) = %v, want %v", tc.ip, got, tc.want)
+		}
+	}
+}
+
+func TestDefaultTransportDisablesProxyAndRedirects(t *testing.T) {
+	client := newSafeHTTPClient()
+	if client.Transport.(*http.Transport).Proxy != nil {
+		t.Fatal("proxy can bypass destination IP checks")
+	}
+	if err := client.CheckRedirect(&http.Request{}, nil); err != http.ErrUseLastResponse {
+		t.Fatalf("redirects must be rejected: %v", err)
 	}
 }

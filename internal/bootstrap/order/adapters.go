@@ -372,6 +372,9 @@ func (a orderPaymentCreatorAdapter) CreatePayment(input ordertransport.CreatePay
 		RequestScheme: input.RequestScheme,
 	})
 	if err != nil {
+		if errors.Is(err, walletcontract.ErrOutstandingDebt) {
+			return nil, ordertransport.ErrWalletOutstandingDebt
+		}
 		// create-and-pay returns payment_error as plain string; keep original error text.
 		return nil, err
 	}
@@ -488,6 +491,7 @@ func mapOrderTransportError(err error) error {
 		{orderapp.ErrGuestOrderNotFound, ordertransport.ErrGuestOrderNotFound},
 		{orderapp.ErrOrderCancelNotAllowed, ordertransport.ErrOrderCancelNotAllowed},
 		{orderapp.ErrOrderRefundExpired, ordertransport.ErrOrderRefundExpired},
+		{orderapp.ErrOriginalRouteRefundRequired, ordertransport.ErrOriginalRouteRefundRequired},
 		{walletcontract.ErrInvalidAmount, ordertransport.ErrWalletInvalidAmount},
 		{walletcontract.ErrRefundExceeded, ordertransport.ErrWalletRefundExceeded},
 		{walletcontract.ErrNotSupportedForGuest, ordertransport.ErrWalletNotSupportedForGuest},
@@ -495,13 +499,16 @@ func mapOrderTransportError(err error) error {
 		{orderapp.ErrInvalidOrderAmount, ordertransport.ErrInvalidOrderAmount},
 		{orderapp.ErrGuestEmailRequired, ordertransport.ErrGuestEmailRequired},
 		{orderapp.ErrGuestPasswordRequired, ordertransport.ErrGuestPasswordRequired},
+		{orderapp.ErrGuestPasswordTooShort, ordertransport.ErrGuestPasswordTooShort},
 		{orderapp.ErrInvalidEmail, ordertransport.ErrInvalidEmail},
 		{orderapp.ErrProductPurchaseNotAllowed, ordertransport.ErrProductPurchaseNotAllowed},
+		{walletcontract.ErrOutstandingDebt, ordertransport.ErrWalletOutstandingDebt},
 		{orderapp.ErrManualStockInsufficient, ordertransport.ErrManualStockInsufficient},
 		{orderapp.ErrOrderCurrencyMismatch, ordertransport.ErrOrderCurrencyMismatch},
 		{orderapp.ErrProductNotAvailable, ordertransport.ErrProductNotAvailable},
 		{orderapp.ErrResellerCouponNotAllowed, ordertransport.ErrResellerCouponNotAllowed},
 		{orderapp.ErrQueueUnavailable, ordertransport.ErrQueueUnavailable},
+		{orderapp.ErrSalesPaused, ordertransport.ErrSalesPaused},
 		{orderriskcontract.ErrIPBlacklisted, ordertransport.ErrRiskIPBlacklisted},
 		{orderriskcontract.ErrEmailBlacklisted, ordertransport.ErrRiskEmailBlacklisted},
 		{orderriskcontract.ErrTooManyPendingOrders, ordertransport.ErrRiskTooManyPendingOrders},

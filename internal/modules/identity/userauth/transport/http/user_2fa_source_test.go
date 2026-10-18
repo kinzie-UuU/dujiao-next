@@ -3,6 +3,8 @@ package userauthhttp
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	resellercontract "github.com/dujiao-next/internal/modules/reseller/contract"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -33,18 +35,20 @@ func (sourceTestTOTPService) VerifyChallengeCode(uint, string) error         { r
 func (sourceTestTOTPService) VerifyChallengeRecoveryCode(uint, string) error { return nil }
 
 type sourceTest2FAAuth struct {
-	source string
+	resellerID uint
+	source     string
 }
 
 func (s sourceTest2FAAuth) ParseUserChallengeToken(string) (*UserChallengeClaims, error) {
 	return &UserChallengeClaims{
+		ResellerID:  s.resellerID,
 		UserID:      42,
 		JTI:         "source-test-jti",
 		LoginSource: s.source,
 	}, nil
 }
 
-func (sourceTest2FAAuth) CompleteLoginAfter2FA(uint, bool) (*AuthLoginResult, error) {
+func (sourceTest2FAAuth) CompleteLoginAfter2FA(context.Context, uint, bool) (*AuthLoginResult, error) {
 	now := time.Now()
 	return &AuthLoginResult{
 		User: &userdomain.User{
@@ -113,5 +117,30 @@ func TestVerifyUser2FAPreservesExternalLoginSource(t *testing.T) {
 				t.Fatalf("login status = %q", loginRecorder.records[0].status)
 			}
 		})
+	}
+}
+
+func TestVerifyUser2FARejectsCrossTenantChallenge(t *testing.T) {
+	for _, pair := range [][2]uint{{7, 0}, {7, 8}, {0, 7}} {
+		handler := NewUser2FAHandler(sourceTestTOTPService{}, sourceTest2FAAuth{resellerID: pair[0]}, sourceTestChallengeStore{}, &sourceTestLoginRecorder{})
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/login/verify-2fa", bytes.NewBufferString(`{"challenge_token":"challenge","code":"123456"}`))
+		c.Request.Header.Set("Content-Type", "application/json")
+		tenant := resellercontract.TenantContext{IsMain: pair[1] == 0}
+		if pair[1] != 0 {
+			tenant.ResellerID = &pair[1]
+		}
+		c.Request = c.Request.WithContext(resellercontract.WithTenantContext(c.Request.Context(), tenant))
+		handler.VerifyUser2FA(c)
+		var body struct {
+			StatusCode int `json:"status_code"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if body.StatusCode != 401 {
+			t.Fatalf("pair %v accepted: %s", pair, w.Body.String())
+		}
 	}
 }

@@ -77,6 +77,18 @@ func (s *Service) GetConfig(defaults map[string]interface{}) (map[string]interfa
 	return data, nil
 }
 
+// GetSalesPaused 获取暂停销售开关。
+func (s *Service) GetSalesPaused() (bool, error) {
+	if s == nil {
+		return false, nil
+	}
+	value, err := s.GetByKey(constants.SettingKeySiteConfig)
+	if err != nil || value == nil {
+		return false, err
+	}
+	return parseSettingBool(value[constants.SettingFieldSalesPaused]), nil
+}
+
 // DefaultOrderConfig 默认订单配置。
 func DefaultOrderConfig() OrderConfig {
 	return OrderConfig{

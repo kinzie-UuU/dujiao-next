@@ -191,7 +191,7 @@ type ProductSKURequest struct {
 	SpecValuesJSON   map[string]interface{} `json:"spec_values"`
 	PriceAmount      float64                `json:"price_amount" binding:"required"`
 	CostPriceAmount  float64                `json:"cost_price_amount"`
-	ManualStockTotal int                    `json:"manual_stock_total"`
+	ManualStockTotal *int                   `json:"manual_stock_total"`
 	IsActive         *bool                  `json:"is_active"`
 	SortOrder        int                    `json:"sort_order"`
 }
@@ -261,7 +261,8 @@ func toProductSKUInputs(items []ProductSKURequest) []productwrite.ProductSKUInpu
 			SpecValuesJSON:   item.SpecValuesJSON,
 			PriceAmount:      decimal.NewFromFloat(item.PriceAmount),
 			CostPriceAmount:  decimal.NewFromFloat(item.CostPriceAmount),
-			ManualStockTotal: item.ManualStockTotal,
+			ManualStockTotal: stockValue(item.ManualStockTotal),
+			KeepManualStock:  item.ManualStockTotal == nil,
 			IsActive:         item.IsActive,
 			SortOrder:        item.SortOrder,
 		})
@@ -744,4 +745,11 @@ func (h *AdminProductHandler) DeleteProduct(c *gin.Context) {
 	}
 
 	response.Success(c, nil)
+}
+
+func stockValue(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
 }

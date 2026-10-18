@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"encoding/json"
+	"github.com/dujiao-next/internal/config"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -96,5 +97,20 @@ func TestJWTAuthMiddlewareMissingSecret(t *testing.T) {
 	}
 	if resp.StatusCode != 401 {
 		t.Fatalf("status_code want 401 got %d", resp.StatusCode)
+	}
+}
+
+func TestPaymentTOTPHeaderAllowedByDefaultCORS(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(CORSMiddleware(config.CORSConfig{}))
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/admin/payment-channels", nil)
+	req.Header.Set("Origin", "https://admin.example")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	req.Header.Set("Access-Control-Request-Headers", "authorization,content-type,x-admin-totp")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent || !strings.Contains(w.Header().Get("Access-Control-Allow-Headers"), "X-Admin-TOTP") {
+		t.Fatalf("TOTP preflight blocked: %d %v", w.Code, w.Header())
 	}
 }

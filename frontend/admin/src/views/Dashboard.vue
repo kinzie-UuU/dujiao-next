@@ -40,9 +40,10 @@ interface DashboardOverview {
     pending_payment_orders: number
     processing_orders: number
     gmv_paid: string
+    missing_cost_items?: number
     total_cost: string
-    total_profit: string
-    profit_margin: string
+    total_profit: string | null
+    profit_margin: string | null
     payments_total: number
     payments_success: number
     payments_failed: number
@@ -68,7 +69,8 @@ interface DashboardTrendPoint {
   payments_success: number
   payments_failed: number
   gmv_paid: string
-  profit: string
+  missing_cost_items?: number
+  profit: string | null
 }
 
 interface DashboardTrends {
@@ -89,7 +91,8 @@ interface DashboardProductRanking {
   quantity: number
   paid_amount: string
   total_cost: string
-  profit: string
+  missing_cost_items?: number
+  profit: string | null
 }
 
 interface DashboardChannelRanking {
@@ -113,6 +116,9 @@ interface DashboardRankings {
 }
 
 const { t, locale } = useI18n()
+
+const profitLabel = (value: string | null | undefined, missingCostItems?: number) =>
+  value == null || missingCostItems !== 0 ? t('admin.dashboard.profitPending') : formatMoney(value, overview.value?.currency)
 
 const rankingSkuLabel = (item: DashboardProductRanking) =>
   formatSkuDisplayLabel({ sku_code: item.sku_code, spec_values: item.sku_spec_values }, locale.value)
@@ -442,6 +448,7 @@ onMounted(() => {
         </CardHeader>
         <CardContent>
           <div class="text-2xl font-semibold">{{ formatMoney(overview?.kpi.total_cost, overview?.currency) }}</div>
+          <p v-if="overview && overview.kpi.missing_cost_items !== 0" class="mt-1 text-xs text-muted-foreground">{{ t('admin.dashboard.recordedCostOnly') }}</p>
         </CardContent>
       </Card>
 
@@ -450,7 +457,8 @@ onMounted(() => {
           <CardTitle class="text-xs font-medium text-muted-foreground">{{ t('admin.dashboard.kpi.totalProfit') }}</CardTitle>
         </CardHeader>
         <CardContent>
-          <div class="text-2xl font-semibold">{{ formatMoney(overview?.kpi.total_profit, overview?.currency) }}</div>
+          <div class="text-2xl font-semibold">{{ profitLabel(overview?.kpi.total_profit, overview?.kpi.missing_cost_items) }}</div>
+          <p v-if="overview && overview.kpi.missing_cost_items !== 0" class="mt-1 text-xs text-muted-foreground">{{ t('admin.dashboard.profitPendingReason') }}</p>
         </CardContent>
       </Card>
 
@@ -459,7 +467,7 @@ onMounted(() => {
           <CardTitle class="text-xs font-medium text-muted-foreground">{{ t('admin.dashboard.kpi.profitMargin') }}</CardTitle>
         </CardHeader>
         <CardContent>
-          <div class="text-2xl font-semibold">{{ overview?.kpi.profit_margin ?? '0.00' }}%</div>
+          <div class="text-2xl font-semibold">{{ overview?.kpi.profit_margin == null || overview.kpi.missing_cost_items !== 0 ? t('admin.dashboard.profitPending') : `${overview.kpi.profit_margin}%` }}</div>
         </CardContent>
       </Card>
 
@@ -559,7 +567,7 @@ onMounted(() => {
                     <div class="w-2 rounded-t bg-emerald-500/80" :style="{ height: orderPaidHeight(point.orders_paid) }" :title="`${t('admin.dashboard.trends.ordersPaid')}: ${point.orders_paid}`"></div>
                   </div>
                   <div class="whitespace-nowrap text-[10px] text-muted-foreground">{{ shortDate(point.date) }}</div>
-                  <div class="whitespace-nowrap text-[10px] font-medium text-emerald-600 dark:text-emerald-400">{{ formatMoney(point.profit, overview?.currency) }}</div>
+                  <div class="whitespace-nowrap text-[10px] font-medium text-emerald-600 dark:text-emerald-400">{{ profitLabel(point.profit, point.missing_cost_items) }}</div>
                 </div>
               </div>
             </div>
@@ -645,7 +653,7 @@ onMounted(() => {
               </div>
               <div class="mt-1 flex flex-col gap-1 text-xs font-semibold text-foreground sm:flex-row sm:items-center sm:justify-between">
                 <span>{{ t('admin.dashboard.rankings.paidAmount') }}: {{ formatMoney(item.paid_amount, overview?.currency) }}</span>
-                <span>{{ t('admin.dashboard.rankings.profit') }}: {{ formatMoney(item.profit, overview?.currency) }}</span>
+                <span>{{ t('admin.dashboard.rankings.profit') }}: {{ profitLabel(item.profit, item.missing_cost_items) }}</span>
               </div>
             </div>
           </div>

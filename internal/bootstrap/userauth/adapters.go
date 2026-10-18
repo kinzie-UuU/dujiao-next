@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	resellercontract "github.com/dujiao-next/internal/modules/reseller/contract"
 	"strings"
 	"time"
 
@@ -132,7 +133,7 @@ func (a userGoogleTransportAdapter) LoginWithGoogle(ctx context.Context, credent
 	if err != nil {
 		return nil, mapUserAuthTransportError(err)
 	}
-	return toUserAuthTransportLoginResult(result), nil
+	return toUserAuthTransportLoginResult(ctx, a.auth, result)
 }
 
 func (a userGoogleTransportAdapter) GetGoogleBinding(userID uint) (*userauthtransport.GoogleBindingResult, error) {
@@ -210,7 +211,7 @@ func (a userGoogleTransportAdapter) ExchangeGoogleRedirectLogin(
 	if err != nil {
 		return nil, mapUserAuthTransportError(err)
 	}
-	return toUserAuthTransportLoginResult(result), nil
+	return toUserAuthTransportLoginResult(ctx, a.auth, result)
 }
 
 func (a userGoogleTransportAdapter) ExchangeGoogleRedirectBind(
@@ -254,18 +255,27 @@ func toGoogleTransportBindingResult(result *userauthapp.GoogleBinding) *userauth
 	}
 }
 
-func toUserAuthTransportLoginResult(result *userauthapp.UserLoginResult) *userauthtransport.AuthLoginResult {
+// toUserAuthTransportLoginResult 转换登录结果，并把访问令牌绑定到当前请求所在的分销站点。
+func toUserAuthTransportLoginResult(ctx context.Context, auth *userauthapp.Service, result *userauthapp.UserLoginResult) (*userauthtransport.AuthLoginResult, error) {
 	if result == nil {
-		return nil
+		return nil, nil
+	}
+	token, err := auth.BindUserTokenTenant(result.Token, resellercontract.RequestResellerID(ctx))
+	if err != nil {
+		return nil, err
+	}
+	challengeToken, err := auth.BindUserChallengeTenant(result.ChallengeToken, resellercontract.RequestResellerID(ctx))
+	if err != nil {
+		return nil, err
 	}
 	return &userauthtransport.AuthLoginResult{
 		RequiresTOTP:       result.RequiresTOTP,
 		User:               result.User,
-		Token:              result.Token,
+		Token:              token,
 		ExpiresAt:          result.ExpiresAt,
-		ChallengeToken:     result.ChallengeToken,
+		ChallengeToken:     challengeToken,
 		ChallengeExpiresAt: result.ChallengeExpiresAt,
-	}
+	}, nil
 }
 
 func (a userTelegramTransportAdapter) toServicePayload(payload userauthtransport.TelegramAuthPayload) telegramauthapp.LoginPayload {
@@ -280,20 +290,6 @@ func (a userTelegramTransportAdapter) toServicePayload(payload userauthtransport
 	}
 }
 
-func (a userTelegramTransportAdapter) toAuthLoginResult(res *userauthapp.UserLoginResult) *userauthtransport.AuthLoginResult {
-	if res == nil {
-		return nil
-	}
-	return &userauthtransport.AuthLoginResult{
-		RequiresTOTP:       res.RequiresTOTP,
-		User:               res.User,
-		Token:              res.Token,
-		ExpiresAt:          res.ExpiresAt,
-		ChallengeToken:     res.ChallengeToken,
-		ChallengeExpiresAt: res.ChallengeExpiresAt,
-	}
-}
-
 func (a userTelegramTransportAdapter) LoginWithTelegram(ctx context.Context, payload userauthtransport.TelegramAuthPayload) (*userauthtransport.AuthLoginResult, error) {
 	res, err := a.auth.LoginWithTelegram(userauthapp.LoginWithTelegramInput{
 		Payload: a.toServicePayload(payload),
@@ -302,7 +298,7 @@ func (a userTelegramTransportAdapter) LoginWithTelegram(ctx context.Context, pay
 	if err != nil {
 		return nil, mapUserAuthTransportError(err)
 	}
-	return a.toAuthLoginResult(res), nil
+	return toUserAuthTransportLoginResult(ctx, a.auth, res)
 }
 
 func (a userTelegramTransportAdapter) LoginWithTelegramMiniApp(ctx context.Context, initData string) (*userauthtransport.AuthLoginResult, error) {
@@ -313,7 +309,7 @@ func (a userTelegramTransportAdapter) LoginWithTelegramMiniApp(ctx context.Conte
 	if err != nil {
 		return nil, mapUserAuthTransportError(err)
 	}
-	return a.toAuthLoginResult(res), nil
+	return toUserAuthTransportLoginResult(ctx, a.auth, res)
 }
 
 func (a userTelegramTransportAdapter) GetTelegramBinding(userID uint) (*userauthtransport.TelegramBindingResult, error) {
@@ -375,17 +371,7 @@ func (a userTelegramOIDCTransportAdapter) LoginWithTelegramOIDC(ctx context.Cont
 	if err != nil {
 		return nil, mapUserAuthTransportError(err)
 	}
-	if res == nil {
-		return nil, nil
-	}
-	return &userauthtransport.AuthLoginResult{
-		RequiresTOTP:       res.RequiresTOTP,
-		User:               res.User,
-		Token:              res.Token,
-		ExpiresAt:          res.ExpiresAt,
-		ChallengeToken:     res.ChallengeToken,
-		ChallengeExpiresAt: res.ChallengeExpiresAt,
-	}, nil
+	return toUserAuthTransportLoginResult(ctx, a.auth, res)
 }
 
 func (a userTelegramOIDCTransportAdapter) BindTelegramOIDC(ctx context.Context, userID uint, code, state string) (*externalidentitydomain.Identity, error) {
@@ -412,27 +398,21 @@ func (a userLoginTransportAdapter) GetEmailVerificationEnabled(defaultValue bool
 	return a.settings.GetEmailVerificationEnabled(defaultValue)
 }
 
-func (a userLoginTransportAdapter) Register(email, password, code string, agreementAccepted, emailVerificationEnabled bool) (*userdomain.User, string, time.Time, error) {
+func (a userLoginTransportAdapter) Register(ctx context.Context, email, password, code string, agreementAccepted, emailVerificationEnabled bool) (*userdomain.User, string, time.Time, error) {
 	user, token, expiresAt, err := a.auth.Register(email, password, code, agreementAccepted, emailVerificationEnabled)
-	return user, token, expiresAt, mapUserAuthTransportError(err)
+	if err != nil {
+		return user, token, expiresAt, mapUserAuthTransportError(err)
+	}
+	token, err = a.auth.BindUserTokenTenant(token, resellercontract.RequestResellerID(ctx))
+	return user, token, expiresAt, err
 }
 
-func (a userLoginTransportAdapter) LoginStep1(email, password string, rememberMe bool) (*userauthtransport.AuthLoginResult, error) {
+func (a userLoginTransportAdapter) LoginStep1(ctx context.Context, email, password string, rememberMe bool) (*userauthtransport.AuthLoginResult, error) {
 	res, err := a.auth.LoginStep1(email, password, rememberMe)
 	if err != nil {
 		return nil, mapUserAuthTransportError(err)
 	}
-	if res == nil {
-		return nil, nil
-	}
-	return &userauthtransport.AuthLoginResult{
-		RequiresTOTP:       res.RequiresTOTP,
-		User:               res.User,
-		Token:              res.Token,
-		ExpiresAt:          res.ExpiresAt,
-		ChallengeToken:     res.ChallengeToken,
-		ChallengeExpiresAt: res.ChallengeExpiresAt,
-	}, nil
+	return toUserAuthTransportLoginResult(ctx, a.auth, res)
 }
 
 // userLoginRecorderAdapter 将登录日志服务适配为 transport 记录端口。
@@ -540,6 +520,7 @@ func (a user2FAAuthTransportAdapter) ParseUserChallengeToken(tokenString string)
 		return nil, nil
 	}
 	return &userauthtransport.UserChallengeClaims{
+		ResellerID:  claims.ResellerID,
 		UserID:      claims.UserID,
 		JTI:         claims.JTI,
 		RememberMe:  claims.RememberMe,
@@ -547,22 +528,12 @@ func (a user2FAAuthTransportAdapter) ParseUserChallengeToken(tokenString string)
 	}, nil
 }
 
-func (a user2FAAuthTransportAdapter) CompleteLoginAfter2FA(userID uint, rememberMe bool) (*userauthtransport.AuthLoginResult, error) {
+func (a user2FAAuthTransportAdapter) CompleteLoginAfter2FA(ctx context.Context, userID uint, rememberMe bool) (*userauthtransport.AuthLoginResult, error) {
 	res, err := a.auth.CompleteLoginAfter2FA(userID, rememberMe)
 	if err != nil {
 		return nil, mapUserAuthTransportError(err)
 	}
-	if res == nil {
-		return nil, nil
-	}
-	return &userauthtransport.AuthLoginResult{
-		RequiresTOTP:       res.RequiresTOTP,
-		User:               res.User,
-		Token:              res.Token,
-		ExpiresAt:          res.ExpiresAt,
-		ChallengeToken:     res.ChallengeToken,
-		ChallengeExpiresAt: res.ChallengeExpiresAt,
-	}, nil
+	return toUserAuthTransportLoginResult(ctx, a.auth, res)
 }
 
 func (a user2FAAuthTransportAdapter) GetUserEmail(userID uint) (string, error) {
@@ -631,6 +602,7 @@ func mapUserAuthTransportError(err error) error {
 		target error
 	}{
 		{userauthapp.ErrProfileEmpty, userauthtransport.ErrProfileEmpty},
+		{userauthapp.ErrNicknameInvalid, userauthtransport.ErrNicknameInvalid},
 		{userauthapp.ErrNotFound, userauthtransport.ErrUserNotFound},
 		{totpapplication.ErrSubjectNotFound, userauthtransport.ErrUserNotFound},
 		{userauthapp.ErrInvalidEmail, userauthtransport.ErrInvalidEmail},

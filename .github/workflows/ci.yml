@@ -97,6 +97,11 @@ jobs:
         with:
           node-version: '24.11.1'
 
+      - name: Check frontend SVG icon policy
+        run: |
+          node --test frontend/check-ui-icons.test.mjs
+          node frontend/check-ui-icons.mjs
+
       # 用子 shell cd 而非 `pnpm --dir`：后者不会读取子目录的 packageManager 字段，
       # 在启用 corepack 的环境下会用错 pnpm 版本
       - name: Install frontend dependencies

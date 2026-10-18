@@ -23,20 +23,19 @@ func (s *Service) HandleUpstreamCallback(procurementOrderID uint, upstreamStatus
 	now := time.Now()
 	upstreamStatus = strings.ToLower(strings.TrimSpace(upstreamStatus))
 
+	// 状态机守卫：已进入终态的采购单不再接受交付 / 取消回调
+	if !isUpstreamTransitionAllowed(procOrder.Status, upstreamStatus) {
+		logger.Warnw("procurement_callback_transition_rejected",
+			"procurement_order_id", procOrder.ID,
+			"current_status", procOrder.Status,
+			"upstream_status", upstreamStatus,
+		)
+		return nil
+	}
+
 	switch upstreamStatus {
 	case "delivered", "completed", "fulfilled":
-		// 更新采购单状态
-		updates := map[string]interface{}{
-			"updated_at": now,
-		}
-		if fulfillment != nil {
-			updates["upstream_payload"] = fulfillment.Payload
-		}
-		if err := s.procRepo.UpdateStatus(procOrder.ID, "fulfilled", updates); err != nil {
-			return fmt.Errorf("update procurement status: %w", err)
-		}
-
-		// 在本地订单上创建交付记录
+		// 先创建交付记录（幂等），再推进采购单状态；写入失败时采购单保持非终态以便上游重试
 		if fulfillment != nil && s.orderLifecycle != nil {
 			if err := s.createUpstreamFulfillment(procOrder.LocalOrderID, fulfillment, now); err != nil {
 				logger.Warnw("procurement_create_fulfillment_failed",
@@ -48,10 +47,33 @@ func (s *Service) HandleUpstreamCallback(procurementOrderID uint, upstreamStatus
 			}
 		}
 
+		// 更新采购单状态
+		updates := map[string]interface{}{
+			"updated_at": now,
+		}
+		if fulfillment != nil {
+			updates["upstream_payload"] = fulfillment.Payload
+		}
+		fulfilled, err := s.procRepo.UpdateStatus(procOrder.ID, procOrder.Status, constants.ProcurementStatusFulfilled, updates)
+		if err != nil {
+			return fmt.Errorf("update procurement status: %w", err)
+		}
+		if !fulfilled {
+			// 回调与轮询/巡检并发：已由另一路径完成交付，避免重复通知
+			return nil
+		}
+
 		// 更新本地订单状态
-		_ = s.orderRepo.UpdateStatus(procOrder.LocalOrderID, constants.OrderStatusDelivered, map[string]interface{}{
+		delivered, updateErr := s.orderRepo.UpdateStatusIfCurrent(procOrder.LocalOrderID, []string{constants.OrderStatusPaid, constants.OrderStatusFulfilling}, constants.OrderStatusDelivered, map[string]interface{}{
 			"updated_at": now,
 		})
+
+		if updateErr != nil {
+			return fmt.Errorf("update local delivery status: %w", updateErr)
+		}
+		if !delivered {
+			return nil
+		}
 
 		// 如果有父订单，同步父订单状态
 		localOrder, _ := s.orderRepo.GetByID(procOrder.LocalOrderID)
@@ -99,8 +121,12 @@ func (s *Service) HandleUpstreamCallback(procurementOrderID uint, upstreamStatus
 		updates := map[string]interface{}{
 			"updated_at": now,
 		}
-		if err := s.procRepo.UpdateStatus(procOrder.ID, "canceled", updates); err != nil {
+		canceled, err := s.procRepo.UpdateStatus(procOrder.ID, procOrder.Status, constants.ProcurementStatusCanceled, updates)
+		if err != nil {
 			return fmt.Errorf("update procurement status: %w", err)
+		}
+		if !canceled {
+			return nil
 		}
 
 		// 回退本地订单状态并通知管理员
@@ -121,7 +147,7 @@ func (s *Service) HandleUpstreamCallback(procurementOrderID uint, upstreamStatus
 		if upstreamStatus == "refunded" {
 			targetStatus = constants.ProcurementStatusRefunded
 		}
-		if err := s.procRepo.UpdateStatus(procOrder.ID, targetStatus, updates); err != nil {
+		if _, err := s.procRepo.UpdateStatus(procOrder.ID, procOrder.Status, targetStatus, updates); err != nil {
 			return fmt.Errorf("update procurement status: %w", err)
 		}
 		logger.Infow("procurement_order_refunded",
@@ -144,4 +170,19 @@ func (s *Service) HandleUpstreamCallback(procurementOrderID uint, upstreamStatus
 // createUpstreamFulfillment 在本地订单上创建上游交付记录
 func (s *Service) createUpstreamFulfillment(orderID uint, uf *procurementcontract.Fulfillment, now time.Time) error {
 	return s.orderLifecycle.CreateUpstreamFulfillment(orderID, uf, now)
+}
+
+// isUpstreamTransitionAllowed 上游回调允许的采购单状态转换：
+// 已交付、已全额退款、已取消的采购单不再接受 delivered / canceled；
+// 退款类回调不受限（部分退款可能先于交付到达）。
+func isUpstreamTransitionAllowed(current, upstreamStatus string) bool {
+	switch upstreamStatus {
+	case "delivered", "completed", "fulfilled", "canceled":
+		switch current {
+		case constants.ProcurementStatusFulfilled, constants.ProcurementStatusCompleted,
+			constants.ProcurementStatusRefunded, constants.ProcurementStatusCanceled:
+			return false
+		}
+	}
+	return true
 }

@@ -69,7 +69,7 @@ func (s *Service) findOrCreateTelegramUser(verified *telegramauthapp.IdentityVer
 		Email:                 email,
 		PasswordHash:          string(hashedPassword),
 		PasswordSetupRequired: true,
-		DisplayName:           telegramidentity.ResolveDisplayName(verified.ProviderUserID, verified.Username, verified.FirstName, verified.LastName),
+		DisplayName:           userdomain.SanitizeDisplayName(telegramidentity.ResolveDisplayName(verified.ProviderUserID, verified.Username, verified.FirstName, verified.LastName)),
 		Status:                constants.UserStatusActive,
 		LastLoginAt:           &now,
 		CreatedAt:             now,

@@ -1,0 +1,67 @@
+name: Verify admin login notification candidate
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/admin-login-notify-20261016, codex/admin-notify-token-redaction-20261016, codex/admin-payment-security-20261016]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  verify-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.14.0'
+      - name: Complete backend tests and vet
+        run: |
+          test -z "$(gofmt -l $(git ls-files '*.go'))"
+          go test ./... -count=1
+          go vet ./...
+      - name: Build and test embedded frontends
+        run: |
+          node --test frontend/check-ui-icons.test.mjs
+          node frontend/check-ui-icons.mjs
+          (cd frontend/admin && npx --yes pnpm@10.34.3 install --frozen-lockfile && npx --yes pnpm@10.34.3 run test && npx --yes pnpm@10.34.3 run build:fullstack)
+          (cd frontend/user && npx --yes pnpm@10.34.3 install --frozen-lockfile && npx --yes pnpm@10.34.3 run test && npx --yes pnpm@10.34.3 run build)
+          mkdir -p internal/web/dist/admin internal/web/dist/user
+          cp -a frontend/admin/dist/. internal/web/dist/admin/
+          cp -a frontend/user/dist/. internal/web/dist/user/
+          go test -tags release,fullstack ./internal/web -count=1
+      - name: Build traceable Linux candidate
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          test -z "$(git status --porcelain)"
+          mkdir -p dist
+          go build -trimpath -buildvcs=true -tags release,fullstack -ldflags='-s -w -X github.com/dujiao-next/internal/version.Version=v1.0.0 -X github.com/dujiao-next/internal/version.BuildType=release' -o dist/dujiao-next ./cmd/server
+          go version -m dist/dujiao-next | tee dist/build-info.txt
+          grep -F "vcs.revision=$GITHUB_SHA" dist/build-info.txt
+          grep -F 'vcs.modified=false' dist/build-info.txt
+          sha256sum dist/dujiao-next | tee dist/SHA256SUMS
+          find internal/web/dist -type f -print0 | sort -z | xargs -0 sha256sum > dist/embedded-assets.sha256
+          (cd frontend/admin && npx --yes pnpm@10.34.3 run build)
+          cp -a frontend/admin/dist dist/admin-dist
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish immutable binary carrier for reviewed deployment
+        run: |
+          printf 'FROM scratch\nCOPY dujiao-next /app/dujiao-next\nCOPY admin-dist /app/admin-dist\nCOPY build-info.txt embedded-assets.sha256 SHA256SUMS /evidence/\n' > dist/Dockerfile
+          image="ghcr.io/kinzie-uuu/dujiao-next:notify-binary-$GITHUB_SHA"
+          docker build --label "org.opencontainers.image.revision=$GITHUB_SHA" --label 'org.opencontainers.image.source=https://github.com/kinzie-UuU/dujiao-next' -t "$image" dist
+          docker push "$image"
+          docker image inspect --format '{{json .RepoDigests}}' "$image"

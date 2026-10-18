@@ -46,6 +46,8 @@ type TOTPSetupResult struct {
 
 // TOTPEnableResult /2fa/enable 响应。
 type TOTPEnableResult struct {
+	Token         string    `json:"token,omitempty"`
+	ExpiresAt     time.Time `json:"expires_at,omitempty"`
 	EnabledAt     time.Time `json:"enabled_at"`
 	RecoveryCodes []string  `json:"recovery_codes"`
 }
@@ -103,16 +105,21 @@ type Admin2FAHandler struct {
 	auth       AuthService
 	challenges ChallengeStore
 	recorder   AdminLoginRecorder
+	notifier   AdminLoginNotifier
 }
 
-func NewAdmin2FAHandler(totp TOTPService, auth AuthService, challenges ChallengeStore, recorder AdminLoginRecorder) *Admin2FAHandler {
+func NewAdmin2FAHandler(totp TOTPService, auth AuthService, challenges ChallengeStore, recorder AdminLoginRecorder, notifiers ...AdminLoginNotifier) *Admin2FAHandler {
 	if totp == nil {
 		panic("admin 2fa handler: totp is nil")
 	}
 	if auth == nil {
 		panic("admin 2fa handler: auth is nil")
 	}
-	return &Admin2FAHandler{totp: totp, auth: auth, challenges: challenges, recorder: recorder}
+	var notifier AdminLoginNotifier
+	if len(notifiers) > 0 {
+		notifier = notifiers[0]
+	}
+	return &Admin2FAHandler{totp: totp, auth: auth, challenges: challenges, recorder: recorder, notifier: notifier}
 }
 
 func (h *Admin2FAHandler) writeLoginLog(c *gin.Context, adminID uint, username, eventType, status, failReason string, operatorID *uint) {
@@ -203,6 +210,10 @@ func (h *Admin2FAHandler) Enable2FA(c *gin.Context) {
 			ginutil.RespondError(c, response.CodeInternal, "error.internal_error", err)
 		}
 		return
+	}
+	// Keep the verified current device signed in after revoking earlier sessions.
+	if login, err := h.auth.CompleteLoginAfter2FA(adminID); err == nil && login != nil {
+		res.Token, res.ExpiresAt = login.Token, login.ExpiresAt
 	}
 	h.writeLoginLog(c, adminID, adminUsername(c), constants.AdminLoginEvent2FAEnabled, constants.AdminLoginStatusSuccess, "", nil)
 	response.Success(c, res)
@@ -306,11 +317,13 @@ func (h *Admin2FAHandler) Verify2FA(c *gin.Context) {
 	}
 	claims, err := h.auth.ParseChallengeToken(req.ChallengeToken)
 	if err != nil {
+		notifyAdminLoginFailure(c, h.notifier, "2fa_challenge")
 		ginutil.RespondError(c, response.CodeUnauthorized, "error.totp_challenge_invalid", nil)
 		return
 	}
 	ctx := context.Background()
 	if h.challenges != nil && h.challenges.IsRevoked(ctx, claims.JTI) {
+		notifyAdminLoginFailure(c, h.notifier, "2fa_challenge")
 		ginutil.RespondError(c, response.CodeUnauthorized, "error.totp_challenge_invalid", nil)
 		return
 	}
@@ -328,6 +341,9 @@ func (h *Admin2FAHandler) Verify2FA(c *gin.Context) {
 			failReason = constants.AdminLoginFailInvalidRecoveryCode
 		}
 		h.writeLoginLog(c, claims.AdminID, username, event, constants.AdminLoginStatusFailed, failReason, nil)
+		if errors.Is(verifyErr, ErrTOTPCodeInvalid) || errors.Is(verifyErr, ErrTOTPRecoveryInvalid) {
+			notifyAdminLoginFailure(c, h.notifier, event)
+		}
 		if failCnt >= challengeMaxFailures {
 			if h.challenges != nil {
 				h.challenges.Revoke(ctx, claims.JTI)
@@ -358,6 +374,7 @@ func (h *Admin2FAHandler) Verify2FA(c *gin.Context) {
 		successEvent = constants.AdminLoginEventLoginRecoveryCode
 	}
 	h.writeLoginLog(c, claims.AdminID, username, successEvent, constants.AdminLoginStatusSuccess, "", nil)
+	notifyAdminLogin(c, h.notifier, loginRes.Admin.ID, loginRes.Admin.Username, successEvent)
 	response.Success(c, gin.H{
 		"requires_totp": false,
 		"token":         loginRes.Token,

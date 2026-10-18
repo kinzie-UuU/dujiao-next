@@ -3,6 +3,7 @@ package contract
 import "errors"
 
 var (
+	ErrOutstandingDebt         = errors.New("wallet outstanding debt")
 	ErrInvalidAmount           = errors.New("wallet invalid amount")
 	ErrInsufficientBalance     = errors.New("wallet insufficient balance")
 	ErrAccountNotFound         = errors.New("wallet account not found")

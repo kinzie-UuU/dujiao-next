@@ -3,6 +3,7 @@ package okpay
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
@@ -303,14 +304,17 @@ func VerifyCallback(cfg *Config, data *CallbackData) error {
 	if cfg == nil || data == nil {
 		return ErrConfigInvalid
 	}
-	if strings.TrimSpace(cfg.MerchantID) != "" && data.MerchantID != "" && data.MerchantID != strings.TrimSpace(cfg.MerchantID) {
+	if strings.TrimSpace(cfg.MerchantToken) == "" {
+		return ErrConfigInvalid
+	}
+	if strings.TrimSpace(cfg.MerchantID) != "" && data.MerchantID != strings.TrimSpace(cfg.MerchantID) {
 		return ErrSignatureInvalid
 	}
 	if data.Sign == "" {
 		return ErrSignatureInvalid
 	}
 	expected := buildSignature(stripSignPairs(data.RawPairs), cfg.MerchantToken)
-	if strings.EqualFold(expected, data.Sign) {
+	if hmac.Equal([]byte(strings.ToLower(expected)), []byte(strings.ToLower(data.Sign))) {
 		return nil
 	}
 	sortedPairs := make([]OrderedPair, 0, len(data.Raw))
@@ -324,7 +328,7 @@ func VerifyCallback(cfg *Config, data *CallbackData) error {
 		return sortedPairs[i].Key < sortedPairs[j].Key
 	})
 	expected = buildSignature(sortedPairs, cfg.MerchantToken)
-	if !strings.EqualFold(expected, data.Sign) {
+	if !hmac.Equal([]byte(strings.ToLower(expected)), []byte(strings.ToLower(data.Sign))) {
 		return ErrSignatureInvalid
 	}
 	return nil

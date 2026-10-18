@@ -13,7 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-func (s *WriteService) syncSingleProductSKU(skuRepo SKURepository, productID uint, priceAmount decimal.Decimal, costPriceAmount decimal.Decimal, manualStockTotal int, createWhenMissing bool) error {
+func (s *WriteService) syncSingleProductSKU(skuRepo SKURepository, productID uint, priceAmount decimal.Decimal, costPriceAmount decimal.Decimal, manualStockTotal int, createWhenMissing bool, keepStock ...bool) error {
 	if skuRepo == nil || productID == 0 {
 		return nil
 	}
@@ -51,7 +51,11 @@ func (s *WriteService) syncSingleProductSKU(skuRepo SKURepository, productID uin
 	if strings.TrimSpace(target.SKUCode) == "" {
 		target.SKUCode = productdomain.DefaultSKUCode
 	}
-	if err := skuRepo.Update(&target); err != nil {
+	update := skuRepo.Update
+	if len(keepStock) > 0 && keepStock[0] {
+		update = skuRepo.UpdateKeepingStock
+	}
+	if err := update(&target); err != nil {
 		return err
 	}
 
@@ -100,6 +104,7 @@ type normalizedProductSKU struct {
 	PriceAmount      money.Amount
 	CostPriceAmount  money.Amount
 	ManualStockTotal int
+	KeepManualStock  bool
 	IsActive         bool
 	SortOrder        int
 }
@@ -136,6 +141,18 @@ func (s *WriteService) normalizeProductSKUInputs(inputs []ProductSKUInput, fulfi
 		}
 
 		manualTotal := input.ManualStockTotal
+		if input.KeepManualStock {
+			if existing, ok := existingSKUMap[input.ID]; ok {
+				manualTotal = existing.ManualStockTotal
+			} else if input.ID == 0 {
+				for _, existing := range existingSKUMap {
+					if strings.EqualFold(strings.TrimSpace(existing.SKUCode), skuCode) {
+						manualTotal = existing.ManualStockTotal
+						break
+					}
+				}
+			}
+		}
 		if manualTotal < constants.ManualStockUnlimited {
 			return nil, decimal.Zero, 0, productcontract.ErrManualStockInvalid
 		}
@@ -165,6 +182,7 @@ func (s *WriteService) normalizeProductSKUInputs(inputs []ProductSKUInput, fulfi
 			PriceAmount:      money.FromDecimal(priceAmount),
 			CostPriceAmount:  money.FromDecimal(costPriceAmount),
 			ManualStockTotal: manualTotal,
+			KeepManualStock:  input.KeepManualStock && fulfillmentType == constants.FulfillmentTypeManual,
 			IsActive:         isActive,
 			SortOrder:        input.SortOrder,
 		})
@@ -250,7 +268,11 @@ func (s *WriteService) applyProductSKUsWithStockGuard(
 			existing.ManualStockTotal = row.ManualStockTotal
 			existing.IsActive = row.IsActive
 			existing.SortOrder = row.SortOrder
-			if err := skuRepo.Update(&existing); err != nil {
+			update := skuRepo.Update
+			if row.KeepManualStock {
+				update = skuRepo.UpdateKeepingStock
+			}
+			if err := update(&existing); err != nil {
 				return err
 			}
 			kept[existing.ID] = struct{}{}
@@ -266,7 +288,11 @@ func (s *WriteService) applyProductSKUsWithStockGuard(
 			existing.ManualStockTotal = row.ManualStockTotal
 			existing.IsActive = row.IsActive
 			existing.SortOrder = row.SortOrder
-			if err := skuRepo.Update(&existing); err != nil {
+			update := skuRepo.Update
+			if row.KeepManualStock {
+				update = skuRepo.UpdateKeepingStock
+			}
+			if err := update(&existing); err != nil {
 				return err
 			}
 			kept[existing.ID] = struct{}{}

@@ -45,6 +45,7 @@ func normalizeSiteSetting(value map[string]interface{}) jsonmap.JSON {
 	normalized[constants.SettingFieldSiteCurrency] = normalizeSiteCurrency(value[constants.SettingFieldSiteCurrency])
 	normalized["template_mode"] = normalizeSiteTemplateMode(value["template_mode"])
 	normalized[constants.SettingFieldStorefrontTemplate] = normalizeStorefrontTemplate(value[constants.SettingFieldStorefrontTemplate])
+	normalized[constants.SettingFieldSalesPaused] = parseSettingBool(value[constants.SettingFieldSalesPaused])
 
 	if raw, ok := value["languages"]; ok {
 		normalized["languages"] = normalizeSiteLanguages(raw)

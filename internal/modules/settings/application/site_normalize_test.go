@@ -350,6 +350,30 @@ func TestUpdateSiteSettingNormalized(t *testing.T) {
 	}
 }
 
+func TestSalesPausedSettingDefaultsOffAndNormalizes(t *testing.T) {
+	repo := newMockSettingRepo()
+	svc := NewService(repo)
+
+	paused, err := svc.GetSalesPaused()
+	if err != nil || paused {
+		t.Fatalf("default sales paused = %v, err = %v", paused, err)
+	}
+
+	result, err := svc.Update(constants.SettingKeySiteConfig, map[string]interface{}{
+		constants.SettingFieldSalesPaused: "true",
+	})
+	if err != nil {
+		t.Fatalf("update sales paused failed: %v", err)
+	}
+	if result[constants.SettingFieldSalesPaused] != true {
+		t.Fatalf("stored sales paused = %v", result[constants.SettingFieldSalesPaused])
+	}
+	paused, err = svc.GetSalesPaused()
+	if err != nil || !paused {
+		t.Fatalf("sales paused = %v, err = %v", paused, err)
+	}
+}
+
 func TestUpdateSiteSettingNormalizedDefaultAbout(t *testing.T) {
 	repo := newMockSettingRepo()
 	svc := NewService(repo)

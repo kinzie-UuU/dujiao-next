@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	walletapp "github.com/dujiao-next/internal/modules/wallet/application"
 	"strings"
 	"time"
 
@@ -97,6 +98,9 @@ func (s *PaymentService) CreatePayment(input CreatePaymentInput) (*CreatePayment
 			return orderapp.ErrOrderStatusInvalid
 		}
 
+		if err := walletapp.CheckPurchaseAllowed(tx.Wallets(), lockedOrder.UserID); err != nil {
+			return err
+		}
 		paymentRepo := tx.Payments()
 		channelRepo := tx.PaymentChannels()
 		if input.ChannelID != 0 {
@@ -136,12 +140,18 @@ func (s *PaymentService) CreatePayment(input CreatePaymentInput) (*CreatePayment
 			if err != nil {
 				return ErrPaymentCreateFailed
 			}
-			if existing != nil && hasProviderResult(existing) {
+			if existing != nil && hasProviderResult(existing) && input.UseBalance == lockedOrder.WalletPaidAmount.Decimal.IsPositive() &&
+				paymentCoveredOrderAmount(existing, existing.Amount.Decimal).Equal(normalizeOrderAmount(lockedOrder.TotalAmount.Decimal.Sub(lockedOrder.WalletPaidAmount.Decimal))) {
 				reusedPending = true
 				payment = existing
 				order = &lockedOrder
 				return nil
 			}
+		}
+
+		// 新一轮支付使旧链接在本站失效；网关晚到回调仍按实际金额核验。
+		if _, err := paymentRepo.ExpirePendingByOrderIDs([]uint{lockedOrder.ID}, now); err != nil {
+			return ErrPaymentCreateFailed
 		}
 
 		if s.walletSvc != nil {

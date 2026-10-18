@@ -92,10 +92,14 @@ func (s *Service) requeuePoll(procOrder *procurementdomain.Order) error {
 
 	// 递增轮询计数
 	now := time.Now()
-	_ = s.procRepo.UpdateStatus(procOrder.ID, procOrder.Status, map[string]interface{}{
+	stillAccepted, err := s.procRepo.UpdateStatus(procOrder.ID, procOrder.Status, procOrder.Status, map[string]interface{}{
 		"retry_count": procOrder.RetryCount + 1,
 		"updated_at":  now,
 	})
+	if err != nil || !stillAccepted {
+		// 期间已被回调推进（或写入失败），不再继续轮询
+		return err
+	}
 
 	return s.queue.EnqueuePoll(procOrder.ID, delay)
 }

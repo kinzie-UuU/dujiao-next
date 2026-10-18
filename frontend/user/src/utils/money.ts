@@ -69,3 +69,18 @@ export const parseInteger = (value: unknown): number | null => {
   if (!Number.isSafeInteger(num)) return null
   return num
 }
+
+// Refund reversals may leave debt in the wallet; debt is never a payment discount.
+export const walletPaymentCents = (balance: unknown, total: unknown): number => {
+  const balanceCents = amountToCents(balance)
+  const totalCents = amountToCents(total)
+  if (balanceCents === null || totalCents === null) return 0
+  return Math.max(0, Math.min(balanceCents, totalCents))
+}
+
+// Purchase eligibility is independent of whether the customer selects wallet payment.
+export const walletPurchaseBlock = (balance: unknown, loaded: boolean, loading: boolean): 'unavailable' | 'debt' | null => {
+  const cents = amountToCents(balance)
+  if (!loaded || loading || cents === null) return 'unavailable'
+  return cents < 0 ? 'debt' : null
+}

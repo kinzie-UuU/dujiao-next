@@ -1,7 +1,9 @@
 package gormstore
 
 import (
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -280,4 +282,34 @@ func (r *Store) GetByIDForUpdate(id uint) (*paymentdomain.Payment, error) {
 		return nil, err
 	}
 	return &payment, nil
+}
+
+// ManualPaymentRiskAllowed rechecks the QR gateway's durable review decision.
+// Missing schema/record is a denial, including for orders predating the policy.
+func (r *Store) ManualPaymentRiskAllowed(paymentID uint) (bool, error) {
+	var rows []struct {
+		IdentityHash string
+		UserID       uint
+		GuestEmail   string
+	}
+	err := r.db.Raw(`SELECT risk.identity_hash, CASE WHEN payment.order_id > 0 THEN ord.user_id ELSE recharge.user_id END AS user_id, COALESCE(ord.guest_email,'') AS guest_email FROM payment_risk_reservations risk
+ JOIN payments payment ON payment.id = ?
+ LEFT JOIN orders ord ON ord.id = payment.order_id AND ord.deleted_at IS NULL
+ LEFT JOIN wallet_recharge_orders recharge ON recharge.payment_id = payment.id AND recharge.deleted_at IS NULL
+ WHERE payment.deleted_at IS NULL AND risk.order_no = CASE WHEN payment.order_id > 0 THEN ord.order_no ELSE recharge.recharge_no END
+ AND risk.status = 'allowed' AND risk.policy_version = '2026-10-18'
+ AND risk.amount_cents = CAST(ROUND(CASE WHEN payment.order_id > 0 THEN ord.total_amount ELSE recharge.amount END * 100) AS INTEGER)`, paymentID).Scan(&rows).Error
+	if err != nil || len(rows) != 1 {
+		return false, err
+	}
+	row := rows[0]
+	identity := "user:" + fmt.Sprint(row.UserID)
+	if row.UserID == 0 {
+		email := strings.ToLower(strings.TrimSpace(row.GuestEmail))
+		if email == "" {
+			return false, nil
+		}
+		identity = "guest:" + email
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(identity))) == row.IdentityHash, nil
 }

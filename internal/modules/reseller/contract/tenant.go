@@ -67,6 +67,15 @@ func TenantFromContext(ctx context.Context) (TenantContext, bool) {
 	return tenant, ok
 }
 
+// RequestResellerID 返回上下文所在的分销站点 ID；主站、无租户或不可用站点返回 0。
+func RequestResellerID(ctx context.Context) uint {
+	tenant, ok := TenantFromContext(ctx)
+	if ok && tenant.ResellerID != nil && !tenant.IsMain && !tenant.Unavailable {
+		return *tenant.ResellerID
+	}
+	return 0
+}
+
 // NormalizeHost 归一化请求 Host（小写、去端口、去尾点）。
 func NormalizeHost(raw string) string {
 	host := strings.TrimSpace(strings.ToLower(raw))

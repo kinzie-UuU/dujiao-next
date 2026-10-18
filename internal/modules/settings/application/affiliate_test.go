@@ -32,6 +32,29 @@ func TestGetAffiliateSettingFallback(t *testing.T) {
 	}
 }
 
+func TestGPTWalletRewardSettingRoundTrip(t *testing.T) {
+	svc := NewService(newMockSettingRepo())
+	_, err := svc.UpdateAffiliateSetting(settingsintegration.AffiliateSetting{Enabled: true, RewardMode: settingsintegration.AffiliateRewardModeGPTWallet})
+	if err == nil {
+		t.Fatal("enabled reward requires a product allowlist")
+	}
+	_, err = svc.UpdateAffiliateSetting(settingsintegration.AffiliateSetting{RewardMode: "unknown"})
+	if err == nil {
+		t.Fatal("unknown mode accepted")
+	}
+	_, err = svc.UpdateAffiliateSetting(settingsintegration.AffiliateSetting{RewardMode: settingsintegration.AffiliateRewardModeGPTWallet, EligibleProductIDs: []uint{1, 0, 2, 1}, CommissionRate: 50, WithdrawChannels: []string{"cash"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, err := svc.GetAffiliateSetting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actual.Enabled || actual.RewardMode != settingsintegration.AffiliateRewardModeGPTWallet || len(actual.EligibleProductIDs) != 2 || actual.CommissionRate != 0 || len(actual.WithdrawChannels) != 0 {
+		t.Fatalf("unsafe reward settings: %+v", actual)
+	}
+}
+
 func TestUpdateAffiliateSettingNormalize(t *testing.T) {
 	repo := newMockSettingRepo()
 	svc := NewService(repo)
@@ -71,5 +94,21 @@ func TestUpdateAffiliateSettingNormalize(t *testing.T) {
 	}
 	if saved["commission_rate"] != 100.0 {
 		t.Fatalf("expected saved commission rate 100, got %v", saved["commission_rate"])
+	}
+}
+
+func TestAllProductsWalletSettingRoundTrip(t *testing.T) {
+	svc := NewService(newMockSettingRepo())
+	_, err := svc.UpdateAffiliateSetting(settingsintegration.AffiliateSetting{Enabled: true, RewardMode: settingsintegration.AffiliateRewardModeGPTWallet, AllProducts: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, err := svc.GetAffiliateSetting()
+	if err != nil || !actual.AllProducts || !actual.Enabled || len(actual.EligibleProductIDs) != 0 {
+		t.Fatalf("all-product policy lost: %+v, %v", actual, err)
+	}
+	actual.AllProducts = false
+	if _, err := svc.UpdateAffiliateSetting(actual); err == nil {
+		t.Fatal("empty legacy allowlist became all-products implicitly")
 	}
 }

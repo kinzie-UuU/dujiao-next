@@ -92,3 +92,9 @@ func TestToPaymentStatus(t *testing.T) {
 		})
 	}
 }
+
+func TestVerifyCallbackRejectsEmptySecret(t *testing.T) {
+	if err := VerifyCallback(&Config{}, &CallbackData{Status: StatusSuccess}); err != ErrConfigInvalid {
+		t.Fatalf("expected invalid empty secret, got %v", err)
+	}
+}

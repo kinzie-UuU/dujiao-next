@@ -1,6 +1,7 @@
 package producthttp
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -182,5 +183,26 @@ func TestDecoratePublicProductForTenantInvalidDisplayPricingIsHidden(t *testing.
 				t.Fatalf("expected ErrResellerProductNotListed, got %v", err)
 			}
 		})
+	}
+}
+
+func TestProductSKUStockOmissionDiffersFromExplicitZero(t *testing.T) {
+	for _, tc := range []struct {
+		body  string
+		keep  bool
+		stock int
+	}{
+		{`[{"id":1,"sku_code":"A","price_amount":10}]`, true, 0},
+		{`[{"id":1,"sku_code":"A","price_amount":10,"manual_stock_total":0}]`, false, 0},
+		{`[{"id":1,"sku_code":"A","price_amount":10,"manual_stock_total":9}]`, false, 9},
+	} {
+		var request []ProductSKURequest
+		if err := json.Unmarshal([]byte(tc.body), &request); err != nil {
+			t.Fatal(err)
+		}
+		got := toProductSKUInputs(request)[0]
+		if got.KeepManualStock != tc.keep || got.ManualStockTotal != tc.stock {
+			t.Fatalf("request %s: %+v", tc.body, got)
+		}
 	}
 }

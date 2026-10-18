@@ -22,6 +22,19 @@ func (s *OrderService) cancelOrderWithChildren(order *orderdomain.Order, rollbac
 		orderStore := tx.Orders()
 		productRepo := tx.Products()
 		productSKURepo := tx.ProductSKUs()
+		// 事务内加锁复核状态，避免与并发的支付回调竞争
+		locked, err := orderStore.GetByIDForUpdate(order.ID)
+		if err != nil {
+			return ErrOrderFetchFailed
+		}
+		if locked == nil {
+			return ErrOrderNotFound
+		}
+		if locked.Status != order.Status || locked.Status != constants.OrderStatusPendingPayment {
+			return ErrOrderCancelNotAllowed
+		}
+		// 支付方式可能已在读取订单后切换，退款采用事务内最新余额分配。
+		order.WalletPaidAmount = locked.WalletPaidAmount
 		updates := map[string]interface{}{
 			"canceled_at": now,
 			"updated_at":  now,
@@ -125,7 +138,11 @@ func (s *OrderService) CancelOrder(orderID uint, userID uint) (*orderdomain.Orde
 	if order.Status != constants.OrderStatusPendingPayment {
 		return nil, ErrOrderCancelNotAllowed
 	}
-	if err := s.cancelOrderWithChildren(order, false); err != nil {
+	// 未支付订单取消时同步回滚优惠券用量
+	if err := s.cancelOrderWithChildren(order, true); err != nil {
+		if errors.Is(err, ErrOrderCancelNotAllowed) {
+			return nil, err
+		}
 		return nil, ErrOrderUpdateFailed
 	}
 	if s.affiliateSvc != nil {
@@ -169,13 +186,16 @@ func (s *OrderService) UpdateOrderStatus(orderID uint, targetStatus string) (*or
 	}
 	// “已支付”只能由钱包原子扣款或经过验签、金额校验的支付回调驱动。
 	// 管理端通用状态接口不得绕过支付事实直接触发库存、累计消费和交付副作用。
-	if target == constants.OrderStatusPaid {
+	if target == constants.OrderStatusPaid || target == constants.OrderStatusRefunded || target == constants.OrderStatusPartiallyRefunded {
 		return nil, ErrOrderStatusInvalid
 	}
 	isParent := order.ParentID == nil && len(order.Children) > 0
 	if isParent {
 		switch target {
 		case constants.OrderStatusCanceled:
+			if order.Status != constants.OrderStatusPendingPayment {
+				return nil, ErrOrderStatusInvalid
+			}
 			if err := s.cancelOrderWithChildren(order, true); err != nil {
 				return nil, ErrOrderUpdateFailed
 			}
@@ -193,6 +213,53 @@ func (s *OrderService) UpdateOrderStatus(orderID uint, targetStatus string) (*or
 						"order_id", order.ID,
 						"target_order_id", order.ID,
 						"status", constants.OrderStatusCanceled,
+						"error", err,
+					)
+				}
+			}
+			return order, nil
+		case constants.OrderStatusDelivered:
+			if !IsTransitionAllowed(order.Status, target) {
+				return nil, ErrOrderStatusInvalid
+			}
+			now := time.Now()
+			err = s.orderStore.WithinTransaction(func(tx ordercontract.Transaction) error {
+				orderStore := tx.Orders()
+				updates := map[string]interface{}{"updated_at": now}
+				if err := orderStore.UpdateStatus(order.ID, target, updates); err != nil {
+					return ErrOrderUpdateFailed
+				}
+				for _, child := range order.Children {
+					if child.Status == target {
+						continue
+					}
+					if !IsTransitionAllowed(child.Status, target) {
+						return ErrOrderStatusInvalid
+					}
+					if err := orderStore.UpdateStatus(child.ID, target, updates); err != nil {
+						return ErrOrderUpdateFailed
+					}
+				}
+				return nil
+			})
+			if err != nil {
+				if errors.Is(err, ErrOrderStatusInvalid) {
+					return nil, ErrOrderStatusInvalid
+				}
+				return nil, ErrOrderUpdateFailed
+			}
+			order.Status = target
+			order.UpdatedAt = now
+			for i := range order.Children {
+				order.Children[i].Status = target
+				order.Children[i].UpdatedAt = now
+			}
+			if s.queueClient != nil {
+				if _, err := EnqueueStatusEmailTaskIfEligible(s.orderStore, s.queueClient, s.settingService, s.defaultEmailConfig, order.ID, target); err != nil {
+					logger.Warnw("order_enqueue_status_email_failed",
+						"order_id", order.ID,
+						"target_order_id", order.ID,
+						"status", target,
 						"error", err,
 					)
 				}

@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { adminAPI, type AdminWalletAccount, type AdminWalletTransaction } from '@/api/admin'
 import type { AdminUser, AdminOrder, AdminPayment, AdminMemberLevel, AdminUserOAuthIdentity } from '@/api/types'
 import IdCell from '@/components/IdCell.vue'
-import { BadgeCheck, Copy, BadgeAlert } from 'lucide-vue-next'
+import { BadgeCheck, Copy, BadgeAlert, UserRound } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Card, CardContent } from '@/components/ui/card'
@@ -30,6 +30,7 @@ import {
   userStatusLabel,
 } from '@/utils/status'
 import { formatDate, formatMoney, getLocalizedText } from '@/utils/format'
+import { getImageUrl } from '@/utils/image'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -585,8 +586,12 @@ watch(
                   :key="level.id"
                   :value="String(level.id)"
                 >
-                  {{ level.icon }} {{ getLocalizedText(level.name) }}
-                  <span v-if="level.is_default" class="text-muted-foreground">({{ t('admin.memberLevels.default') }})</span>
+                  <span class="inline-flex items-center gap-1.5">
+                    <img v-if="level.icon && level.icon.includes('/')" :src="getImageUrl(level.icon)" class="h-4 w-4 shrink-0 rounded object-cover" alt="" />
+                    <UserRound v-else class="h-4 w-4 shrink-0" aria-hidden="true" />
+                    {{ getLocalizedText(level.name) }}
+                    <span v-if="level.is_default" class="text-muted-foreground">({{ t('admin.memberLevels.default') }})</span>
+                  </span>
                 </SelectItem>
               </SelectContent>
             </Select>

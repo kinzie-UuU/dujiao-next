@@ -1,7 +1,10 @@
 package paymenthttp
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 
 	paymentdomain "github.com/dujiao-next/internal/modules/payment/domain"
@@ -92,19 +95,28 @@ type UpdatePaymentChannelRequest struct {
 }
 
 // AdminChannelHandler 处理后台支付渠道 HTTP。
+type AdminChannelSecurity interface {
+	Verify(context.Context, uint, string) error
+	Changed(uint, string, string, uint, []string)
+}
+
 type AdminChannelHandler struct {
+	security AdminChannelSecurity
 	channels AdminChannelCatalog
 }
 
-func NewAdminChannelHandler(channels AdminChannelCatalog) *AdminChannelHandler {
+func NewAdminChannelHandler(channels AdminChannelCatalog, security AdminChannelSecurity) *AdminChannelHandler {
 	if channels == nil {
 		panic("payment admin channel handler: channels is nil")
 	}
-	return &AdminChannelHandler{channels: channels}
+	return &AdminChannelHandler{channels: channels, security: security}
 }
 
 // CreatePaymentChannel 创建支付渠道
 func (h *AdminChannelHandler) CreatePaymentChannel(c *gin.Context) {
+	if !h.authorizeWrite(c) {
+		return
+	}
 	var req CreatePaymentChannelRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		ginutil.RespondBindError(c, err)
@@ -163,11 +175,15 @@ func (h *AdminChannelHandler) CreatePaymentChannel(c *gin.Context) {
 	}
 	_ = cache.DelAllPublicConfig(c.Request.Context())
 
+	h.security.Changed(adminID(c), c.ClientIP(), "create", channel.ID, channelChangedFields(nil, channel))
 	response.Success(c, redactPaymentChannel(channel))
 }
 
 // UpdatePaymentChannel 更新支付渠道
 func (h *AdminChannelHandler) UpdatePaymentChannel(c *gin.Context) {
+	if !h.authorizeWrite(c) {
+		return
+	}
 	id, err := ginutil.ParseParamUint(c, "id")
 	if err != nil {
 		ginutil.RespondError(c, response.CodeBadRequest, "error.payment_channel_invalid", nil)
@@ -191,6 +207,7 @@ func (h *AdminChannelHandler) UpdatePaymentChannel(c *gin.Context) {
 		return
 	}
 
+	before := *channel
 	if req.Name != "" {
 		channel.Name = req.Name
 	}
@@ -258,11 +275,15 @@ func (h *AdminChannelHandler) UpdatePaymentChannel(c *gin.Context) {
 	}
 	_ = cache.DelAllPublicConfig(c.Request.Context())
 
+	h.security.Changed(adminID(c), c.ClientIP(), "update", channel.ID, channelChangedFields(&before, channel))
 	response.Success(c, redactPaymentChannel(channel))
 }
 
 // DeletePaymentChannel 删除支付渠道
 func (h *AdminChannelHandler) DeletePaymentChannel(c *gin.Context) {
+	if !h.authorizeWrite(c) {
+		return
+	}
 	id, err := ginutil.ParseParamUint(c, "id")
 	if err != nil {
 		ginutil.RespondError(c, response.CodeBadRequest, "error.payment_channel_invalid", nil)
@@ -275,6 +296,7 @@ func (h *AdminChannelHandler) DeletePaymentChannel(c *gin.Context) {
 	}
 	_ = cache.DelAllPublicConfig(c.Request.Context())
 
+	h.security.Changed(adminID(c), c.ClientIP(), "delete", id, []string{"channel"})
 	response.Success(c, gin.H{"deleted": true})
 }
 
@@ -394,4 +416,36 @@ func mergePaymentChannelConfig(existing jsonmap.JSON, incoming map[string]interf
 func asConfigString(value interface{}) string {
 	text, _ := value.(string)
 	return text
+}
+
+func adminID(c *gin.Context) uint { id, _ := ginutil.GetAdminID(c); return id }
+func (h *AdminChannelHandler) authorizeWrite(c *gin.Context) bool {
+	id, ok := ginutil.GetAdminID(c)
+	if !ok {
+		return false
+	}
+	if h.security == nil || h.security.Verify(c.Request.Context(), id, c.GetHeader("X-Admin-TOTP")) != nil {
+		response.ErrorWithHTTPStatus(c, 403, response.CodeForbidden, "收款变更需要已绑定验证器的新六位验证码，且安全通知服务必须可用；请等待新验证码后重试。")
+		return false
+	}
+	return true
+}
+
+// Compare only schema field names. Configuration values never enter notices.
+func channelChangedFields(before, after *paymentdomain.PaymentChannel) []string {
+	names := []string{"name", "icon", "provider_type", "channel_type", "interaction_mode", "fee_rate", "fixed_fee", "min_amount", "max_amount", "hide_amount_out_range", "payment_roles", "member_levels", "payment_types", "config_json", "is_active", "sort_order"}
+	toMap := func(c *paymentdomain.PaymentChannel) map[string]interface{} {
+		b, _ := json.Marshal(c)
+		var m map[string]interface{}
+		_ = json.Unmarshal(b, &m)
+		return m
+	}
+	old, next := toMap(before), toMap(after)
+	changed := []string{}
+	for _, key := range names {
+		if before == nil || !reflect.DeepEqual(old[key], next[key]) {
+			changed = append(changed, key)
+		}
+	}
+	return changed
 }

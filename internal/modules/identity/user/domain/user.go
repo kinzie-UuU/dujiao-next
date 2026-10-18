@@ -1,7 +1,9 @@
 package userdomain
 
 import (
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/dujiao-next/internal/shared/money"
 )
@@ -36,4 +38,30 @@ type User struct {
 // TableName 指定表名
 func (User) TableName() string {
 	return "users"
+}
+
+// DisplayNameMaxRunes 昵称最大字符数。
+const DisplayNameMaxRunes = 32
+
+func isDisallowedDisplayNameRune(r rune) bool {
+	return unicode.IsControl(r) || strings.ContainsRune("<>\"'`", r)
+}
+
+// SanitizeDisplayName 剔除 HTML 敏感字符与控制字符并截断，用于第三方/系统生成的昵称。
+func SanitizeDisplayName(raw string) string {
+	cleaned := strings.TrimSpace(strings.Map(func(r rune) rune {
+		if isDisallowedDisplayNameRune(r) {
+			return -1
+		}
+		return r
+	}, raw))
+	if runes := []rune(cleaned); len(runes) > DisplayNameMaxRunes {
+		cleaned = strings.TrimSpace(string(runes[:DisplayNameMaxRunes]))
+	}
+	return cleaned
+}
+
+// ValidDisplayName 校验手动填写的昵称（调用方先 TrimSpace）：非空、不超长、不含 HTML 敏感字符与控制字符。
+func ValidDisplayName(name string) bool {
+	return name != "" && SanitizeDisplayName(name) == name
 }

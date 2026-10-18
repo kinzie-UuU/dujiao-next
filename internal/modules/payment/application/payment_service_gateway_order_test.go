@@ -889,3 +889,212 @@ func TestHandleCallbackAcceptsGatewayOrderNoForWalletRecharge(t *testing.T) {
 		t.Fatalf("expected updated payment")
 	}
 }
+
+func manualUSDTChannel() *paymentdomain.PaymentChannel {
+	return &paymentdomain.PaymentChannel{ID: 1, ProviderType: "manual_qr", ChannelType: "binance_usdt", InteractionMode: "qr", IsActive: true, ConfigJSON: jsonmap.JSON{"usdt_fixed": map[string]interface{}{"rate": "6.70", "network": "BSC", "address": "0x" + strings.Repeat("1", 40), "quote_ttl_minutes": 30}}}
+}
+
+func TestManualUSDTValidation(t *testing.T) {
+	svc := &PaymentService{}
+	if err := svc.ValidateChannel(manualUSDTChannel()); err != nil {
+		t.Fatal(err)
+	}
+	for _, mutate := range []func(*paymentdomain.PaymentChannel){
+		func(c *paymentdomain.PaymentChannel) { c.ChannelType = "alipay" },
+		func(c *paymentdomain.PaymentChannel) { c.InteractionMode = "redirect" },
+		func(c *paymentdomain.PaymentChannel) { c.ConfigJSON["usdt_fixed"] = map[string]interface{}{} },
+		func(c *paymentdomain.PaymentChannel) {
+			c.ConfigJSON["usdt_fixed"].(map[string]interface{})["rate"] = "0"
+		},
+		func(c *paymentdomain.PaymentChannel) {
+			c.ConfigJSON["usdt_fixed"].(map[string]interface{})["address"] = "0x" + strings.Repeat("0", 40)
+		},
+		func(c *paymentdomain.PaymentChannel) {
+			c.ConfigJSON["usdt_fixed"].(map[string]interface{})["network"] = "TRC20"
+		},
+		func(c *paymentdomain.PaymentChannel) {
+			c.ConfigJSON["usdt_fixed"].(map[string]interface{})["quote_ttl_minutes"] = 0
+		},
+	} {
+		channel := manualUSDTChannel()
+		mutate(channel)
+		if svc.ValidateChannel(channel) == nil {
+			t.Fatalf("accepted invalid channel: %+v", channel)
+		}
+	}
+	channel := manualUSDTChannel()
+	channel.ProviderType = "unknown"
+	if svc.ValidateChannel(channel) == nil {
+		t.Fatal("unknown provider accepted")
+	}
+}
+
+func TestManualUSDTCreatesPendingWithoutGatewayOrCNYConversion(t *testing.T) {
+	svc, db := setupPaymentServiceWalletTest(t)
+	svc.paymentProviderRegistry = nil // This path must not require an external gateway.
+	channel := manualUSDTChannel()
+	order := &orderdomain.Order{ID: 1, OrderNo: "DJ-MANUAL-1", Currency: "CNY", Status: constants.OrderStatusPendingPayment}
+	payment := &paymentdomain.Payment{OrderID: 1, ChannelID: 1, ProviderType: "manual_qr", ChannelType: "binance_usdt", InteractionMode: "qr", Currency: "CNY", Amount: money.FromDecimal(decimal.NewFromInt(100)), Status: constants.PaymentStatusInitiated}
+	if err := db.Create(payment).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.applyProviderPayment(CreatePaymentInput{}, order, channel, payment); err != nil {
+		t.Fatal(err)
+	}
+	var stored paymentdomain.Payment
+	if err := db.First(&stored, payment.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != constants.PaymentStatusPending || stored.Currency != "CNY" || !stored.Amount.Decimal.Equal(decimal.NewFromInt(100)) || stored.QRCode != "manual://order/DJ-MANUAL-1" || stored.PayURL != "" {
+		t.Fatalf("bad pending state: %+v", stored)
+	}
+	if strings.Contains(stored.QRCode, "0x") {
+		t.Fatal("placeholder exposed deposit address")
+	}
+	for _, mutate := range []func(){func() { order.Currency = "USD" }, func() { order.Currency = "CNY"; channel.IsActive = false }, func() { channel.IsActive = true; payment.OrderID = 2 }} {
+		mutate()
+		payment.Status = constants.PaymentStatusInitiated
+		if svc.applyProviderPayment(CreatePaymentInput{}, order, channel, payment) == nil {
+			t.Fatal("invalid payment accepted")
+		}
+	}
+}
+
+func TestManualUSDTCoreCreateAndAdminConfirm(t *testing.T) {
+	svc, db := setupPaymentServiceWalletTest(t)
+	channel := manualUSDTChannel()
+	if err := db.Create(channel).Error; err != nil {
+		t.Fatal(err)
+	}
+	order := &orderdomain.Order{OrderNo: "DJMANUAL-CREATE", Currency: "CNY", Status: constants.OrderStatusPendingPayment, TotalAmount: money.FromDecimal(decimal.NewFromInt(100)), OriginalAmount: money.FromDecimal(decimal.NewFromInt(100))}
+	if err := db.Create(order).Error; err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.CreatePayment(CreatePaymentInput{OrderID: order.ID, ChannelID: channel.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.OrderPaid || result.Payment == nil || result.Payment.Status != constants.PaymentStatusPending {
+		t.Fatalf("unexpected create result: %+v", result)
+	}
+	if err := db.First(order, order.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if order.Status != constants.OrderStatusPendingPayment {
+		t.Fatal("creation marked order paid")
+	}
+	if _, err := svc.ConfirmManualPayment(result.Payment.ID, receiptEvidence(t, db, result.Payment.ID)); err != nil {
+		t.Fatal(err)
+	}
+	var payment paymentdomain.Payment
+	if err := db.First(&payment, result.Payment.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if payment.Status != constants.PaymentStatusSuccess {
+		t.Fatal("admin confirmation did not settle")
+	}
+}
+
+func TestManualUSDTKeepsLegacyProvidersAndRejectsRecharge(t *testing.T) {
+	svc := &PaymentService{}
+	order := &orderdomain.Order{OrderNo: "DJLEGACY"}
+	for _, kind := range []string{"alipay", "wechat", "unknown"} {
+		channel := manualUSDTChannel()
+		channel.ChannelType = kind
+		if err := svc.ValidateChannel(channel); err != ErrPaymentProviderNotSupported {
+			t.Fatalf("legacy validation changed for %s: %v", kind, err)
+		}
+		if err := svc.applyProviderPayment(CreatePaymentInput{}, order, channel, &paymentdomain.Payment{}); err != ErrPaymentProviderNotSupported {
+			t.Fatalf("legacy creation changed for %s: %v", kind, err)
+		}
+	}
+	channel := manualUSDTChannel()
+	if err := svc.applyProviderPayment(CreatePaymentInput{ReturnBizType: "recharge"}, &orderdomain.Order{OrderNo: "WRTEST"}, channel, &paymentdomain.Payment{ID: 1, ChannelID: 1, ProviderType: "manual_qr", ChannelType: "binance_usdt", Status: constants.PaymentStatusInitiated, Currency: "CNY", Amount: money.FromDecimal(decimal.NewFromInt(100))}); err == nil {
+		t.Fatal("wallet virtual order accepted")
+	}
+}
+
+func TestManualUSDTAdminConfirmIncludesFeesAndIsIdempotent(t *testing.T) {
+	svc, db := setupPaymentServiceWalletTest(t)
+	channel := manualUSDTChannel()
+	if err := db.Create(channel).Error; err != nil {
+		t.Fatal(err)
+	}
+	order := &orderdomain.Order{OrderNo: "DJMANUAL-FEE", Currency: "CNY", Status: constants.OrderStatusPendingPayment, TotalAmount: money.FromDecimal(decimal.NewFromInt(100)), OriginalAmount: money.FromDecimal(decimal.NewFromInt(100))}
+	if err := db.Create(order).Error; err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.CreatePayment(CreatePaymentInput{OrderID: order.ID, ChannelID: channel.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Mirror the proxy's atomic CNY fee snapshot, not a USDT accounting conversion.
+	if err := db.Model(result.Payment).Updates(map[string]interface{}{"amount": 108, "fee_amount": 8, "fee_rate": 8}).Error; err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := svc.ConfirmManualPayment(result.Payment.ID, receiptEvidence(t, db, result.Payment.ID)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.First(order, order.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	var payment paymentdomain.Payment
+	if err := db.First(&payment, result.Payment.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if order.Status != constants.OrderStatusPaid || payment.Status != constants.PaymentStatusSuccess || payment.ExceptionCode != "" || !payment.Amount.Decimal.Equal(decimal.NewFromInt(108)) {
+		t.Fatalf("fee settlement incorrect: order=%s payment=%+v", order.Status, payment)
+	}
+}
+
+func TestManualUSDTCreatePaymentWithSQLiteConfigStorageTypes(t *testing.T) {
+	for _, storageType := range []string{"text", "blob"} {
+		t.Run(storageType, func(t *testing.T) {
+			svc, db := setupPaymentServiceWalletTest(t)
+			svc.paymentProviderRegistry = nil
+			channel := manualUSDTChannel()
+			if err := db.Create(channel).Error; err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(channel.ConfigJSON)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Python deployment scripts bind json.dumps output as TEXT; GORM's
+			// driver.Valuer binds JSON as BLOB. Both must load the same config.
+			var config interface{} = encoded
+			if storageType == "text" {
+				config = string(encoded)
+			}
+			if err := db.Exec("UPDATE payment_channels SET config_json = ? WHERE id = ?", config, channel.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			var actualType string
+			if err := db.Raw("SELECT typeof(config_json) FROM payment_channels WHERE id = ?", channel.ID).Scan(&actualType).Error; err != nil {
+				t.Fatal(err)
+			}
+			if actualType != storageType {
+				t.Fatalf("SQLite storage type = %s, want %s", actualType, storageType)
+			}
+			order := &orderdomain.Order{OrderNo: "DJMANUAL-CONFIG", Currency: "CNY", Status: constants.OrderStatusPendingPayment, TotalAmount: money.FromDecimal(decimal.NewFromInt(100)), OriginalAmount: money.FromDecimal(decimal.NewFromInt(100))}
+			if err := db.Create(order).Error; err != nil {
+				t.Fatal(err)
+			}
+			result, err := svc.CreatePayment(CreatePaymentInput{OrderID: order.ID, ChannelID: channel.ID})
+			if err != nil {
+				t.Fatalf("CreatePayment with SQLite %s config: %v", storageType, err)
+			}
+			if result.OrderPaid || result.Payment == nil || result.Payment.Status != constants.PaymentStatusPending || result.Payment.QRCode != "manual://order/"+order.OrderNo {
+				t.Fatalf("unexpected payment result: %+v", result)
+			}
+			if err := db.First(order, order.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if order.Status != constants.OrderStatusPendingPayment {
+				t.Fatalf("creation changed order status to %s", order.Status)
+			}
+		})
+	}
+}

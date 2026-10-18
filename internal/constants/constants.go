@@ -337,11 +337,14 @@ const (
 
 // 通知中心事件常量
 const (
-	NotificationEventWalletRechargeSuccess    = "wallet_recharge_success"
-	NotificationEventOrderPaidSuccess         = "order_paid_success"
-	NotificationEventManualFulfillmentPending = "manual_fulfillment_pending"
-	NotificationEventExceptionAlert           = "exception_alert"
-	NotificationEventExceptionAlertCheck      = "exception_alert_check"
+	NotificationEventWalletRechargeSuccess     = "wallet_recharge_success"
+	NotificationEventOrderPaidSuccess          = "order_paid_success"
+	NotificationEventManualFulfillmentPending  = "manual_fulfillment_pending"
+	NotificationEventExceptionAlert            = "exception_alert"
+	NotificationEventExceptionAlertCheck       = "exception_alert_check"
+	NotificationEventAdminLoginSuccess         = "admin_login_success"
+	NotificationEventAdminLoginFailed          = "admin_login_failed"
+	NotificationEventAdminPaymentConfigChanged = "admin_payment_config_changed"
 )
 
 // 通知中心异常阈值类型常量
@@ -361,6 +364,7 @@ const (
 	TaskWalletRechargeExpire        = "wallet_recharge:timeout_expire"
 	TaskNotificationDispatch        = "notification:dispatch"
 	TaskAffiliateConfirmCommissions = "affiliate:confirm_commissions"
+	TaskAffiliateOrderPaid          = "affiliate:order_paid"
 	TaskResellerConfirmLedger       = "reseller:confirm_ledger"
 	TaskProcurementSubmit           = "procurement:submit"
 	TaskProcurementPollStatus       = "procurement:poll_status"
@@ -453,6 +457,7 @@ const (
 	SettingKeyOrderEmailTemplateConfig = "order_email_template_config"
 	SettingFieldSiteCurrency           = "currency"
 	SettingFieldStorefrontTemplate     = "storefront_template"
+	SettingFieldSalesPaused            = "sales_paused"
 	SettingFieldPaymentExpireMinutes   = "payment_expire_minutes"
 
 	SettingKeyNavConfig = "nav_config"
@@ -554,3 +559,17 @@ const (
 	BannerLinkTypeInternal = "internal"
 	BannerLinkTypeExternal = "external"
 )
+
+const (
+	PaymentExceptionUnderpaidSucceeded   = "underpaid_payment_succeeded"
+	PaymentExceptionDebtBlockedSucceeded = "debt_blocked_payment_succeeded"
+	WalletTxnTypeOrderDebtCredit         = "order_debt_credit"
+	PaymentExceptionDuplicateSucceeded   = "duplicate_payment_succeeded"
+	PaymentExceptionClosedOrderSucceeded = "closed_order_payment_succeeded"
+	WalletTxnTypeOrderUnderpaidCredit    = "order_underpaid_credit"
+)
+
+// IsAdminSecurityNotification identifies fixed, Telegram-only security events.
+func IsAdminSecurityNotification(event string) bool {
+	return event == NotificationEventAdminLoginSuccess || event == NotificationEventAdminLoginFailed || event == NotificationEventAdminPaymentConfigChanged
+}

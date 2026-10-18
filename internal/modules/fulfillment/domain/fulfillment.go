@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/dujiao-next/internal/securestore/serializer"
 	"github.com/dujiao-next/internal/shared/jsonmap"
 )
 
@@ -23,18 +24,18 @@ func ShouldAttachFulfillmentPayload(payload string) bool {
 
 // Fulfillment 交付记录表
 type Fulfillment struct {
-	ID               uint         `gorm:"primarykey" json:"id"`                 // 主键
-	OrderID          uint         `gorm:"uniqueIndex;not null" json:"order_id"` // 订单ID
-	Type             string       `gorm:"not null" json:"type"`                 // 交付类型（auto/manual）
-	Status           string       `gorm:"not null" json:"status"`               // 交付状态（pending/delivered）
-	Payload          string       `gorm:"type:text" json:"payload"`             // 交付内容
-	PayloadLineCount int          `gorm:"-" json:"payload_line_count"`          // 交付内容总行数（非持久化，API 返回时填充）
-	LogisticsJSON    jsonmap.JSON `gorm:"type:json" json:"delivery_data"`       // 结构化交付信息
-	DeliveredBy      *uint        `gorm:"index" json:"delivered_by,omitempty"`  // 交付管理员ID
-	DeliveredAt      *time.Time   `gorm:"index" json:"delivered_at,omitempty"`  // 交付时间
-	CreatedAt        time.Time    `gorm:"index" json:"created_at"`              // 创建时间
-	UpdatedAt        time.Time    `gorm:"index" json:"updated_at"`              // 更新时间
-	DeletedAt        *time.Time   `gorm:"index" json:"-"`                       // 软删除时间
+	ID               uint         `gorm:"primarykey" json:"id"`                                  // 主键
+	OrderID          uint         `gorm:"uniqueIndex;not null" json:"order_id"`                  // 订单ID
+	Type             string       `gorm:"not null" json:"type"`                                  // 交付类型（auto/manual）
+	Status           string       `gorm:"not null" json:"status"`                                // 交付状态（pending/delivered）
+	Payload          string       `gorm:"serializer:secure_string;type:text" json:"payload"`     // 交付内容
+	PayloadLineCount int          `gorm:"-" json:"payload_line_count"`                           // 交付内容总行数（非持久化，API 返回时填充）
+	LogisticsJSON    jsonmap.JSON `gorm:"serializer:secure_json;type:json" json:"delivery_data"` // 结构化交付信息
+	DeliveredBy      *uint        `gorm:"index" json:"delivered_by,omitempty"`                   // 交付管理员ID
+	DeliveredAt      *time.Time   `gorm:"index" json:"delivered_at,omitempty"`                   // 交付时间
+	CreatedAt        time.Time    `gorm:"index" json:"created_at"`                               // 创建时间
+	UpdatedAt        time.Time    `gorm:"index" json:"updated_at"`                               // 更新时间
+	DeletedAt        *time.Time   `gorm:"index" json:"-"`                                        // 软删除时间
 }
 
 // TruncatePayload 计算 payload 行数并截断到 maxLines 行，用于 API 响应防止前端渲染崩溃。

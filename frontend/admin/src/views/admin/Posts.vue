@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { Check } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { adminAPI } from '@/api/admin'
@@ -612,7 +613,10 @@ watch(
                   >
                     {{ t('admin.posts.form.relatedProductsAdd') }}
                   </Button>
-                  <span v-else class="text-xs text-muted-foreground">✓</span>
+                  <span v-else>
+                    <Check class="h-3 w-3 text-muted-foreground" aria-hidden="true" />
+                    <span class="sr-only">{{ t('admin.posts.form.relatedProductsAdded') }}</span>
+                  </span>
                 </div>
               </div>
             </div>

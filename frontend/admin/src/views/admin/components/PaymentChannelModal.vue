@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { usePaymentStepUpStore } from '@/stores/paymentStepUp'
 import { onMounted, computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
@@ -1191,10 +1192,12 @@ const handleSubmit = async () => {
     sort_order: form.sort_order,
   }
 
+  const code = await usePaymentStepUpStore().ask()
+  if (!code) return
   if (isEditing.value && props.channelId) {
-    await adminAPI.updatePaymentChannel(props.channelId, payload)
+    await adminAPI.updatePaymentChannel(props.channelId, payload, code)
   } else {
-    await adminAPI.createPaymentChannel(payload)
+    await adminAPI.createPaymentChannel(payload, code)
   }
   emit('update:modelValue', false)
   emit('success')

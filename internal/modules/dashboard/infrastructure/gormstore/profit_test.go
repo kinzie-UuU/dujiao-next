@@ -1,6 +1,7 @@
 package gormstore
 
 import (
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -372,5 +373,58 @@ func TestGetProfitTrendsIncludesRefundOnlyDayInWindow(t *testing.T) {
 	}
 	if math.Abs(rowMap["2026-03-02"].Revenue-(-30)) > 0.000001 || math.Abs(rowMap["2026-03-02"].Cost-0) > 0.000001 {
 		t.Fatalf("unexpected 2026-03-02 row: %+v", rowMap["2026-03-02"])
+	}
+}
+
+func TestProfitCostCoveragePreservesRevenue(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		costs    []int64
+		wantCost float64
+	}{
+		{"all_missing", []int64{0, 0}, 0},
+		{"mixed", []int64{40, 0}, 40},
+		{"complete", []int64{40, 30}, 70},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo, db := setupDashboardRepositoryTest(t)
+			now := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
+			category := createDashboardCategory(t, db, "cost-coverage-category")
+			product := &productdomain.Product{CategoryID: category.ID, Slug: "cost-coverage", TitleJSON: jsonmap.JSON{"zh-CN": "成本测试"}, PriceAmount: money.FromDecimal(decimal.NewFromInt(100)), PurchaseType: constants.ProductPurchaseMember, FulfillmentType: constants.FulfillmentTypeManual, IsActive: true}
+			if err := db.Create(product).Error; err != nil {
+				t.Fatal(err)
+			}
+			for i, cost := range tc.costs {
+				createDashboardProfitOrderWithItem(t, db, product, fmt.Sprintf("COST-%d", i), constants.OrderStatusCompleted, 100, cost, "成本测试", now)
+			}
+			var missing int64
+			for _, cost := range tc.costs {
+				if cost <= 0 {
+					missing++
+				}
+			}
+			start, end := now.Add(-time.Hour), now.Add(time.Hour)
+			overview, err := repo.GetProfitOverview(start, end)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if overview.TotalRevenue != 200 || overview.TotalCost != tc.wantCost || overview.MissingCostItems != missing {
+				t.Errorf("overview dropped revenue or changed cost: %+v", overview)
+			}
+			trends, err := repo.GetProfitTrends(start, end)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(trends) != 1 || trends[0].Revenue != 200 || trends[0].Cost != tc.wantCost || trends[0].MissingCostItems != missing {
+				t.Errorf("trend dropped revenue or changed cost: %+v", trends)
+			}
+			products, err := repo.GetTopProducts(start, end, 5)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(products) != 1 || products[0].PaidAmount != 200 || products[0].TotalCost != tc.wantCost || products[0].PaidOrders != 2 || products[0].MissingCostItems != missing {
+				t.Errorf("ranking dropped sales data: %+v", products)
+			}
+		})
 	}
 }

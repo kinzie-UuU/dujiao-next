@@ -3,6 +3,7 @@ package userauthhttp
 import (
 	"context"
 	"errors"
+	resellercontract "github.com/dujiao-next/internal/modules/reseller/contract"
 	"time"
 
 	"github.com/dujiao-next/internal/constants"
@@ -51,6 +52,7 @@ type UserTOTPEnableResult struct {
 
 // UserChallengeClaims 是 transport 层挑战 token 视图。
 type UserChallengeClaims struct {
+	ResellerID  uint
 	UserID      uint
 	JTI         string
 	RememberMe  bool
@@ -78,7 +80,7 @@ type User2FATOTPService interface {
 // User2FAAuthService 是 2FA 登录完成端口。
 type User2FAAuthService interface {
 	ParseUserChallengeToken(tokenString string) (*UserChallengeClaims, error)
-	CompleteLoginAfter2FA(userID uint, rememberMe bool) (*AuthLoginResult, error)
+	CompleteLoginAfter2FA(ctx context.Context, userID uint, rememberMe bool) (*AuthLoginResult, error)
 	GetUserEmail(userID uint) (string, error)
 }
 
@@ -180,7 +182,7 @@ func (h *User2FAHandler) EnableUser2FA(c *gin.Context) {
 		}
 		return
 	}
-	loginRes, signErr := h.auth.CompleteLoginAfter2FA(uid, false)
+	loginRes, signErr := h.auth.CompleteLoginAfter2FA(c.Request.Context(), uid, false)
 	if signErr == nil && loginRes != nil {
 		res.Token = loginRes.Token
 		res.ExpiresAt = loginRes.ExpiresAt
@@ -280,7 +282,7 @@ func (h *User2FAHandler) VerifyUser2FA(c *gin.Context) {
 		return
 	}
 	claims, err := h.auth.ParseUserChallengeToken(req.ChallengeToken)
-	if err != nil {
+	if err != nil || claims == nil || claims.ResellerID != resellercontract.RequestResellerID(c.Request.Context()) {
 		h.recordLogin(c, "", 0, constants.LoginLogStatusFailed, constants.LoginLogFailReasonChallengeInvalid, constants.LoginLogSourceWeb)
 		ginutil.RespondError(c, response.CodeUnauthorized, "error.totp_challenge_invalid", nil)
 		return
@@ -329,7 +331,7 @@ func (h *User2FAHandler) VerifyUser2FA(c *gin.Context) {
 	if h.challenges != nil {
 		h.challenges.Revoke(ctx, claims.JTI)
 	}
-	loginRes, err := h.auth.CompleteLoginAfter2FA(claims.UserID, claims.RememberMe)
+	loginRes, err := h.auth.CompleteLoginAfter2FA(c.Request.Context(), claims.UserID, claims.RememberMe)
 	if err != nil {
 		ginutil.RespondError(c, response.CodeInternal, "error.login_failed", err)
 		return

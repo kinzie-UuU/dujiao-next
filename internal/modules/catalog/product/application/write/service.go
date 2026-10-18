@@ -13,6 +13,8 @@ type ProductRepository interface {
 	GetByID(id string) (*productdomain.Product, error)
 	Create(item *productdomain.Product) error
 	Update(item *productdomain.Product) error
+	UpdateKeepingStock(item *productdomain.Product) error
+	SyncManualStockTotalFromSKUs(productID uint) error
 	CountBySlug(slug string, excludeID *string) (int64, error)
 	QuickUpdate(id string, fields map[string]interface{}) error
 }
@@ -22,6 +24,7 @@ type SKURepository interface {
 	ListByProduct(productID uint, onlyActive bool) ([]productdomain.ProductSKU, error)
 	Create(item *productdomain.ProductSKU) error
 	Update(item *productdomain.ProductSKU) error
+	UpdateKeepingStock(item *productdomain.ProductSKU) error
 	Delete(id uint) error
 	PurgeSoftDeletedByProductAndCode(productID uint, skuCode string) error
 }
@@ -119,6 +122,7 @@ type ProductSKUInput struct {
 	PriceAmount      decimal.Decimal
 	CostPriceAmount  decimal.Decimal
 	ManualStockTotal int
+	KeepManualStock  bool // omitted stock in an update preserves live inventory
 	IsActive         *bool
 	SortOrder        int
 }

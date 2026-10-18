@@ -42,6 +42,7 @@ func New(c *container.Container) Handlers {
 		),
 		AdminChannel: paymenttransport.NewAdminChannelHandler(
 			adminChannelCatalogAdapter{payments: c.PaymentService, channels: c.PaymentChannelStore},
+			newPaymentStepUp(c),
 		),
 		Webhook: paymenttransport.NewWebhookHandler(
 			webhookServiceAdapter{payments: c.PaymentService},

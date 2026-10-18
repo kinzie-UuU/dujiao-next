@@ -1,0 +1,210 @@
+import argparse
+import importlib.util
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import unittest
+from unittest.mock import patch
+
+spec = importlib.util.spec_from_file_location('user_release', Path(__file__).with_name('user_release.py'))
+release = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(release)
+
+
+class UserReleaseTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.compose = self.root / 'compose.yml'
+        self.compose.write_text('services:\n  user:\n    image: old-user\n  api:\n    image: untouched-api\n')
+        self.live = self.root / 'live'
+        (self.live / 'html').mkdir(parents=True)
+        (self.live / 'nginx').mkdir()
+        for name in ('index.html', '_spa.html', 'guide.html'):
+            (self.live / 'html' / name).write_text('<body>live overlay</body>')
+        (self.live / 'html' / 'old.js').write_text('preserve overlay')
+        (self.live / 'html' / '._index.html').write_bytes(b'\x00\xa3metadata')
+        (self.live / 'nginx' / 'nginx.conf').write_text('preserve all nginx configuration')
+        (self.live / 'nginx' / 'modules').symlink_to('/usr/lib/nginx/modules')
+        self.script = self.root / 'panel.js'
+        self.script.write_text('window.test = true;\n')
+        self.image = 'sha256:old'
+        self.images = {}
+        self.commands = []
+        self.fail_publication = False
+        self.mounts = []
+        self.compose_v2 = True
+        for name, value in [('APP', self.root), ('COMPOSE', self.compose), ('run', self.fake_run)]:
+            p = patch.object(release, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+        self.args = argparse.Namespace(action='inventory', script=self.script,
+            script_sha256=release.sha(self.script.read_bytes()), expected_state_sha256=None,
+            expected_plan_sha256=None, production_write=True)
+
+    def fake_run(self, *args):
+        self.commands.append(args)
+        if args == ('docker', 'compose', 'version'):
+            if not self.compose_v2: raise subprocess.CalledProcessError(125, args)
+            return 'v2'
+        if args == ('docker-compose', '--version'): return '1.29.2'
+        if args[0] == 'docker-compose': args = ('docker', 'compose') + args[1:]
+        if args[:2] == ('docker', 'cp'):
+            source = 'nginx' if args[2].endswith('/etc/nginx') else 'html'
+            shutil.copytree(self.live / source, args[3], symlinks=True)
+        elif args[:2] == ('docker', 'inspect'):
+            return json.dumps(self.mounts) if '.Mounts' in args[3] else self.image if args[3] == '{{.Image}}' else 'container-id'
+        elif args[:2] == ('docker', 'build'):
+            image = args[args.index('-t') + 1]
+            self.images[image] = Path(args[-1])
+        elif args[:2] == ('docker', 'run'):
+            self.assertEqual(args[3], '--network=container:' + release.CONTAINER)
+            self.assertEqual(args[-2:], ('nginx', '-t'))
+            self.assertIn('rm -rf /usr/share/nginx/html /etc/nginx', (self.images[args[4]] / 'Dockerfile').read_text())
+        elif args[:2] == ('docker', 'compose'):
+            self.assertEqual(args[-4:], ('up', '-d', '--no-deps', 'user'))
+            image = release.yaml.safe_load(self.compose.read_text())['services']['user']['image']
+            for name in ('html', 'nginx'):
+                shutil.rmtree(self.live / name)
+                shutil.copytree(self.images[image] / name, self.live / name, symlinks=True)
+            self.image = image
+        elif args[0] == 'curl':
+            if self.fail_publication:
+                return 'unexpected content'
+            name = release.ASSET if args[-1].endswith(release.ASSET) else '_spa.html'
+            return (self.live / 'html' / name).read_text()
+        else:
+            raise AssertionError(args)
+        return ''
+
+    def prepare(self):
+        self.args.expected_state_sha256 = release.execute(self.args)['state_sha256']
+        self.args.action = 'plan'
+        self.args.expected_plan_sha256 = release.execute(self.args)['plan_sha256']
+        self.args.action = 'deploy'
+
+    def test_preserves_overlays_nginx_and_other_services_under_restrictive_umask(self):
+        self.prepare()
+        previous = os.umask(0o077)
+        try:
+            result = release.execute(self.args)
+        finally:
+            os.umask(previous)
+        self.assertTrue(result['deployed'])
+        self.assertEqual((self.live / 'html' / '._index.html').read_bytes(), b'\x00\xa3metadata')
+        self.assertNotIn('._index.html', result['changed_html'])
+        self.assertEqual((self.live / 'html' / release.ASSET).stat().st_mode & 0o777, 0o644)
+        self.assertEqual((self.live / 'html' / 'old.js').read_text(), 'preserve overlay')
+        self.assertTrue((self.live / 'nginx' / 'modules').is_symlink())
+        self.assertEqual(release.yaml.safe_load(self.compose.read_text())['services']['api']['image'], 'untouched-api')
+        self.assertEqual(len([c for c in self.commands if c[:2] == ('docker', 'build')]), 2)
+
+    def test_upgrades_identical_panel_url_version(self):
+        script = self.script.read_bytes()
+        old = '<script defer src="/' + release.ASSET + '?v=' + release.sha(script)[:16] + '"></script>'
+        for path in (self.live / 'html').glob('*.html'):
+            if path.name.startswith('._'): continue
+            path.write_text(path.read_text().replace('</body>', old + '</body>'))
+        (self.live / 'html' / release.ASSET).write_bytes(script)
+        self.prepare()
+        result = release.execute(self.args)
+        self.assertTrue(result['deployed'])
+        self.assertIn('?v=' + release.sha(script)[:17] + '"', (self.live / 'html' / '_spa.html').read_text())
+        self.assertEqual((self.live / 'html' / release.ASSET).read_bytes(), script)
+
+    def install_previous(self):
+        previous = b'window.previous = true;\n'
+        self.args.previous_script_sha256 = release.sha(previous)
+        tag = '<script defer src="/' + release.ASSET + '?v=' + release.sha(previous)[:17] + '"></script>'
+        for path in (self.live / 'html').glob('*.html'):
+            if not path.name.startswith('._'):
+                path.write_text(path.read_text().replace('</body>', tag + '</body>'))
+        (self.live / 'html' / release.ASSET).write_bytes(previous)
+
+    def test_reviewed_content_upgrade_preserves_overlays(self):
+        self.install_previous()
+        payment_page = self.live / 'html' / 'recharge-pay.html'
+        payment_bytes = b'<body>independent payment page</body>'
+        payment_page.write_bytes(payment_bytes)
+        self.prepare()
+        result = release.execute(self.args)
+        self.assertEqual(payment_page.read_bytes(), payment_bytes)
+        self.assertNotIn('recharge-pay.html', result['changed_html'])
+        self.assertEqual(result['previous_script_sha256'], self.args.previous_script_sha256)
+        self.assertEqual((self.live / 'html' / release.ASSET).read_bytes(), self.script.read_bytes())
+        for name in ('index.html', '_spa.html', 'guide.html'):
+            content = (self.live / 'html' / name).read_text()
+            self.assertIn('live overlay', content)
+            self.assertEqual(content.count(release.ASSET), 1)
+            self.assertIn('?v=' + self.args.script_sha256[:17] + '"', content)
+
+    def test_reviewed_upgrade_failure_restores_previous_asset_and_tags(self):
+        self.install_previous()
+        before = release.files(self.live / 'html')
+        self.prepare()
+        self.fail_publication = True
+        with patch.object(release.time, 'sleep'), self.assertRaisesRegex(ValueError, 'lacks panel'):
+            release.execute(self.args)
+        self.assertEqual(release.files(self.live / 'html'), before)
+
+    def test_reviewed_upgrade_rejects_unexpected_asset_tag_and_digest(self):
+        self.install_previous()
+        asset = self.live / 'html' / release.ASSET
+        page = self.live / 'html' / '_spa.html'
+        original_asset, original_page = asset.read_bytes(), page.read_text()
+        for case in ('missing', 'different', 'tag', 'duplicate', 'no-tag', 'invalid-digest'):
+            with self.subTest(case=case):
+                asset.write_bytes(original_asset)
+                page.write_text(original_page)
+                self.args.previous_script_sha256 = release.sha(original_asset)
+                if case == 'missing': asset.unlink()
+                if case == 'different': asset.write_bytes(b'unreviewed')
+                if case == 'tag': page.write_text(original_page.replace('?v=', '?wrong='))
+                if case == 'duplicate': page.write_text(original_page * 2)
+                if case == 'no-tag': page.write_text('<body>missing</body>')
+                if case == 'invalid-digest': self.args.previous_script_sha256 = 'g' * 64
+                self.args.action = 'inventory'
+                with self.assertRaises(ValueError):
+                    self.prepare()
+                self.assertFalse(any(c[:2] == ('docker', 'build') for c in self.commands))
+
+    def test_legacy_compose_publishes_and_rolls_back(self):
+        self.compose_v2 = False
+        self.prepare()
+        self.fail_publication = True
+        before = release.files(self.live / 'html')
+        with patch.object(release.time, 'sleep'), self.assertRaisesRegex(ValueError, 'lacks panel'):
+            release.execute(self.args)
+        self.assertEqual(release.files(self.live / 'html'), before)
+        self.assertEqual(len([c for c in self.commands if c[0] == 'docker-compose' and '-f' in c]), 2)
+
+    def test_rolls_back_full_live_tree_with_persistent_image(self):
+        self.prepare()
+        before_html = release.files(self.live / 'html')
+        before_nginx = release.nginx_files(self.live / 'nginx')
+        self.fail_publication = True
+        with patch.object(release.time, 'sleep'), self.assertRaisesRegex(ValueError, 'lacks panel'):
+            release.execute(self.args)
+        self.assertEqual(release.files(self.live / 'html'), before_html)
+        self.assertEqual(release.nginx_files(self.live / 'nginx'), before_nginx)
+        self.assertTrue(release.yaml.safe_load(self.compose.read_text())['services']['user']['image'].endswith('-rollback'))
+
+    def test_drift_refuses_any_build_or_write(self):
+        self.prepare()
+        (self.live / 'html' / 'old.js').write_text('new customer changes')
+        with self.assertRaisesRegex(ValueError, 'drift'):
+            release.execute(self.args)
+        self.assertFalse(any(c[:2] == ('docker', 'build') for c in self.commands))
+
+    def test_overlapping_mount_refused(self):
+        self.mounts = [{'Destination': '/etc/nginx/conf.d'}]
+        with self.assertRaisesRegex(ValueError, 'Mounted'):
+            release.execute(self.args)
+
+
+if __name__ == '__main__':
+    unittest.main()

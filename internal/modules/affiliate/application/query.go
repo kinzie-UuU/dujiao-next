@@ -3,6 +3,7 @@ package application
 import (
 	"math"
 	"strings"
+	"time"
 
 	affiliatecontract "github.com/dujiao-next/internal/modules/affiliate/contract"
 	affiliatedomain "github.com/dujiao-next/internal/modules/affiliate/domain"
@@ -31,6 +32,19 @@ func (s *Service) GetUserDashboard(userID uint) (Dashboard, error) {
 	if profile == nil {
 		return dashboard, nil
 	}
+	rewardWalletMode := false
+	if s.settings != nil {
+		setting, err := s.settings.GetAffiliateSetting()
+		if err != nil {
+			return dashboard, err
+		}
+		rewardWalletMode = setting.RewardMode == "gpt_random_wallet"
+		if rewardWalletMode {
+			if err := s.ConfirmDueCommissions(time.Now()); err != nil {
+				return dashboard, err
+			}
+		}
+	}
 
 	stats, err := s.buildProfileStats(profile.ID)
 	if err != nil {
@@ -44,7 +58,24 @@ func (s *Service) GetUserDashboard(userID uint) (Dashboard, error) {
 	dashboard.ConversionRate = stats.ConversionRate
 	dashboard.PendingCommission = stats.PendingCommission
 	dashboard.AvailableCommission = stats.AvailableCommission
+	if rewardWalletMode {
+		pending, err := s.repo.SumCommissionByProfile(profile.ID, []string{constants.AffiliateCommissionStatusPendingConfirm}, false, "gpt_reward")
+		if err != nil {
+			return dashboard, err
+		}
+		available, err := s.repo.SumCommissionByProfile(profile.ID, []string{constants.AffiliateCommissionStatusAvailable}, true, "gpt_reward")
+		if err != nil {
+			return dashboard, err
+		}
+		dashboard.PendingCommission = money.FromDecimal(pending)
+		dashboard.AvailableCommission = money.FromDecimal(available)
+	}
 	dashboard.WithdrawnCommission = stats.WithdrawnCommission
+	walletCredited, err := s.repo.SumCommissionByProfile(profile.ID, []string{"wallet_credited"}, false)
+	if err != nil {
+		return dashboard, err
+	}
+	dashboard.WalletCreditedCommission = money.FromDecimal(walletCredited)
 	return dashboard, nil
 }
 

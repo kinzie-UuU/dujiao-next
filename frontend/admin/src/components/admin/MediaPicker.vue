@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
+import { Check, X } from 'lucide-vue-next'
 import { useDebounceFn } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
@@ -314,9 +315,10 @@ defineExpose({ openPicker })
             <button
               type="button"
               class="rounded-md bg-destructive/90 px-2.5 py-1 text-[11px] font-medium text-destructive-foreground shadow-sm hover:bg-destructive"
+              :aria-label="t('admin.common.delete')"
               @click.stop="removeImage(img)"
             >
-              &times;
+              <X class="h-3 w-3" aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -431,7 +433,7 @@ defineExpose({ openPicker })
               <!-- Check badge -->
               <Transition name="check">
                 <div v-if="isSelected(item.path)" class="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-[10px] text-primary-foreground shadow">
-                  &#10003;
+                  <Check class="h-3 w-3" aria-hidden="true" />
                 </div>
               </Transition>
             </div>

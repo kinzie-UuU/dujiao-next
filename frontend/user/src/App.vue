@@ -1,5 +1,8 @@
 <template>
   <div id="app" class="min-h-screen bg-background text-foreground flex flex-col">
+    <div v-if="appStore.salesPaused && !isResellerConsole" role="status" class="border-b border-amber-300 bg-amber-50 px-4 py-2 text-center text-sm font-semibold text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200">
+      {{ $t('maintenance.banner') }}
+    </div>
     <!-- vault 模板：自带顶栏/页脚的外壳包裹页面（控制台仍走下方分支） -->
     <VaultLayout v-if="isVault && !isResellerConsole">
       <ErrorBoundary>

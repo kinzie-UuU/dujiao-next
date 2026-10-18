@@ -225,6 +225,9 @@ var allowedTransitions = map[string]map[string]bool{
 
 // CreateOrder 创建订单
 func (s *OrderService) CreateOrder(input CreateOrderInput) (*orderdomain.Order, error) {
+	if err := s.rejectWhenSalesPaused(); err != nil {
+		return nil, err
+	}
 	if input.UserID == 0 {
 		return nil, ErrInvalidOrderItem
 	}
@@ -244,13 +247,16 @@ func (s *OrderService) CreateOrder(input CreateOrderInput) (*orderdomain.Order, 
 
 // CreateGuestOrder 游客创建订单
 func (s *OrderService) CreateGuestOrder(input CreateGuestOrderInput) (*orderdomain.Order, error) {
+	if err := s.rejectWhenSalesPaused(); err != nil {
+		return nil, err
+	}
 	email, err := normalizeGuestEmail(input.Email)
 	if err != nil {
 		return nil, err
 	}
 	password := strings.TrimSpace(input.OrderPassword)
-	if password == "" {
-		return nil, ErrGuestPasswordRequired
+	if err := validateGuestPassword(password); err != nil {
+		return nil, err
 	}
 	locale := strings.TrimSpace(input.Locale)
 	return s.createOrder(orderCreateParams{
@@ -267,6 +273,20 @@ func (s *OrderService) CreateGuestOrder(input CreateGuestOrderInput) (*orderdoma
 		IsGuest:             true,
 		ManualFormData:      input.ManualFormData,
 	})
+}
+
+func (s *OrderService) rejectWhenSalesPaused() error {
+	if s == nil || s.settingService == nil {
+		return nil
+	}
+	paused, err := s.settingService.GetSalesPaused()
+	if err != nil {
+		return err
+	}
+	if paused {
+		return ErrSalesPaused
+	}
+	return nil
 }
 
 type orderCreateParams struct {
@@ -459,6 +479,9 @@ func (s *OrderService) createOrder(input orderCreateParams) (*orderdomain.Order,
 		if accErr != nil {
 			return nil, walletcontract.ErrOnlyPaymentRequired
 		}
+		if account.Balance.Decimal.IsNegative() {
+			return nil, walletcontract.ErrOutstandingDebt
+		}
 		if account.Balance.Decimal.LessThan(result.TotalAmount) {
 			return nil, walletcontract.ErrInsufficientBalance
 		}
@@ -488,8 +511,10 @@ func (s *OrderService) createOrder(input orderCreateParams) (*orderdomain.Order,
 	if input.IsGuest && input.GuestEmail == "" {
 		return nil, ErrGuestEmailRequired
 	}
-	if input.IsGuest && input.GuestPassword == "" {
-		return nil, ErrGuestPasswordRequired
+	if input.IsGuest {
+		if err := validateGuestPassword(input.GuestPassword); err != nil {
+			return nil, err
+		}
 	}
 
 	expireMinutes := s.resolveExpireMinutes()
@@ -534,6 +559,9 @@ func (s *OrderService) createOrder(input orderCreateParams) (*orderdomain.Order,
 	}
 
 	err = s.orderStore.WithinTransaction(func(tx ordercontract.Transaction) error {
+		if err := walletapp.CheckPurchaseAllowed(tx.Wallets(), input.UserID); err != nil {
+			return err
+		}
 		orderStore := tx.Orders()
 		productSKURepo := tx.ProductSKUs()
 		if err := orderStore.Create(order, nil); err != nil {
@@ -631,6 +659,25 @@ func (s *OrderService) createOrder(input orderCreateParams) (*orderdomain.Order,
 		if result.AppliedCoupon != nil {
 			couponRepo := tx.Coupons()
 			usageRepo := tx.CouponUsages()
+			lockedCoupon, err := couponRepo.GetByIDForUpdate(result.AppliedCoupon.ID)
+			if err != nil {
+				return err
+			}
+			if lockedCoupon == nil {
+				return couponcontract.ErrNotFound
+			}
+			if lockedCoupon.UsageLimit > 0 && lockedCoupon.UsedCount >= lockedCoupon.UsageLimit {
+				return couponcontract.ErrUsageLimit
+			}
+			if lockedCoupon.PerUserLimit > 0 && input.UserID != 0 {
+				count, err := usageRepo.CountByUser(lockedCoupon.ID, input.UserID)
+				if err != nil {
+					return err
+				}
+				if int(count) >= lockedCoupon.PerUserLimit {
+					return couponcontract.ErrPerUserLimit
+				}
+			}
 			usage := &coupondomain.CouponUsage{
 				CouponID:       result.AppliedCoupon.ID,
 				UserID:         input.UserID,
@@ -654,11 +701,23 @@ func (s *OrderService) createOrder(input orderCreateParams) (*orderdomain.Order,
 		return nil
 	})
 	if err != nil {
+		for _, couponErr := range []error{
+			couponcontract.ErrNotFound,
+			couponcontract.ErrUsageLimit,
+			couponcontract.ErrPerUserLimit,
+		} {
+			if errors.Is(err, couponErr) {
+				return nil, err
+			}
+		}
 		if errors.Is(err, ErrCardSecretInsufficient) {
 			return nil, ErrCardSecretInsufficient
 		}
 		if errors.Is(err, ErrManualStockInsufficient) {
 			return nil, ErrManualStockInsufficient
+		}
+		if errors.Is(err, walletcontract.ErrOutstandingDebt) {
+			return nil, err
 		}
 		return nil, ErrOrderCreateFailed
 	}
@@ -701,4 +760,18 @@ func (s *OrderService) createOrder(input orderCreateParams) (*orderdomain.Order,
 
 func generateOrderNo() string {
 	return serial.Generate("DJ")
+}
+
+// guestPasswordMinLength 游客订单密码最小长度
+const guestPasswordMinLength = 6
+
+func validateGuestPassword(password string) error {
+	password = strings.TrimSpace(password)
+	if password == "" {
+		return ErrGuestPasswordRequired
+	}
+	if len([]rune(password)) < guestPasswordMinLength {
+		return ErrGuestPasswordTooShort
+	}
+	return nil
 }

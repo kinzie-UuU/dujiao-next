@@ -84,7 +84,8 @@
           </div>
         </div>
         <p class="my-4 rounded-sm border bg-secondary px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">{{ t('cart.disclaimer') }}</p>
-        <Button as-child class="h-11 w-full rounded-full font-bold"><RouterLink to="/checkout">{{ t('cart.checkout') }} <ArrowRight /></RouterLink></Button>
+        <Button v-if="appStore.salesPaused" disabled class="h-11 w-full rounded-full font-bold">{{ t('maintenance.salesPaused') }}</Button>
+        <Button v-else as-child class="h-11 w-full rounded-full font-bold"><RouterLink to="/checkout">{{ t('cart.checkout') }} <ArrowRight /></RouterLink></Button>
         <Button as-child variant="outline" class="mt-2.5 h-11 w-full rounded-full font-bold"><RouterLink to="/products">{{ t('cart.emptyAction') }}</RouterLink></Button>
       </aside>
     </div>
@@ -98,8 +99,10 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import VaultCheckoutSteps from './components/VaultCheckoutSteps.vue'
 import { useCart } from '../../composables/useCart'
+import { useAppStore } from '../../stores/app'
 
 const { t } = useI18n()
+const appStore = useAppStore()
 
 const {
   getLocalizedText, formatPrice, totalCurrency,

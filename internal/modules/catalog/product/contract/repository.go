@@ -32,6 +32,8 @@ type Repository interface {
 	ListByIDs(ids []uint) ([]productdomain.Product, error)
 	Create(item *productdomain.Product) error
 	Update(item *productdomain.Product) error
+	UpdateKeepingStock(item *productdomain.Product) error
+	SyncManualStockTotalFromSKUs(productID uint) error
 	Delete(id string) error
 	CountBySlug(slug string, excludeID *string) (int64, error)
 	ReserveManualStock(productID uint, quantity int) (int64, error)
@@ -49,6 +51,7 @@ type SKURepository interface {
 	Create(item *productdomain.ProductSKU) error
 	CreateBatch(items []productdomain.ProductSKU) error
 	Update(item *productdomain.ProductSKU) error
+	UpdateKeepingStock(item *productdomain.ProductSKU) error
 	Delete(id uint) error
 	DeleteByProduct(productID uint) error
 	PurgeSoftDeletedByProductAndCode(productID uint, skuCode string) error

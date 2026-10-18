@@ -99,7 +99,7 @@
         variant="outline"
         size="icon"
         class="w-7 h-7 sm:w-8 sm:h-8 flex-shrink-0"
-        :disabled="isSoldOut(product)"
+        :disabled="isSoldOut(product) || appStore.salesPaused"
         @click.stop="$emit('quickBuy', product)"
       >
         <ShoppingCart class="h-4 w-4" />
@@ -120,6 +120,7 @@ import { useLocalized, useProductLabels } from '../composables/useProduct'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { useAppStore } from '../stores/app'
 
 withDefaults(defineProps<{
   product: any
@@ -136,6 +137,7 @@ defineEmits<{
 }>()
 
 const { t } = useI18n()
+const appStore = useAppStore()
 const { getLocalizedText, siteCurrency, formatPrice } = useLocalized()
 const { getPurchaseTypeLabel, getFulfillmentTypeLabel, getStockBadgeVariant, getStockStatusLabel, isSoldOut, hasPromotionPrice, getPromotionPriceAmount, hasPromotionRules, hasWholesalePrices } = useProductLabels()
 </script>

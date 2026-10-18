@@ -14,8 +14,7 @@
         <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12.5px] font-semibold" :class="emailVerifiedVariant === 'success' ? 'bg-[color:var(--teal-soft)] text-[color:var(--teal-strong)]' : 'bg-[color:var(--gold-soft)] text-[color:var(--gold-strong)]'">{{ emailVerifiedLabel }}</span>
         <span v-if="userProfileStore.currentLevel" class="inline-flex items-center gap-1.5 rounded-full bg-[color:var(--gold-soft)] px-2.5 py-1 text-[12.5px] font-semibold text-[color:var(--gold-strong)]">
           <img v-if="isImagePath(userProfileStore.currentLevel?.icon)" :src="getImageUrl(userProfileStore.currentLevel!.icon)" class="h-3.5 w-3.5 object-contain" alt="" />
-          <span v-else-if="userProfileStore.currentLevel?.icon">{{ userProfileStore.currentLevel.icon }}</span>
-          <Crown v-else class="h-3.5 w-3.5" />
+          <UserRound v-else class="h-3.5 w-3.5" aria-hidden="true" />
           {{ levelName(userProfileStore.currentLevel) }}
         </span>
       </div>
@@ -87,7 +86,7 @@
               <div class="flex items-center gap-3.5">
                 <div class="grid h-[46px] w-[46px] flex-none place-items-center rounded-md bg-primary/10 text-[22px]">
                   <img v-if="isImagePath(userProfileStore.currentLevel?.icon)" :src="getImageUrl(userProfileStore.currentLevel!.icon)" class="h-7 w-7 object-contain" alt="" />
-                  <span v-else>{{ userProfileStore.currentLevel?.icon || '👤' }}</span>
+                  <UserRound v-else class="h-7 w-7" aria-hidden="true" />
                 </div>
                 <div>
                   <p class="text-[11px] uppercase tracking-[0.06em] text-muted-foreground">{{ t('personalCenter.memberLevel.currentLevel') }}</p>
@@ -109,7 +108,7 @@
               <div class="flex items-center gap-3">
                 <div class="grid h-[38px] w-[38px] flex-none place-items-center rounded-md bg-secondary text-lg opacity-80">
                   <img v-if="isImagePath(userProfileStore.nextLevel.icon)" :src="getImageUrl(userProfileStore.nextLevel.icon)" class="h-3.5 w-3.5 object-contain" alt="" />
-                  <span v-else>{{ userProfileStore.nextLevel.icon || '⭐' }}</span>
+                  <Star v-else class="h-5 w-5" aria-hidden="true" />
                 </div>
                 <div>
                   <p class="text-[11px] uppercase tracking-[0.06em] text-muted-foreground">{{ t('personalCenter.memberLevel.nextLevel') }}</p>
@@ -189,7 +188,7 @@
 
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { Crown, ShoppingBag, ShieldCheck, Percent } from 'lucide-vue-next'
+import { Crown, ShoppingBag, ShieldCheck, Percent, UserRound, Star } from 'lucide-vue-next'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { getImageUrl } from '../../utils/image'

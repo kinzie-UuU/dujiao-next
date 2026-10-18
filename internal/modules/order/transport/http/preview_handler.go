@@ -29,14 +29,17 @@ var (
 	ErrInvalidOrderAmount        = errors.New("invalid order amount")
 	ErrGuestEmailRequired        = errors.New("guest email required")
 	ErrGuestPasswordRequired     = errors.New("guest password required")
+	ErrGuestPasswordTooShort     = errors.New("guest password too short")
 	ErrInvalidEmail              = errors.New("invalid email")
 	ErrProductPurchaseNotAllowed = errors.New("product purchase not allowed")
 	ErrGuestCouponNotAllowed     = errors.New("guest coupon not allowed")
+	ErrWalletOutstandingDebt     = errors.New("wallet outstanding debt")
 	ErrManualStockInsufficient   = errors.New("manual stock insufficient")
 	ErrOrderCurrencyMismatch     = errors.New("order currency mismatch")
 	ErrProductNotAvailable       = errors.New("product not available")
 	ErrResellerCouponNotAllowed  = errors.New("reseller coupon not allowed")
 	ErrQueueUnavailable          = errors.New("queue unavailable")
+	ErrSalesPaused               = errors.New("sales paused")
 	ErrRiskIPBlacklisted         = errors.New("risk: ip blacklisted")
 	ErrRiskEmailBlacklisted      = errors.New("risk: email blacklisted")
 	ErrRiskTooManyPendingOrders  = errors.New("risk: too many pending orders")
@@ -321,6 +324,8 @@ var guestOrderCreateExtraErrorRules = []mappedError{
 }
 
 var userOrderCommonErrorRules = []mappedError{
+	{target: ErrWalletOutstandingDebt, code: response.CodeBadRequest, key: "error.wallet_outstanding_debt"},
+	{target: ErrSalesPaused, code: response.CodeServiceUnavailable, key: "error.sales_paused"},
 	{target: ErrProductSKURequired, code: response.CodeBadRequest, key: "error.order_item_invalid"},
 	{target: productcontract.ErrProductSKUInvalid, code: response.CodeBadRequest, key: "error.order_item_invalid"},
 	{target: productdomain.ErrPurchaseQuantityInvalid, code: response.CodeBadRequest, key: "error.order_item_invalid"},
@@ -365,10 +370,12 @@ var userOrderPreviewExtraErrorRules = []mappedError{
 }
 
 var guestOrderCommonErrorRules = []mappedError{
+	{target: ErrSalesPaused, code: response.CodeServiceUnavailable, key: "error.sales_paused"},
 	{target: ErrProductSKURequired, code: response.CodeBadRequest, key: "error.order_item_invalid"},
 	{target: productcontract.ErrProductSKUInvalid, code: response.CodeBadRequest, key: "error.order_item_invalid"},
 	{target: ErrGuestEmailRequired, code: response.CodeBadRequest, key: "error.guest_email_required"},
 	{target: ErrGuestPasswordRequired, code: response.CodeBadRequest, key: "error.guest_password_required"},
+	{target: ErrGuestPasswordTooShort, code: response.CodeBadRequest, key: "error.guest_password_too_short"},
 	{target: ErrInvalidEmail, code: response.CodeBadRequest, key: "error.email_invalid"},
 	{target: ErrProductPurchaseNotAllowed, code: response.CodeBadRequest, key: "error.product_purchase_not_allowed"},
 	{target: productdomain.ErrMaxPurchaseExceeded, code: response.CodeBadRequest, key: "error.product_max_purchase_exceeded"},

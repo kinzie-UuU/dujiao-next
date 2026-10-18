@@ -4,7 +4,8 @@ import { useDebounceFn } from '@vueuse/core'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
-import type { AdminOrder, AdminOrderItem } from '@/api/types'
+import { collectManualPaymentEvidence } from '@/utils/manualPaymentEvidence'
+import type { AdminOrder, AdminOrderItem, AdminPayment } from '@/api/types'
 import IdCell from '@/components/IdCell.vue'
 import { Copy } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
@@ -157,11 +158,47 @@ const canUpdateStatus = (order: AdminOrder) => {
   return order.status !== 'completed' && order.status !== 'canceled' && order.status !== 'partially_refunded' && order.status !== 'refunded'
 }
 
+const allowedStatusTransitions: Record<string, string[]> = {
+  pending_payment: ['paid', 'canceled'],
+  paid: ['fulfilling', 'partially_delivered', 'delivered', 'partially_refunded', 'refunded'],
+  fulfilling: ['partially_delivered', 'delivered', 'partially_refunded', 'refunded'],
+  partially_delivered: ['delivered', 'completed', 'partially_refunded', 'refunded'],
+  delivered: ['completed', 'partially_refunded', 'refunded'],
+  completed: ['partially_refunded', 'refunded'],
+  partially_refunded: ['refunded'],
+}
+
+const editableStatusOptions = (order: AdminOrder) => [
+  order.status,
+  ...(allowedStatusTransitions[order.status] || []),
+]
+
+const latestConfirmableManualPayment = (payments: AdminPayment[] = []) =>
+  payments
+    .filter((payment) => payment.provider_type === 'manual_qr' && ['pending', 'initiated'].includes(payment.status))
+    .sort((a, b) => b.id - a.id)[0]
+
 const updateStatus = async (order: AdminOrder) => {
   if (!canUpdateStatus(order)) return
   const status = statusEdits[order.id]
   if (!status || status === order.status) return
-  await adminAPI.updateOrderStatus(order.id, { status })
+  if (order.status === 'pending_payment' && status === 'paid') {
+    const response = await adminAPI.getOrder(order.id)
+    const payment = latestConfirmableManualPayment(response.data.data?.payments)
+    if (!payment) {
+      window.alert(t('admin.payments.manualConfirmUnavailable'))
+      statusEdits[order.id] = order.status
+      return
+    }
+    const evidence = collectManualPaymentEvidence(t, payment.channel_type)
+    if (!evidence) {
+      statusEdits[order.id] = order.status
+      return
+    }
+    await adminAPI.confirmManualPayment(payment.id, evidence)
+  } else {
+    await adminAPI.updateOrderStatus(order.id, { status })
+  }
   fetchOrders(pagination.value.page)
 }
 
@@ -427,15 +464,9 @@ watch(
                     <SelectValue :placeholder="t('admin.orders.filterStatusAll')" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="pending_payment">{{ t('order.status.pending_payment') }}</SelectItem>
-                    <SelectItem value="paid">{{ t('order.status.paid') }}</SelectItem>
-                    <SelectItem value="fulfilling">{{ t('order.status.fulfilling') }}</SelectItem>
-                    <SelectItem value="partially_delivered">{{ t('order.status.partially_delivered') }}</SelectItem>
-                    <SelectItem value="partially_refunded">{{ t('order.status.partially_refunded') }}</SelectItem>
-                    <SelectItem value="delivered">{{ t('order.status.delivered') }}</SelectItem>
-                    <SelectItem value="completed">{{ t('order.status.completed') }}</SelectItem>
-                    <SelectItem value="canceled">{{ t('order.status.canceled') }}</SelectItem>
-                    <SelectItem value="refunded">{{ t('order.status.refunded') }}</SelectItem>
+                    <SelectItem v-for="status in editableStatusOptions(order)" :key="status" :value="status">
+                      {{ t(`order.status.${status}`) }}
+                    </SelectItem>
                   </SelectContent>
                 </Select>
                 <Button v-if="canUpdateStatus(order)" size="xs" variant="outline" @click="updateStatus(order)">

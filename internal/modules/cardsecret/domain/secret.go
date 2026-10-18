@@ -2,6 +2,8 @@ package domain
 
 import (
 	"time"
+
+	_ "github.com/dujiao-next/internal/securestore/serializer"
 )
 
 const (
@@ -16,7 +18,7 @@ type Secret struct {
 	ProductID  uint       `gorm:"not null;index:idx_card_secret_reserve" json:"product_id"`                     // 商品ID
 	SKUID      uint       `gorm:"column:sku_id;not null;default:0;index:idx_card_secret_reserve" json:"sku_id"` // SKU ID
 	BatchID    *uint      `gorm:"index" json:"batch_id,omitempty"`                                              // 批次ID
-	Secret     string     `gorm:"type:text;not null" json:"secret"`                                             // 卡密内容
+	Secret     string     `gorm:"serializer:secure_string;type:text;not null" json:"secret"`                    // 卡密内容
 	Status     string     `gorm:"not null;index:idx_card_secret_reserve" json:"status"`                         // 状态（available/used）
 	OrderID    *uint      `gorm:"index" json:"order_id,omitempty"`                                              // 关联订单ID
 	ReservedAt *time.Time `gorm:"index" json:"reserved_at"`                                                     // 占用时间

@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/dujiao-next/internal/cache"
 	"github.com/dujiao-next/internal/constants"
@@ -23,7 +22,6 @@ import (
 const (
 	maxGoogleProviderUserIDBytes = 255
 	maxGoogleIdentityEmailBytes  = 128
-	maxGoogleDisplayNameRunes    = 128
 	maxGooglePictureURLBytes     = 2048
 )
 
@@ -342,7 +340,7 @@ func newGoogleUser(verified *googleauthapp.VerifiedIdentity) (*userdomain.User, 
 		return nil, err
 	}
 	now := time.Now()
-	displayName := truncateRunes(strings.TrimSpace(verified.Name), maxGoogleDisplayNameRunes)
+	displayName := userdomain.SanitizeDisplayName(verified.Name)
 	if displayName == "" {
 		displayName = resolveNicknameFromEmail(verified.Email)
 	}
@@ -735,12 +733,4 @@ func generateGooglePlaceholderPassword() (string, error) {
 		return "", err
 	}
 	return string(hashed), nil
-}
-
-func truncateRunes(value string, limit int) string {
-	if limit <= 0 || utf8.RuneCountInString(value) <= limit {
-		return value
-	}
-	runes := []rune(value)
-	return string(runes[:limit])
 }

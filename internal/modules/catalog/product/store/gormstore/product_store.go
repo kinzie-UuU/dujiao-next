@@ -204,13 +204,17 @@ func (r *ProductStore) GetBySlug(slug string, onlyActive bool) (*productdomain.P
 
 // GetByID 根据 ID 获取商品
 func (r *ProductStore) GetByID(id string) (*productdomain.Product, error) {
+	pk, err := strconv.ParseUint(id, 10, 64)
+	if err != nil {
+		return nil, nil
+	}
 	var product productdomain.Product
 	if err := r.db.Preload("Category", "deleted_at IS NULL").
 		Preload("SKUs", func(db *gorm.DB) *gorm.DB {
 			return db.Where("deleted_at IS NULL AND is_active = ?", true).Order("sort_order DESC, id ASC")
 		}).
 		Where("products.deleted_at IS NULL").
-		First(&product, id).Error; err != nil {
+		First(&product, pk).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
@@ -221,13 +225,17 @@ func (r *ProductStore) GetByID(id string) (*productdomain.Product, error) {
 
 // GetAdminByID 根据 ID 获取后台商品详情，包含全部 SKU
 func (r *ProductStore) GetAdminByID(id string) (*productdomain.Product, error) {
+	pk, err := strconv.ParseUint(id, 10, 64)
+	if err != nil {
+		return nil, nil
+	}
 	var product productdomain.Product
 	if err := r.db.Preload("Category", "deleted_at IS NULL").
 		Preload("SKUs", func(db *gorm.DB) *gorm.DB {
 			return db.Where("deleted_at IS NULL").Order("sort_order DESC, id ASC")
 		}).
 		Where("products.deleted_at IS NULL").
-		First(&product, id).Error; err != nil {
+		First(&product, pk).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
@@ -255,7 +263,7 @@ func (r *ProductStore) Create(product *productdomain.Product) error {
 
 // Update 更新商品
 func (r *ProductStore) Update(product *productdomain.Product) error {
-	return r.db.Save(product).Error
+	return r.db.Omit("manual_stock_locked", "manual_stock_sold").Save(product).Error
 }
 
 // QuickUpdate 快速更新商品指定字段
@@ -294,4 +302,14 @@ func (r *ProductStore) ReleaseManualStock(productID uint, quantity int) (int64, 
 // ConsumeManualStock 消耗手动库存（支付成功后占用转已售）
 func (r *ProductStore) ConsumeManualStock(productID uint, quantity int) (int64, error) {
 	return gormutil.ConsumeManualStock(r.db, &productdomain.Product{}, productID, quantity)
+}
+
+func (r *ProductStore) UpdateKeepingStock(item *productdomain.Product) error {
+	return r.db.Omit("manual_stock_total", "manual_stock_locked", "manual_stock_sold").Save(item).Error
+}
+
+// SyncManualStockTotalFromSKUs computes the aggregate in SQL, after SKU writes.
+// Never write a product total derived from the editor's earlier stock snapshot.
+func (r *ProductStore) SyncManualStockTotalFromSKUs(productID uint) error {
+	return r.db.Model(&productdomain.Product{}).Where("id = ? AND deleted_at IS NULL", productID).UpdateColumn("manual_stock_total", gorm.Expr(`(SELECT CASE WHEN SUM(CASE WHEN manual_stock_total = -1 THEN 1 ELSE 0 END) > 0 THEN -1 ELSE COALESCE(SUM(manual_stock_total), 0) END FROM product_skus WHERE product_id = ? AND is_active = ? AND deleted_at IS NULL)`, productID, true)).Error
 }

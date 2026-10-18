@@ -230,3 +230,18 @@ func TestMapCheckoutSessionStatus(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckoutCompletedRequiresPaidStatus(t *testing.T) {
+	for _, tc := range []struct{ paid, want string }{
+		{"unpaid", constants.PaymentStatusPending},
+		{"paid", constants.PaymentStatusSuccess},
+	} {
+		result := &WebhookResult{}
+		err := fillWebhookResult(result, stripeEventCheckoutSessionCompleted, map[string]interface{}{
+			"object": stripeObjectCheckoutSession, "id": "cs_1", "payment_status": tc.paid, "status": "complete",
+		})
+		if err != nil || result.Status != tc.want {
+			t.Fatalf("%s: status=%s error=%v", tc.paid, result.Status, err)
+		}
+	}
+}

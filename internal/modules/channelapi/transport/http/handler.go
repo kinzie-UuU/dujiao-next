@@ -29,6 +29,7 @@ var (
 	ErrRiskEmailBlacklisted          = errors.New("risk email blacklisted")
 	ErrRiskTooManyPendingOrders      = errors.New("too many pending orders")
 	ErrRiskOrderRateLimited          = errors.New("order rate limited")
+	ErrSalesPaused                   = errors.New("sales paused")
 	ErrProductSKURequired            = errors.New("product sku required")
 	ErrProductSKUInvalid             = errors.New("product sku invalid")
 	ErrInvalidOrderItem              = errors.New("invalid order item")
@@ -56,6 +57,7 @@ var (
 	ErrPaymentGatewayRequestFailed   = errors.New("payment gateway request failed")
 	ErrPaymentGatewayResponseInvalid = errors.New("payment gateway response invalid")
 	ErrPaymentCurrencyMismatch       = errors.New("payment currency mismatch")
+	ErrWalletOutstandingDebt         = errors.New("wallet outstanding debt")
 	ErrWalletOnlyPaymentRequired     = errors.New("wallet only payment required")
 )
 

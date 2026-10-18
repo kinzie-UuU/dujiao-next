@@ -42,8 +42,12 @@ func TestShouldMarkFulfilling(t *testing.T) {
 		t.Fatalf("auto items should not require fulfilling")
 	}
 	order = &orderdomain.Order{Items: []orderdomain.OrderItem{{FulfillmentType: constants.FulfillmentTypeManual}}}
+	if shouldMarkFulfilling(order) {
+		t.Fatalf("manual items should remain paid until fulfillment starts")
+	}
+	order = &orderdomain.Order{Items: []orderdomain.OrderItem{{FulfillmentType: constants.FulfillmentTypeUpstream}}}
 	if !shouldMarkFulfilling(order) {
-		t.Fatalf("manual items should require fulfilling")
+		t.Fatalf("upstream items should require fulfilling")
 	}
 }
 

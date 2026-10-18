@@ -143,3 +143,12 @@ func md5Hex(raw string) string {
 	sum := md5.Sum([]byte(raw))
 	return strings.ToUpper(hex.EncodeToString(sum[:]))
 }
+
+func TestVerifyCallbackRejectsEmptyTokenAndMissingMerchant(t *testing.T) {
+	for _, cfg := range []*Config{{MerchantID: "1"}, {MerchantID: "1", MerchantToken: "secret"}} {
+		data := &CallbackData{Sign: buildSignature(nil, cfg.MerchantToken)}
+		if err := VerifyCallback(cfg, data); err == nil {
+			t.Fatal("accepted callback without token or merchant")
+		}
+	}
+}

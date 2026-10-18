@@ -15,6 +15,7 @@ var (
 	ErrOrderCurrencyMismatch      = errors.New("order currency mismatch")
 	ErrOrderNotFound              = resellercontract.ErrOrderNotFound
 	ErrOrderCreateFailed          = errors.New("order create failed")
+	ErrSalesPaused                = errors.New("sales paused")
 	ErrOrderFetchFailed           = errors.New("order fetch failed")
 	ErrProductNotAvailable        = errors.New("product not available")
 	ErrProductPurchaseNotAllowed  = errors.New("product purchase not allowed")
@@ -31,6 +32,7 @@ var (
 	ErrGuestOrderNotFound         = errors.New("guest order not found")
 	ErrGuestEmailRequired         = errors.New("guest email required")
 	ErrGuestPasswordRequired      = errors.New("guest password required")
+	ErrGuestPasswordTooShort      = errors.New("guest password too short")
 	ErrRefundRecordCreateFailed   = errors.New("refund record create failed")
 	ErrCardSecretInsufficient     = errors.New("card secret insufficient")
 	ErrManualStockInsufficient    = errors.New("manual stock insufficient")
@@ -41,3 +43,5 @@ var (
 	ErrResellerMarkupExceeded     = resellercontract.ErrMarkupExceeded
 	ErrResellerPricingModeInvalid = resellercontract.ErrPricingModeInvalid
 )
+
+var ErrOriginalRouteRefundRequired = errors.New("refund requires verified original payment route")

@@ -66,7 +66,7 @@ func (s *Service) AdminRefundToWallet(
 
 	err := s.orderStore.WithinTransaction(func(tx ordercontract.Transaction) error {
 		orderRepository := tx.Orders()
-		locked, err := orderRepository.GetByIDForUpdate(input.OrderID)
+		locked, err := lockRefundOrder(orderRepository, input.OrderID)
 		if err != nil {
 			return err
 		}
@@ -74,6 +74,7 @@ func (s *Service) AdminRefundToWallet(
 			return ErrOrderNotFound
 		}
 		order := *locked
+
 		if order.UserID == 0 {
 			return walletcontract.ErrNotSupportedForGuest
 		}
@@ -87,10 +88,26 @@ func (s *Service) AdminRefundToWallet(
 		if order.TotalAmount.Decimal.LessThanOrEqual(decimal.Zero) {
 			return ErrOrderStatusInvalid
 		}
+		// Children inherit the parent's funding source. Only an entirely wallet-
+		// funded original order may return to that same user's wallet.
+		source := &order
+		if order.ParentID != nil {
+			source, err = orderRepository.GetByIDForUpdate(*order.ParentID)
+			if err != nil || source == nil {
+				return ErrOrderFetchFailed
+			}
+		}
+		if source.UserID != order.UserID || !source.WalletPaidAmount.Decimal.Equal(source.TotalAmount.Decimal) || !source.OnlinePaidAmount.Decimal.IsZero() {
+			return orderapp.ErrOriginalRouteRefundRequired
+		}
 		refundedBefore := order.RefundedAmount.Decimal.Round(2)
 		refundable := order.TotalAmount.Decimal.Sub(refundedBefore).Round(2)
 		if amount.GreaterThan(refundable) {
 			return walletcontract.ErrRefundExceeded
+		}
+
+		if err := reserveParentRefund(orderRepository, &order, amount, time.Now()); err != nil {
+			return err
 		}
 
 		_, transaction, err := s.wallets.CreditInTransaction(
@@ -134,16 +151,8 @@ func (s *Service) AdminRefundToWallet(
 		} else if _, err := orderapp.SyncParentStatus(orderRepository, *order.ParentID, now); err != nil {
 			return ErrOrderUpdateFailed
 		}
-		if s.affiliateRefund != nil {
-			if err := s.affiliateRefund.HandleOrderRefunded(
-				tx.Affiliates(),
-				&order,
-				amount,
-				refundedBefore,
-				"order_refunded_to_wallet",
-			); err != nil {
-				return err
-			}
+		if err := s.reverseAffiliateRefund(tx, &order, amount, refundedBefore, "order_refunded_to_wallet"); err != nil {
+			return err
 		}
 
 		currency := strings.ToUpper(strings.TrimSpace(order.Currency))

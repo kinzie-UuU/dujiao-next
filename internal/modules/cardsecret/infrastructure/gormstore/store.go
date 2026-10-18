@@ -65,9 +65,6 @@ func (r *Store) buildListQuery(filter cardsecretcontract.ListFilter) *gorm.DB {
 	if filter.BatchID > 0 {
 		query = query.Where("card_secrets.batch_id = ?", filter.BatchID)
 	}
-	if secret := strings.TrimSpace(filter.Secret); secret != "" {
-		query = query.Where("LOWER(card_secrets.secret) LIKE LOWER(?)", "%"+secret+"%")
-	}
 	if batchNo := strings.TrimSpace(filter.BatchNo); batchNo != "" {
 		query = query.Joins("LEFT JOIN card_secret_batches ON card_secret_batches.id = card_secrets.batch_id").
 			Where("card_secret_batches.deleted_at IS NULL AND LOWER(card_secret_batches.batch_no) LIKE LOWER(?)", "%"+batchNo+"%")
@@ -81,6 +78,30 @@ func (r *Store) List(filter cardsecretcontract.ListFilter) ([]cardsecretdomain.S
 		return nil, 0, errors.New("invalid product id")
 	}
 	query := r.buildListQuery(filter)
+	if secret := strings.TrimSpace(filter.Secret); secret != "" {
+		var candidates []cardsecretdomain.Secret
+		if err := query.Order("card_secrets.id asc").Find(&candidates).Error; err != nil {
+			return nil, 0, err
+		}
+		matched := filterSecrets(candidates, secret)
+		total := int64(len(matched))
+		if filter.PageSize <= 0 {
+			return matched, total, nil
+		}
+		page := filter.Page
+		if page < 1 {
+			page = 1
+		}
+		start := (page - 1) * filter.PageSize
+		if start >= len(matched) {
+			return []cardsecretdomain.Secret{}, total, nil
+		}
+		end := start + filter.PageSize
+		if end > len(matched) {
+			end = len(matched)
+		}
+		return matched[start:end], total, nil
+	}
 
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
@@ -104,12 +125,39 @@ func (r *Store) List(filter cardsecretcontract.ListFilter) ([]cardsecretdomain.S
 
 // ListIDs 按筛选条件查询卡密 ID 列表
 func (r *Store) ListIDs(filter cardsecretcontract.ListFilter) ([]uint, error) {
+	if strings.TrimSpace(filter.Secret) != "" {
+		filter.Page = 0
+		filter.PageSize = 0
+		items, _, err := r.List(filter)
+		if err != nil {
+			return nil, err
+		}
+		ids := make([]uint, 0, len(items))
+		for _, item := range items {
+			ids = append(ids, item.ID)
+		}
+		return ids, nil
+	}
 	query := r.buildListQuery(filter)
 	var ids []uint
 	if err := query.Order("card_secrets.id asc").Pluck("card_secrets.id", &ids).Error; err != nil {
 		return nil, err
 	}
 	return ids, nil
+}
+
+func filterSecrets(items []cardsecretdomain.Secret, query string) []cardsecretdomain.Secret {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return items
+	}
+	matched := make([]cardsecretdomain.Secret, 0)
+	for _, item := range items {
+		if strings.Contains(strings.ToLower(item.Secret), query) {
+			matched = append(matched, item)
+		}
+	}
+	return matched
 }
 
 // ListByIDs 按 ID 列表查询卡密

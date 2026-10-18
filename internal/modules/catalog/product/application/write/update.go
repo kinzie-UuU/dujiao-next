@@ -153,7 +153,7 @@ func (s *WriteService) Update(id string, input CreateProductInput) (*productdoma
 			if err := s.applyProductSKUsWithStockGuard(skuRepo, cardSecretRepo, product.ID, fulfillmentType, normalizedSKUs); err != nil {
 				return err
 			}
-		} else if err := s.syncSingleProductSKU(skuRepo, product.ID, priceAmount, product.CostPriceAmount.Decimal, product.ManualStockTotal, true); err != nil {
+		} else if err := s.syncSingleProductSKU(skuRepo, product.ID, priceAmount, product.CostPriceAmount.Decimal, product.ManualStockTotal, true, input.ManualStockTotal == nil && fulfillmentType == constants.FulfillmentTypeManual); err != nil {
 			return err
 		}
 		// 仅当请求显式携带批发价字段时才覆盖，省略字段（nil）保留原有配置，
@@ -173,8 +173,15 @@ func (s *WriteService) Update(id string, input CreateProductInput) (*productdoma
 			}
 			product.WholesalePrices = wholesalePrices
 		}
-		if err := productRepo.Update(product); err != nil {
+		update := productRepo.Update
+		if fulfillmentType == constants.FulfillmentTypeManual {
+			update = productRepo.UpdateKeepingStock
+		}
+		if err := update(product); err != nil {
 			return err
+		}
+		if fulfillmentType == constants.FulfillmentTypeManual {
+			return productRepo.SyncManualStockTotalFromSKUs(product.ID)
 		}
 		return nil
 	}); err != nil {

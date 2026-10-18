@@ -274,6 +274,9 @@ export interface AdminExportGiftCardsPayload {
 }
 
 export interface AdminAffiliateSetting {
+  reward_mode?: string
+  all_products?: boolean
+  eligible_product_ids?: number[]
   enabled: boolean
   commission_rate: number
   confirm_days: number
@@ -410,12 +413,13 @@ export const adminAPI = {
   downloadFulfillment: (orderId: number) => api.get(`/admin/orders/${orderId}/fulfillment/download`, { blob: true }),
   getPayments: (params?: Record<string, unknown>) => api.get('/admin/payments', { params }),
   getPayment: (id: number) => api.get(`/admin/payments/${id}`),
+  confirmManualPayment: (id: number, evidence: import('@/utils/manualPaymentEvidence').ManualPaymentEvidence) => api.post(`/admin/payments/${id}/manual-confirm`, evidence),
   exportPayments: (params?: Record<string, unknown>) => api.get('/admin/payments/export', { params, blob: true }),
-  createPaymentChannel: (data: Partial<AdminPaymentChannel>) => api.post('/admin/payment-channels', data),
+  createPaymentChannel: (data: Partial<AdminPaymentChannel>, code: string) => api.post('/admin/payment-channels', data, { headers: { 'X-Admin-TOTP': code } }),
   getPaymentChannels: (params?: Record<string, unknown>) => api.get('/admin/payment-channels', { params }),
   getPaymentChannel: (id: number) => api.get(`/admin/payment-channels/${id}`),
-  updatePaymentChannel: (id: number, data: Partial<AdminPaymentChannel>) => api.put(`/admin/payment-channels/${id}`, data),
-  deletePaymentChannel: (id: number) => api.delete(`/admin/payment-channels/${id}`),
+  updatePaymentChannel: (id: number, data: Partial<AdminPaymentChannel>, code: string) => api.put(`/admin/payment-channels/${id}`, data, { headers: { 'X-Admin-TOTP': code } }),
+  deletePaymentChannel: (id: number, code: string) => api.delete(`/admin/payment-channels/${id}`, { headers: { 'X-Admin-TOTP': code } }),
   getUsers: (params?: Record<string, unknown>) => api.get('/admin/users', { params }),
   getUserLoginLogs: (params?: Record<string, unknown>) => api.get('/admin/user-login-logs', { params }),
   getUser: (id: number) => api.get(`/admin/users/${id}`),

@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -84,6 +85,20 @@ func (c *Client) EnqueueOrderAutoFulfill(payload OrderAutoFulfillPayload, opts .
 	return err
 }
 
+// EnqueueAffiliateOrderPaid 推送佣金创建重试任务
+func (c *Client) EnqueueAffiliateOrderPaid(payload AffiliateOrderPaidPayload, opts ...asynq.Option) error {
+	if !c.Enabled() {
+		return nil
+	}
+	task, err := NewAffiliateOrderPaidTask(payload)
+	if err != nil {
+		return err
+	}
+	options := append([]asynq.Option{asynq.Queue(c.defaultQueue)}, opts...)
+	_, err = c.client.Enqueue(task, options...)
+	return err
+}
+
 // EnqueueOrderTimeoutCancel 推送订单超时取消任务
 func (c *Client) EnqueueOrderTimeoutCancel(payload OrderTimeoutCancelPayload, delay time.Duration) error {
 	if !c.Enabled() {
@@ -121,6 +136,9 @@ func (c *Client) EnqueueWalletRechargeExpire(payload WalletRechargeExpirePayload
 // EnqueueNotificationDispatch 推送通知中心分发任务
 func (c *Client) EnqueueNotificationDispatch(payload NotificationDispatchPayload, opts ...asynq.Option) error {
 	if !c.Enabled() {
+		if constants.IsAdminSecurityNotification(payload.EventType) {
+			return fmt.Errorf("admin login notification queue disabled")
+		}
 		return nil
 	}
 	task, err := NewNotificationDispatchTask(payload)
@@ -128,6 +146,13 @@ func (c *Client) EnqueueNotificationDispatch(payload NotificationDispatchPayload
 		return err
 	}
 	options := append([]asynq.Option{asynq.Queue(c.defaultQueue)}, opts...)
+	if constants.IsAdminSecurityNotification(payload.EventType) {
+		// Do not let unavailable Redis hold up a completed administrator sign-in.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_, err = c.client.EnqueueContext(ctx, task, options...)
+		return err
+	}
 	_, err = c.client.Enqueue(task, options...)
 	return err
 }

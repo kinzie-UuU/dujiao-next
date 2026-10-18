@@ -1,7 +1,7 @@
 <template>
   <div class="space-y-6">
     <div class="rounded-2xl border bg-card p-7 shadow-sm">
-      <PanelHeading :title="t('personalCenter.affiliate.title')" :description="t('personalCenter.affiliate.subtitle')" :icon="Megaphone">
+      <PanelHeading :title="t('personalCenter.affiliate.title')" :description="t(rewardRulesKey, { days: appStore.config?.affiliate?.confirm_days ?? 7 })" :icon="Megaphone">
         <template #actions>
           <Badge variant="accent" size="sm">{{ t('personalCenter.tabs.affiliate') }}</Badge>
         </template>
@@ -39,12 +39,12 @@
             <div class="mt-2 text-lg font-bold text-foreground">{{ dashboard?.pending_commission || '0.00' }}</div>
           </div>
           <div class="rounded-xl border p-4">
-            <div class="text-xs text-muted-foreground">{{ t('personalCenter.affiliate.availableCommission') }}</div>
+            <div class="text-xs text-muted-foreground">{{ t(isWalletReward ? 'personalCenter.affiliate.availableReward' : 'personalCenter.affiliate.availableCommission') }}</div>
             <div class="mt-2 text-lg font-bold text-foreground">{{ dashboard?.available_commission || '0.00' }}</div>
           </div>
           <div class="rounded-xl border p-4">
-            <div class="text-xs text-muted-foreground">{{ t('personalCenter.affiliate.withdrawnCommission') }}</div>
-            <div class="mt-2 text-lg font-bold text-foreground">{{ dashboard?.withdrawn_commission || '0.00' }}</div>
+            <div class="text-xs text-muted-foreground">{{ t(isWalletReward ? 'personalCenter.affiliate.creditedReward' : 'personalCenter.affiliate.withdrawnCommission') }}</div>
+            <div class="mt-2 text-lg font-bold text-foreground">{{ (isWalletReward ? dashboard?.wallet_credited_commission : dashboard?.withdrawn_commission) || '0.00' }}</div>
           </div>
         </div>
       </template>
@@ -57,7 +57,15 @@
       </div>
     </div>
 
-    <div v-if="dashboard?.opened" class="rounded-2xl border bg-card p-7 shadow-sm">
+    <div v-if="dashboard?.opened && isWalletReward" class="rounded-2xl border bg-card p-7 shadow-sm">
+      <h3 class="text-lg font-bold text-foreground">{{ t('personalCenter.affiliate.creditTitle') }}</h3>
+      <p class="mt-1 text-sm text-muted-foreground">{{ t('personalCenter.affiliate.creditHint') }}</p>
+      <Button class="mt-4" :disabled="crediting || Number(dashboard?.available_commission || 0) <= 0" @click="creditWallet">
+        {{ t(crediting ? 'personalCenter.affiliate.crediting' : 'personalCenter.affiliate.creditButton') }}
+      </Button>
+    </div>
+
+    <div v-if="dashboard?.opened && !isWalletReward" class="rounded-2xl border bg-card p-7 shadow-sm">
       <h3 class="text-lg font-bold text-foreground">{{ t('personalCenter.affiliate.withdrawTitle') }}</h3>
       <p class="mt-1 text-sm text-muted-foreground">{{ t('personalCenter.affiliate.withdrawSubtitle') }}</p>
       <form class="mt-5 grid grid-cols-1 gap-4 md:grid-cols-4" @submit.prevent="handleApplyWithdraw">
@@ -119,7 +127,7 @@
         {{ t('personalCenter.affiliate.commissionEmpty') }}
       </div>
       <div v-else class="overflow-x-auto rounded-xl border">
-        <Table>
+        <Table class="min-w-[420px]">
           <TableHeader>
             <TableRow class="bg-muted/50">
               <TableHead class="px-4">{{ t('personalCenter.affiliate.table.orderNo') }}</TableHead>
@@ -152,7 +160,7 @@
       />
     </div>
 
-    <div v-if="dashboard?.opened" class="rounded-2xl border bg-card p-7 shadow-sm">
+    <div v-if="dashboard?.opened && !isWalletReward" class="rounded-2xl border bg-card p-7 shadow-sm">
       <div class="mb-4 flex items-center justify-between">
         <h3 class="text-lg font-bold text-foreground">{{ t('personalCenter.affiliate.withdrawRecordTitle') }}</h3>
         <Button type="button" variant="outline" size="sm" @click="loadWithdraws(withdrawsPagination.page)">
@@ -231,6 +239,26 @@ import PaginationNav from '../../components/PaginationNav.vue'
 
 const { t } = useI18n()
 const appStore = useAppStore()
+
+const isWalletReward = computed(() => appStore.config?.affiliate?.reward_mode === 'gpt_random_wallet')
+const rewardRulesKey = computed(() => !isWalletReward.value
+  ? 'personalCenter.affiliate.subtitle'
+  : (appStore.config?.affiliate?.confirm_days ?? 7) <= 0
+    ? (appStore.config?.affiliate?.all_products === true ? 'personalCenter.affiliate.walletRulesAllImmediate' : 'personalCenter.affiliate.walletRulesImmediate')
+    : (appStore.config?.affiliate?.all_products === true ? 'personalCenter.affiliate.walletRulesAll' : 'personalCenter.affiliate.walletRules'))
+const crediting = ref(false)
+const creditWallet = async () => {
+  if (crediting.value || !isWalletReward.value) return
+  crediting.value = true
+  panelAlert.value = null
+  try {
+    const response = await affiliateAPI.walletCredit()
+    await Promise.all([loadDashboard(), loadCommissions(1)])
+    panelAlert.value = { level: 'success', message: t('personalCenter.affiliate.creditSuccess', { amount: response.data.data?.credited_amount || '0.00' }) }
+  } catch (err: any) {
+    panelAlert.value = { level: 'error', message: err?.message || t('personalCenter.affiliate.creditFailed') }
+  } finally { crediting.value = false }
+}
 
 const loading = ref(true)
 const opening = ref(false)
@@ -335,7 +363,7 @@ const loadWithdraws = async (page = 1) => {
 
 const reloadOpenedData = async () => {
   if (!dashboard.value?.opened) return
-  await Promise.all([loadCommissions(1), loadWithdraws(1)])
+  await Promise.all([loadCommissions(1), ...(isWalletReward.value ? [] : [loadWithdraws(1)])])
 }
 
 const initialize = async () => {
@@ -369,6 +397,7 @@ const openAffiliate = async () => {
 }
 
 const handleApplyWithdraw = async () => {
+  if (isWalletReward.value) return
   panelAlert.value = null
   if (!withdrawForm.amount.trim()) {
     panelAlert.value = {
@@ -434,7 +463,8 @@ const copyPromotionUrl = async () => {
 
 const commissionStatusLabel = (status?: string) => {
   if (status === AFFILIATE_COMMISSION_STATUS_PENDING_CONFIRM) return t('personalCenter.affiliate.commissionStatus.pendingConfirm')
-  if (status === AFFILIATE_COMMISSION_STATUS_AVAILABLE) return t('personalCenter.affiliate.commissionStatus.available')
+  if (status === 'wallet_credited') return t('personalCenter.affiliate.creditedReward')
+  if (status === AFFILIATE_COMMISSION_STATUS_AVAILABLE) return t(isWalletReward.value ? 'personalCenter.affiliate.availableReward' : 'personalCenter.affiliate.commissionStatus.available')
   if (status === AFFILIATE_COMMISSION_STATUS_REJECTED) return t('personalCenter.affiliate.commissionStatus.rejected')
   if (status === AFFILIATE_COMMISSION_STATUS_WITHDRAWN) return t('personalCenter.affiliate.commissionStatus.withdrawn')
   return status || '-'

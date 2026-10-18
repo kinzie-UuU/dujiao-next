@@ -273,3 +273,32 @@ func newContentRouteAccessRouter(adminRepo admincontract.Store, authzService *au
 	contenttransport.RegisterAdminRoutes(admin, contenttransport.NewAdminHandler(nil, nil, nil, nil))
 	return router
 }
+
+func TestUploadDocumentsAreSandboxed(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"page.html", "image.svg", "image.webp"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("test document"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := gin.New()
+	r.Group("/uploads", uploadSecurityHeaders).Static("/", dir)
+	for _, name := range []string{"page.html", "image.svg", "image.webp", "missing.html"} {
+		for _, method := range []string{"GET", "HEAD"} {
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(method, "/uploads/"+name, nil))
+			if got := w.Header().Get("Content-Security-Policy"); got != "sandbox; script-src 'none'" {
+				t.Fatalf("%s %s unsafe CSP %q", method, name, got)
+			}
+			if w.Header().Get("X-Content-Type-Options") != "nosniff" {
+				t.Fatal("missing nosniff")
+			}
+			if name == "image.svg" && w.Header().Get("Content-Disposition") != "attachment" {
+				t.Fatal("SVG must download")
+			}
+			if name == "image.webp" && (w.Code != 200 || w.Header().Get("Content-Disposition") != "") {
+				t.Fatal("image embedding changed")
+			}
+		}
+	}
+}

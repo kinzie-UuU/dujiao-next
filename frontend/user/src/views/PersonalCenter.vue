@@ -23,8 +23,7 @@
               class="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary"
             >
               <img v-if="isImagePath(userProfileStore.currentLevel?.icon)" :src="getImageUrl(userProfileStore.currentLevel!.icon)" class="h-3.5 w-3.5 object-contain" alt="" />
-              <span v-else-if="userProfileStore.currentLevel?.icon">{{ userProfileStore.currentLevel.icon }}</span>
-              <Crown v-else class="h-3.5 w-3.5" />
+              <UserRound v-else class="h-3.5 w-3.5" aria-hidden="true" />
               {{ levelName(userProfileStore.currentLevel) }}
             </span>
           </div>
@@ -127,7 +126,7 @@
                 <div class="flex items-center gap-3.5">
                   <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border-primary/40 bg-primary/10 text-xl">
                     <img v-if="isImagePath(userProfileStore.currentLevel?.icon)" :src="getImageUrl(userProfileStore.currentLevel!.icon)" class="h-7 w-7 object-contain" alt="" />
-                    <span v-else>{{ userProfileStore.currentLevel?.icon || '👤' }}</span>
+                    <UserRound v-else class="h-7 w-7" aria-hidden="true" />
                   </div>
                   <div class="min-w-0">
                     <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{{ t('personalCenter.memberLevel.currentLevel') }}</p>
@@ -159,7 +158,7 @@
                   <div class="flex items-center gap-3">
                     <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-base opacity-60">
                       <img v-if="isImagePath(userProfileStore.nextLevel.icon)" :src="getImageUrl(userProfileStore.nextLevel.icon)" class="h-6 w-6 object-contain" alt="" />
-                      <span v-else>{{ userProfileStore.nextLevel.icon || '⭐' }}</span>
+                      <Star v-else class="h-6 w-6" aria-hidden="true" />
                     </div>
                     <div class="min-w-0">
                       <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{{ t('personalCenter.memberLevel.nextLevel') }}</p>
@@ -285,7 +284,7 @@
 
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { Crown, ShoppingBag, ShieldCheck, Percent } from 'lucide-vue-next'
+import { Crown, ShoppingBag, ShieldCheck, Percent, UserRound, Star } from 'lucide-vue-next'
 import { getImageUrl } from '../utils/image'
 import { pageAlertVariant, pageAlertToneClass } from '../utils/alerts'
 import StatCard from '../components/shared/StatCard.vue'

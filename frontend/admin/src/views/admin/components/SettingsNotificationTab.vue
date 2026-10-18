@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { reactive, ref, watch } from 'vue'
+import { X } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import type { AdminProduct } from '@/api/types'
@@ -23,6 +24,7 @@ type NotificationSceneTemplate = Record<SupportedLanguage, NotificationLocalized
 interface NotificationData {
   default_locale: string
   dedupe_ttl_seconds: number
+  inventory_alert_enabled: boolean
   inventory_alert_interval_seconds: number
   payment_order_alert_interval_seconds: number
   payment_order_alert_check_interval_seconds: number
@@ -86,6 +88,7 @@ const deepCloneTemplate = (src: NotificationSceneTemplate): NotificationSceneTem
 const form = reactive({
   default_locale: 'zh-CN',
   dedupe_ttl_seconds: 300,
+  inventory_alert_enabled: true,
   inventory_alert_interval_seconds: 1800,
   payment_order_alert_interval_seconds: 1800,
   payment_order_alert_check_interval_seconds: 86400,
@@ -117,6 +120,7 @@ const form = reactive({
 const syncFromProps = () => {
   form.default_locale = props.data.default_locale
   form.dedupe_ttl_seconds = props.data.dedupe_ttl_seconds
+  form.inventory_alert_enabled = props.data.inventory_alert_enabled !== false
   form.inventory_alert_interval_seconds = props.data.inventory_alert_interval_seconds
   form.payment_order_alert_interval_seconds = props.data.payment_order_alert_interval_seconds
   form.payment_order_alert_check_interval_seconds = props.data.payment_order_alert_check_interval_seconds
@@ -246,6 +250,7 @@ const save = async () => {
     const payload = {
       default_locale: form.default_locale,
       dedupe_ttl_seconds: Number(form.dedupe_ttl_seconds),
+      inventory_alert_enabled: form.inventory_alert_enabled,
       inventory_alert_interval_seconds: Number(form.inventory_alert_interval_seconds),
       payment_order_alert_interval_seconds: Number(form.payment_order_alert_interval_seconds),
       payment_order_alert_check_interval_seconds: Number(form.payment_order_alert_check_interval_seconds),
@@ -312,6 +317,11 @@ defineExpose({ save, submitting })
 
         <div class="rounded-xl border border-border bg-muted/20 p-4">
           <h3 class="text-sm font-semibold">{{ t('admin.settings.notification.inventory.title') }}</h3>
+          <div class="mt-3 flex items-center gap-2">
+            <Switch id="inventory-alert-enabled" v-model="form.inventory_alert_enabled" />
+            <Label for="inventory-alert-enabled">{{ t('admin.settings.notification.inventory.enabled') }}</Label>
+          </div>
+          <p class="mt-2 text-xs text-muted-foreground">{{ t('admin.settings.notification.inventory.enabledHint') }}</p>
           <div class="mt-4 grid grid-cols-1 gap-6 md:grid-cols-2">
             <div class="space-y-2">
               <label class="text-xs font-medium text-muted-foreground">{{ t('admin.settings.notification.inventory.intervalSeconds') }}</label>
@@ -355,7 +365,7 @@ defineExpose({ save, submitting })
                     @click="removeIgnoredProduct(product.id)"
                   >
                     <span>{{ product.label }}</span>
-                    <span class="text-muted-foreground">×</span>
+                    <X class="h-3 w-3 text-muted-foreground" aria-hidden="true" />
                   </button>
                   <span v-if="ignoredProducts.length === 0" class="text-xs text-muted-foreground">
                     {{ t('admin.settings.notification.inventory.emptyIgnoredProducts') }}

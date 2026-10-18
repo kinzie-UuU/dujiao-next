@@ -170,6 +170,7 @@ export interface AffiliateDashboardData {
     pending_commission: string
     available_commission: string
     withdrawn_commission: string
+    wallet_credited_commission?: string
 }
 
 export interface AffiliateCommissionData {
@@ -467,6 +468,8 @@ export interface CreatePaymentPayload {
 }
 
 export interface PaymentCreateResult {
+    payable_amount?: string
+    currency?: string
     order_paid?: boolean
     wallet_paid_amount?: string
     online_pay_amount?: string

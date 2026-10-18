@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { useAdminAuthStore } from '@/stores/auth'
 import QRCode from 'qrcode'
 import { useI18n } from 'vue-i18n'
 import { adminAPI, type SetupTwoFAResponse } from '@/api/admin'
@@ -53,7 +54,8 @@ const submit = async () => {
   submitting.value = true
   try {
     const res = await adminAPI.enable2FA({ code: code.value })
-    const data = res.data?.data as { recovery_codes: string[] }
+    const data = res.data?.data as { recovery_codes: string[]; token?: string }
+    if (data.token) useAdminAuthStore().replaceToken(data.token)
     emit('enabled', data.recovery_codes)
     close()
   } catch (err: unknown) {

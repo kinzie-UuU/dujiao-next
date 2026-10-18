@@ -90,10 +90,6 @@
         </Badge>
       </div>
 
-      <p class="hidden md:block text-muted-foreground text-sm mb-6 line-clamp-2">
-        {{ getLocalizedText(product.description) }}
-      </p>
-
       <div class="flex items-center justify-between border-t pt-2 md:pt-4 mt-auto">
         <div class="flex flex-col">
           <span class="hidden md:block text-xs text-muted-foreground uppercase tracking-wider">{{ t('products.price') }}</span>
@@ -140,7 +136,7 @@
             size="icon"
             class="w-8 h-8 md:w-9 md:h-9"
             :aria-label="t('products.quickBuyAria')"
-            :disabled="isSoldOut(product)"
+            :disabled="isSoldOut(product) || appStore.salesPaused"
             @click.stop="$emit('quickBuy', product)"
           >
             <ShoppingCart class="h-4 w-4" />
@@ -170,6 +166,7 @@ import { useLocalized, useProductLabels } from '../composables/useProduct'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { useAppStore } from '../stores/app'
 
 const props = withDefaults(defineProps<{
   product: any
@@ -188,6 +185,7 @@ defineEmits<{
 }>()
 
 const { t } = useI18n()
+const appStore = useAppStore()
 const { getLocalizedText, siteCurrency, formatPrice } = useLocalized()
 const { getPurchaseTypeLabel, getFulfillmentTypeLabel, getStockBadgeVariant, getStockStatusLabel, isSoldOut, hasPromotionPrice, getPromotionPriceAmount, hasPromotionRules, hasWholesalePrices } = useProductLabels()
 

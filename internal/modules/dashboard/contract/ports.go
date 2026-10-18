@@ -61,14 +61,16 @@ type PaymentTrendRow struct {
 }
 
 type ProfitOverviewRow struct {
-	TotalRevenue float64
-	TotalCost    float64
+	MissingCostItems int64
+	TotalRevenue     float64
+	TotalCost        float64
 }
 
 type ProfitTrendRow struct {
-	Day     string
-	Revenue float64
-	Cost    float64
+	MissingCostItems int64
+	Day              string
+	Revenue          float64
+	Cost             float64
 }
 
 type StockStatsRow struct {
@@ -92,6 +94,7 @@ type InventoryAlertRow struct {
 }
 
 type ProductRankingRow struct {
+	MissingCostItems  int64
 	ProductID         uint
 	SKUID             uint         `gorm:"column:sku_id"`
 	SKUCode           string       `gorm:"column:sku_code"`

@@ -176,6 +176,7 @@ const isLocalizedFieldNotEmpty = (value: Record<SupportedLanguage, string>) => {
 }
 
 const form = reactive({
+  sales_paused: false,
   brand: {
     site_name: '',
     site_url: '',
@@ -379,6 +380,7 @@ const fetchSettings = async () => {
 
     if (siteRes.data && siteRes.data.data) {
       const data = siteRes.data.data as Record<string, unknown>
+      form.sales_paused = data.sales_paused === true
       const brand = data.brand as Record<string, unknown> | undefined
       if (brand) {
         form.brand.site_name = String(brand.site_name || '')
@@ -600,6 +602,7 @@ const saveSiteSettings = async () => {
   const payload = {
     key: 'site_config',
     value: {
+      sales_paused: form.sales_paused,
       brand: form.brand,
       currency: String(form.currency || 'CNY').trim().toUpperCase(),
       contact: form.contact,
@@ -822,6 +825,22 @@ onMounted(() => {
       </TabsList>
 
       <TabsContent value="basic" :forceMount="true" v-show="currentTab === 'basic'" class="space-y-6 mt-0">
+      <div class="rounded-xl border border-border bg-card">
+        <div class="border-b border-border bg-muted/40 px-6 py-4">
+          <h2 class="text-lg font-semibold">{{ t('admin.settings.salesPause.title') }}</h2>
+          <p class="mt-1 text-xs text-muted-foreground">{{ t('admin.settings.salesPause.subtitle') }}</p>
+        </div>
+        <div class="p-6">
+          <div class="flex flex-col gap-3 rounded-lg border border-border bg-muted/20 px-4 py-3 sm:flex-row sm:items-center">
+            <Switch id="sales-paused" v-model="form.sales_paused" />
+            <div>
+              <Label for="sales-paused" class="text-sm font-medium">{{ t('admin.settings.salesPause.enabled') }}</Label>
+              <p class="text-xs text-muted-foreground">{{ t('admin.settings.salesPause.enabledDesc') }}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="rounded-xl border border-border bg-card">
         <div class="border-b border-border bg-muted/40 px-6 py-4">
           <h2 class="text-lg font-semibold">{{ t('admin.settings.registration.title') }}</h2>

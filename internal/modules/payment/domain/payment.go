@@ -8,7 +8,17 @@ import (
 )
 
 // Payment 支付记录
+type ManualPaymentEvidence struct {
+	TransactionID string `json:"transaction_id"`
+	PayerVerified bool   `json:"payer_verified"`
+	Amount        string `json:"amount"`
+	Currency      string `json:"currency"`
+}
+
 type Payment struct {
+	ManualReceiptKey *string `gorm:"size:180;uniqueIndex" json:"-"`
+
+	ExceptionCode      string       `gorm:"size:64" json:"exception_code,omitempty"`
 	ID                 uint         `gorm:"primarykey" json:"id"`                                    // 主键
 	OrderID            uint         `gorm:"index;not null" json:"order_id"`                          // 订单ID
 	ChannelID          uint         `gorm:"index;not null" json:"channel_id"`                        // 支付渠道ID

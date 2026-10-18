@@ -116,7 +116,7 @@ func (r *SKUStore) Update(item *productdomain.ProductSKU) error {
 	if item == nil {
 		return errors.New("sku is nil")
 	}
-	return r.db.Save(item).Error
+	return r.db.Omit("manual_stock_locked", "manual_stock_sold").Save(item).Error
 }
 
 // Delete 硬删除单个 SKU（绕过软删除，避免唯一索引冲突）
@@ -157,4 +157,8 @@ func (r *SKUStore) ReleaseManualStock(skuID uint, quantity int) (int64, error) {
 // ConsumeManualStock 消耗手动库存（支付成功后占用转已售）
 func (r *SKUStore) ConsumeManualStock(skuID uint, quantity int) (int64, error) {
 	return gormutil.ConsumeManualStock(r.db, &productdomain.ProductSKU{}, skuID, quantity)
+}
+
+func (r *SKUStore) UpdateKeepingStock(item *productdomain.ProductSKU) error {
+	return r.db.Omit("manual_stock_total", "manual_stock_locked", "manual_stock_sold").Save(item).Error
 }

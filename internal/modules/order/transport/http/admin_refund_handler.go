@@ -17,11 +17,12 @@ import (
 )
 
 var (
-	ErrOrderFetchFailed           = errors.New("order fetch failed")
-	ErrOrderRefundExpired         = errors.New("order refund expired")
-	ErrWalletInvalidAmount        = errors.New("wallet invalid amount")
-	ErrWalletRefundExceeded       = errors.New("wallet refund exceeded")
-	ErrWalletNotSupportedForGuest = errors.New("wallet not supported for guest")
+	ErrOriginalRouteRefundRequired = errors.New("refund requires verified original payment route")
+	ErrOrderFetchFailed            = errors.New("order fetch failed")
+	ErrOrderRefundExpired          = errors.New("order refund expired")
+	ErrWalletInvalidAmount         = errors.New("wallet invalid amount")
+	ErrWalletRefundExceeded        = errors.New("wallet refund exceeded")
+	ErrWalletNotSupportedForGuest  = errors.New("wallet not supported for guest")
 )
 
 // AdminRefundListQuery 管理端退款列表查询。
@@ -124,7 +125,7 @@ type AdminRefundOrderToWalletRequest struct {
 	Remark string `json:"remark"`
 }
 
-// AdminManualRefundOrderRequest 管理端手动退款请求（不处理钱包/支付渠道）
+// AdminManualRefundOrderRequest 保留旧请求形状；未验证原路退款时服务拒绝写入。
 type AdminManualRefundOrderRequest struct {
 	Amount string `json:"amount" binding:"required"`
 	Remark string `json:"remark"`
@@ -171,6 +172,8 @@ func (h *AdminRefundHandler) GetAdminOrderRefund(c *gin.Context) {
 	item, err := h.refunds.GetAdminRefundItem(id)
 	if err != nil {
 		switch {
+		case errors.Is(err, ErrOriginalRouteRefundRequired):
+			response.Error(c, response.CodeBadRequest, "仅允许原路退款；请在原支付平台对原交易退款。本站尚未接入该交易的原路退款验证，不能转入余额或直接标记退款成功。")
 		case errors.Is(err, ErrOrderNotFound):
 			ginutil.RespondError(c, response.CodeNotFound, "error.order_not_found", nil)
 		default:
@@ -209,6 +212,8 @@ func (h *AdminRefundHandler) AdminRefundOrderToWallet(c *gin.Context) {
 	})
 	if err != nil {
 		switch {
+		case errors.Is(err, ErrOriginalRouteRefundRequired):
+			response.Error(c, response.CodeBadRequest, "仅允许原路退款；请在原支付平台对原交易退款。本站尚未接入该交易的原路退款验证，不能转入余额或直接标记退款成功。")
 		case errors.Is(err, ErrOrderNotFound):
 			ginutil.RespondError(c, response.CodeNotFound, "error.order_not_found", nil)
 		case errors.Is(err, ErrOrderStatusInvalid):
@@ -258,6 +263,8 @@ func (h *AdminRefundHandler) AdminManualRefundOrder(c *gin.Context) {
 	})
 	if err != nil {
 		switch {
+		case errors.Is(err, ErrOriginalRouteRefundRequired):
+			response.Error(c, response.CodeBadRequest, "仅允许原路退款；请在原支付平台对原交易退款。本站尚未接入该交易的原路退款验证，不能转入余额或直接标记退款成功。")
 		case errors.Is(err, ErrOrderNotFound):
 			ginutil.RespondError(c, response.CodeNotFound, "error.order_not_found", nil)
 		case errors.Is(err, ErrOrderStatusInvalid):

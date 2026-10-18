@@ -439,6 +439,7 @@ export interface AdminPaymentChannel {
 
 // --- Payment ---
 export interface AdminPayment {
+  exception_code?: string
   id: number
   payment_no: string
   order_id: number

@@ -515,6 +515,8 @@
       "title": "我的錢包",
       "subtitle": "管理餘額、儲值與資金明細",
       "balanceLabel": "目前餘額",
+      "debtTitle": "目前欠額 {amount}",
+      "debtDescription": "退款扣回等獎勵調整可能導致欠額。儲值入帳後先抵扣欠額，剩餘金額才可消費；欠額未補齊前不能購買商品，也不能繞過餘額直接線上付款。",
       "transactionsLabel": "明細總數",
       "currentPageLabel": "目前頁面",
       "rechargeTitle": "餘額儲值",
@@ -561,7 +563,10 @@
         "order_refund": "訂單退款",
         "gift_card_redeem": "禮品卡兌換",
         "admin_adjust": "管理員調帳",
-        "admin_refund": "管理員退款"
+        "admin_refund": "管理員退款",
+        "affiliate_reward": "推廣獎勵",
+        "order_debt_credit": "欠額攔截款項入帳",
+        "affiliate_reward_reversal": "推廣獎勵退款扣回"
       },
       "errors": {
         "loadFailed": "錢包資料載入失敗，請稍後重試",
@@ -634,7 +639,19 @@
         "withdrawChannelRequired": "請輸入提現渠道",
         "withdrawAccountRequired": "請輸入提現帳號",
         "withdrawFailed": "提現申請提交失敗，請稍後重試"
-      }
+      },
+      "walletRules": "僅指定 GPT 商品參與：每筆符合條件的訂單隨機獎勵整數 1～5 元（不超過參與商品實付整數金額，不足 1 元不獎勵）。付款滿 {days} 天後可轉入消費餘額，折抵站內所有商品，不支援提現；退款將扣回相應獎勵。",
+      "walletRulesAll": "全站商品均可參與：每筆符合條件的人民幣主訂單隨機獎勵整數 1～5 元（不超過參與商品實付整數金額，不足 1 元不獎勵）。付款滿 {days} 天後可轉入消費餘額，折抵站內所有商品，不支援提現；退款將扣回相應獎勵。",
+      "walletRulesImmediate": "僅指定 GPT 商品參與：每筆符合條件的訂單隨機獎勵整數 1～5 元（不超過參與商品實付整數金額，不足 1 元不獎勵）。人工確認收款後可轉入本站消費餘額，折抵站內所有商品，不支援提現；退款將扣回相應獎勵。",
+      "walletRulesAllImmediate": "全站商品均可參與：每筆符合條件的人民幣主訂單隨機獎勵整數 1～5 元（不超過參與商品實付整數金額，不足 1 元不獎勵）。人工確認收款後可轉入本站消費餘額，折抵站內所有商品，不支援提現；退款將扣回相應獎勵。",
+      "availableReward": "可轉入獎勵",
+      "creditedReward": "已轉入消費餘額",
+      "creditTitle": "轉入消費餘額",
+      "creditHint": "將全部已確認獎勵轉入錢包，可用於站內所有商品。轉入後不能撤回或提現。 退款會扣回獎勵；已消費的獎勵不足扣回時會形成欠額，後續儲值或獎勵優先抵扣。",
+      "creditButton": "全部轉入消費餘額",
+      "crediting": "轉入中…",
+      "creditSuccess": "已轉入 {amount} 元消費餘額",
+      "creditFailed": "轉入失敗，請稍後重試"
     },
     "reseller": {
       "title": "分銷財務",
@@ -1146,6 +1163,10 @@
     "maxPurchaseExceeded": "該商品單次下單最多可購買 {count} 件",
     "minPurchaseNotMet": "該商品單次下單至少需購買 {count} 件"
   },
+  "maintenance": {
+    "banner": "系統維護中，暫停接收新訂單；已有訂單查詢與處理不受影響",
+    "salesPaused": "系統維護中，暫停下單"
+  },
   "checkout": {
     "title": "訂單結算",
     "subtitle": "確認訂單資訊並提交",
@@ -1235,6 +1256,9 @@
     "walletDeductLabel": "餘額抵扣",
     "onlinePayLabel": "線上支付",
     "walletOnlyHint": "目前僅支援錢包餘額支付",
+    "walletDebtBlocked": "錢包有欠額，請先儲值補齊後再購買，不能直接線上付款。",
+    "walletUnavailable": "無法確認錢包餘額，暫不能付款，請重新整理後重試。",
+    "rechargeDebt": "去儲值補齊欠額",
     "walletInsufficientHint": "錢包餘額不足，請先儲值",
     "feeFree": "免手續費",
     "channelTypes": {

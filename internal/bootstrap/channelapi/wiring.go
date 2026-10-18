@@ -191,6 +191,7 @@ func mapError(err error) error {
 		{orderriskcontract.ErrEmailBlacklisted, channeltransport.ErrRiskEmailBlacklisted},
 		{orderriskcontract.ErrTooManyPendingOrders, channeltransport.ErrRiskTooManyPendingOrders},
 		{orderriskcontract.ErrOrderRateLimited, channeltransport.ErrRiskOrderRateLimited},
+		{orderapp.ErrSalesPaused, channeltransport.ErrSalesPaused},
 		{orderapp.ErrProductSKURequired, channeltransport.ErrProductSKURequired},
 		{orderapp.ErrProductSKUInvalid, channeltransport.ErrProductSKUInvalid},
 		{orderapp.ErrInvalidOrderItem, channeltransport.ErrInvalidOrderItem},
@@ -218,6 +219,7 @@ func mapError(err error) error {
 		{paymentapp.ErrPaymentGatewayRequestFailed, channeltransport.ErrPaymentGatewayRequestFailed},
 		{paymentapp.ErrPaymentGatewayResponseInvalid, channeltransport.ErrPaymentGatewayResponseInvalid},
 		{paymentapp.ErrPaymentCurrencyMismatch, channeltransport.ErrPaymentCurrencyMismatch},
+		{walletcontract.ErrOutstandingDebt, channeltransport.ErrWalletOutstandingDebt},
 		{walletcontract.ErrOnlyPaymentRequired, channeltransport.ErrWalletOnlyPaymentRequired},
 	} {
 		if errors.Is(err, mapping.source) {

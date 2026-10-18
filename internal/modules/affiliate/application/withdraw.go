@@ -1,6 +1,7 @@
 package application
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -23,6 +24,9 @@ func (s *Service) ApplyWithdraw(userID uint, input WithdrawApplyInput) (*affilia
 		return nil, err
 	}
 	if !setting.Enabled {
+		return nil, ErrDisabled
+	}
+	if setting.RewardMode == "gpt_random_wallet" {
 		return nil, ErrDisabled
 	}
 
@@ -68,6 +72,9 @@ func (s *Service) ApplyWithdraw(userID uint, input WithdrawApplyInput) (*affilia
 		selectedIDs := make([]uint, 0)
 		now := time.Now()
 		for _, commission := range commissions {
+			if commission.CommissionType == "gpt_reward" {
+				continue
+			}
 			if remaining.LessThanOrEqual(decimal.Zero) {
 				break
 			}
@@ -144,6 +151,15 @@ func (s *Service) ReviewWithdraw(adminID, withdrawID uint, action, rejectReason 
 		return nil, ErrNotFound
 	}
 	act := strings.ToLower(strings.TrimSpace(action))
+	if act == constants.AffiliateWithdrawActionPay {
+		setting, err := s.settings.GetAffiliateSetting()
+		if err != nil {
+			return nil, err
+		}
+		if setting.RewardMode == "gpt_random_wallet" {
+			return nil, ErrDisabled
+		}
+	}
 	if act != constants.AffiliateWithdrawActionReject && act != constants.AffiliateWithdrawActionPay {
 		return nil, ErrWithdrawStatusInvalid
 	}
@@ -184,6 +200,23 @@ func (s *Service) ReviewWithdraw(adminID, withdrawID uint, action, rejectReason 
 				return err
 			}
 		} else {
+			// 退款可能已经扣减或作废冻结的佣金；原申请必须拒绝后重新申请，
+			// 不能按旧金额标记打款，也不能把作废佣金恢复成已提现。
+			total := decimal.Zero
+			for _, commission := range commissions {
+				if commission.CommissionType == "gpt_reward" {
+					return ErrDisabled
+				}
+				if commission.Status != constants.AffiliateCommissionStatusAvailable ||
+					commission.AffiliateProfileID != req.AffiliateProfileID ||
+					commission.CommissionAmount.Decimal.LessThanOrEqual(decimal.Zero) {
+					return ErrWithdrawInsufficient
+				}
+				total = total.Add(commission.CommissionAmount.Decimal)
+			}
+			if !total.Equal(req.Amount.Decimal) || total.LessThanOrEqual(decimal.Zero) {
+				return ErrWithdrawInsufficient
+			}
 			req.Status = constants.AffiliateWithdrawStatusPaid
 			req.RejectReason = ""
 			if err := repoTx.BatchUpdateCommissions(ids, map[string]interface{}{
@@ -212,4 +245,55 @@ func containsWithdrawChannel(channels []string, channel string) bool {
 		}
 	}
 	return false
+}
+
+// CreditRewardsToWallet converts confirmed GPT rewards exactly once.
+func (s *Service) CreditRewardsToWallet(userID uint) (money.Amount, error) {
+	zero := money.FromDecimal(decimal.Zero)
+	if userID == 0 || s.repo == nil {
+		return zero, ErrNotOpened
+	}
+	setting, err := s.settings.GetAffiliateSetting()
+	if err != nil {
+		return zero, err
+	}
+	if !setting.Enabled || setting.RewardMode != "gpt_random_wallet" {
+		return zero, ErrDisabled
+	}
+	if err := s.ConfirmDueCommissions(time.Now()); err != nil {
+		return zero, err
+	}
+	total := decimal.Zero
+	err = s.repo.WithinTransaction(func(tx affiliatecontract.Store) error {
+		profile, err := tx.GetProfileByUserID(userID)
+		if err != nil {
+			return err
+		}
+		if profile == nil || profile.Status != constants.AffiliateProfileStatusActive {
+			return ErrNotOpened
+		}
+		rows, err := tx.ListAvailableCommissionsForUpdate(profile.ID)
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			if row.CommissionType != "gpt_reward" || !row.CommissionAmount.Decimal.IsPositive() {
+				continue
+			}
+			if err := tx.AdjustRewardWallet(userID, row.CommissionAmount.Decimal, fmt.Sprintf("affiliate_reward:%d", row.ID), row.OrderID); err != nil {
+				return err
+			}
+			row.Status = "wallet_credited"
+			row.UpdatedAt = time.Now()
+			if err := tx.UpdateCommission(&row); err != nil {
+				return err
+			}
+			total = total.Add(row.CommissionAmount.Decimal)
+		}
+		return nil
+	})
+	if err != nil {
+		return zero, err
+	}
+	return money.FromDecimal(total), nil
 }

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	settingsapp "github.com/dujiao-next/internal/modules/settings/application"
+	settingsintegration "github.com/dujiao-next/internal/modules/settings/schema/integration"
 
 	"github.com/dujiao-next/internal/constants"
 	paymenttransport "github.com/dujiao-next/internal/modules/payment/transport/http"
@@ -112,6 +113,33 @@ func CallbackRouteMiddleware(
 			}
 		}
 
+		c.Next()
+	}
+}
+
+// CustomCallbackRateLimitMiddleware applies the same limit before dynamic
+// dispatch, which otherwise bypasses the registered route middleware.
+func CustomCallbackRateLimitMiddleware(settingService interface {
+	GetCallbackRoutesCached() *settingsintegration.CallbackRoutesSetting
+}, limiter gin.HandlerFunc) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		path := strings.TrimRight(c.Request.URL.Path, "/")
+		method := c.Request.Method
+		if strings.HasPrefix(path, "/api/") && (method == http.MethodPost || method == http.MethodGet) {
+			if routes := settingService.GetCallbackRoutesCached(); routes != nil {
+				matches := routes.PaymentCallback != "" && path == routes.PaymentCallback
+				if method == http.MethodPost {
+					matches = matches || (routes.DujiaoPayWebhook != "" && path == routes.DujiaoPayWebhook) ||
+						(routes.PaypalWebhook != "" && path == routes.PaypalWebhook) ||
+						(routes.StripeWebhook != "" && path == routes.StripeWebhook) ||
+						(routes.UpstreamCallback != "" && path == routes.UpstreamCallback)
+				}
+				if matches {
+					limiter(c)
+					return
+				}
+			}
+		}
 		c.Next()
 	}
 }

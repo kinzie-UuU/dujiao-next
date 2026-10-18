@@ -1,6 +1,7 @@
 package application
 
 import (
+	"errors"
 	"testing"
 
 	orderdomain "github.com/dujiao-next/internal/modules/order/domain"
@@ -8,10 +9,37 @@ import (
 	coupondomain "github.com/dujiao-next/internal/modules/coupon/domain"
 
 	"github.com/dujiao-next/internal/constants"
+	settingsapp "github.com/dujiao-next/internal/modules/settings/application"
 	"github.com/dujiao-next/internal/shared/jsonmap"
 
 	"github.com/shopspring/decimal"
 )
+
+type pausedSalesSettingStore struct{}
+
+func (pausedSalesSettingStore) GetByKey(key string) (jsonmap.JSON, bool, error) {
+	if key != constants.SettingKeySiteConfig {
+		return nil, false, nil
+	}
+	return jsonmap.JSON{constants.SettingFieldSalesPaused: true}, true, nil
+}
+
+func (pausedSalesSettingStore) Upsert(_ string, value jsonmap.JSON) (jsonmap.JSON, error) {
+	return value, nil
+}
+
+func TestOrderServiceRejectsCreateWhenSalesPaused(t *testing.T) {
+	service := NewOrderService(OrderServiceOptions{
+		SettingService: settingsapp.NewService(pausedSalesSettingStore{}),
+	})
+
+	if _, err := service.CreateOrder(CreateOrderInput{UserID: 1}); !errors.Is(err, ErrSalesPaused) {
+		t.Fatalf("member create error = %v, want ErrSalesPaused", err)
+	}
+	if _, err := service.CreateGuestOrder(CreateGuestOrderInput{}); !errors.Is(err, ErrSalesPaused) {
+		t.Fatalf("guest create error = %v, want ErrSalesPaused", err)
+	}
+}
 
 func TestMergeCreateOrderItems(t *testing.T) {
 	items := []CreateOrderItem{

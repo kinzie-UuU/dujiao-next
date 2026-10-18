@@ -10,6 +10,8 @@ import (
 
 // CreatePaymentResp 创建支付响应
 type CreatePaymentResp struct {
+	Currency         string       `json:"currency,omitempty"`
+	PayableAmount    money.Amount `json:"payable_amount"`
 	OrderPaid        bool         `json:"order_paid"`
 	WalletPaidAmount money.Amount `json:"wallet_paid_amount"`
 	OnlinePayAmount  money.Amount `json:"online_pay_amount"`
@@ -45,6 +47,8 @@ func NewCreatePaymentResp(result *CreatePaymentResultView) CreatePaymentResp {
 		OnlinePayAmount:  result.OnlinePayAmount,
 	}
 	if result.Payment != nil {
+		resp.Currency = result.Payment.Currency
+		resp.PayableAmount = result.Payment.Amount
 		resp.PaymentID = &result.Payment.ID
 		resp.ChannelID = &result.Payment.ChannelID
 		resp.ProviderType = result.Payment.ProviderType
@@ -71,26 +75,30 @@ func NewCreatePaymentResp(result *CreatePaymentResultView) CreatePaymentResp {
 
 // LatestPaymentResp 最新待支付记录响应
 type LatestPaymentResp struct {
-	PaymentID       uint       `json:"payment_id"`
-	OrderNo         string     `json:"order_no"`
-	ChannelID       uint       `json:"channel_id"`
-	ChannelName     string     `json:"channel_name,omitempty"`
-	ProviderType    string     `json:"provider_type"`
-	ChannelType     string     `json:"channel_type"`
-	InteractionMode string     `json:"interaction_mode"`
-	PayURL          string     `json:"pay_url"`
-	QRCode          string     `json:"qr_code"`
-	WalletAddress   string     `json:"wallet_address,omitempty"`
-	ChainAmount     string     `json:"chain_amount,omitempty"`
-	Chain           string     `json:"chain,omitempty"`
-	TokenID         string     `json:"token_id,omitempty"`
-	ExpiresAt       *time.Time `json:"expires_at"`
+	Currency        string       `json:"currency"`
+	PayableAmount   money.Amount `json:"payable_amount"`
+	PaymentID       uint         `json:"payment_id"`
+	OrderNo         string       `json:"order_no"`
+	ChannelID       uint         `json:"channel_id"`
+	ChannelName     string       `json:"channel_name,omitempty"`
+	ProviderType    string       `json:"provider_type"`
+	ChannelType     string       `json:"channel_type"`
+	InteractionMode string       `json:"interaction_mode"`
+	PayURL          string       `json:"pay_url"`
+	QRCode          string       `json:"qr_code"`
+	WalletAddress   string       `json:"wallet_address,omitempty"`
+	ChainAmount     string       `json:"chain_amount,omitempty"`
+	Chain           string       `json:"chain,omitempty"`
+	TokenID         string       `json:"token_id,omitempty"`
+	ExpiresAt       *time.Time   `json:"expires_at"`
 }
 
 // NewLatestPaymentResp 从 Payment + Order 构造响应
 func NewLatestPaymentResp(payment *paymentdomain.Payment, orderNo string) LatestPaymentResp {
 	info := ExtractCryptoWalletInfo(payment.ProviderType, payment.InteractionMode, payment.ProviderPayload)
 	return LatestPaymentResp{
+		Currency:        payment.Currency,
+		PayableAmount:   payment.Amount,
 		PaymentID:       payment.ID,
 		OrderNo:         orderNo,
 		ChannelID:       payment.ChannelID,

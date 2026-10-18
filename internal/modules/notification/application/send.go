@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/dujiao-next/internal/cache"
 	"github.com/dujiao-next/internal/constants"
 	"github.com/dujiao-next/internal/logger"
 	"github.com/dujiao-next/internal/modules/notification/application/format"
@@ -99,6 +101,10 @@ func (s *Service) SendTest(ctx context.Context, input contract.TestSendInput) er
 }
 
 func (s *Service) dispatchSingleEvent(ctx context.Context, setting settingsmessaging.NotificationCenterSetting, payload queue.NotificationDispatchPayload) error {
+	// Re-check persisted settings for queued or retried inventory alerts, including forced dispatches.
+	if !setting.InventoryAlertEnabled && strings.EqualFold(strings.TrimSpace(payload.EventType), constants.NotificationEventExceptionAlert) && isInventoryAlertType(format.ResolveInventoryAlertTypeKey(payload.Data)) {
+		return nil
+	}
 	if !payload.Force {
 		ok, err := acquireNotificationDedupe(ctx, setting.DedupeTTLSeconds, payload)
 		if err != nil {
@@ -111,6 +117,11 @@ func (s *Service) dispatchSingleEvent(ctx context.Context, setting settingsmessa
 
 	locale := format.ResolveLocale(payload.Locale, setting.DefaultLocale)
 	template := setting.Templates.TemplateByEvent(payload.EventType).ResolveLocaleTemplate(locale)
+	if constants.IsAdminSecurityNotification(payload.EventType) {
+		// Login reminders share the exception switch, but use Telegram and a fixed template.
+		template = format.AdminSecurityTemplate(payload.EventType, locale)
+		setting.Channels.Email.Enabled = false
+	}
 	variables := format.BuildTemplateVariables(payload)
 	title := format.RenderTemplate(template.Title, variables)
 	body := format.RenderTemplate(template.Body, variables)
@@ -192,6 +203,12 @@ func (s *Service) dispatchSingleEvent(ctx context.Context, setting settingsmessa
 		}
 	}
 	if firstErr != nil {
+		if constants.IsAdminSecurityNotification(payload.EventType) && !payload.Force {
+			// A transient Telegram failure must not consume this login's retry.
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = cache.Del(cleanupCtx, buildNotificationDedupeKey(payload))
+			cancel()
+		}
 		return fmt.Errorf("%w: %v", contract.ErrSendFailed, firstErr)
 	}
 	return nil
