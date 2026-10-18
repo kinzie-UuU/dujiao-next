@@ -125,6 +125,18 @@ func createTestOrder(t *testing.T, db *gorm.DB, userID uint, orderNo string, tot
 	return order
 }
 
+// Refund fixtures model funds originally debited from the same user's wallet.
+func createTestWalletOrder(t *testing.T, db *gorm.DB, userID uint, orderNo string, total decimal.Decimal) *orderdomain.Order {
+	t.Helper()
+	order := createTestOrder(t, db, userID, orderNo, total)
+	order.WalletPaidAmount = money.FromDecimal(total)
+	order.OnlinePaidAmount = money.FromDecimal(decimal.Zero)
+	if err := db.Model(order).Updates(map[string]interface{}{"wallet_paid_amount": total, "online_paid_amount": 0}).Error; err != nil {
+		t.Fatal(err)
+	}
+	return order
+}
+
 func createTestSiteConnection(t *testing.T, db *gorm.DB, id uint) *siteconnectiondomain.Connection {
 	t.Helper()
 	conn := &siteconnectiondomain.Connection{
@@ -222,7 +234,7 @@ func assertWalletMixedChildrenRefundStatus(t *testing.T, fixture walletMixedChil
 	t.Helper()
 	svc, db := setupOrderRefundWalletTest(t)
 	createTestUser(t, db, fixture.userID)
-	parent := createTestOrder(t, db, fixture.userID, fixture.parentOrderNo, decimal.NewFromInt(100))
+	parent := createTestWalletOrder(t, db, fixture.userID, fixture.parentOrderNo, decimal.NewFromInt(100))
 	paidAt := time.Now()
 	if err := db.Model(&orderdomain.Order{}).Where("id = ?", parent.ID).Updates(map[string]interface{}{
 		"status":  constants.OrderStatusCompleted,
@@ -381,7 +393,7 @@ func TestWalletServiceAdminRefundToWallet(t *testing.T) {
 	svc, db := setupOrderRefundWalletTest(t)
 	createTestUser(t, db, 104)
 	createTestUser(t, db, 204)
-	order := createTestOrder(t, db, 104, "DJTESTREFUND001", decimal.NewFromInt(40))
+	order := createTestWalletOrder(t, db, 104, "DJTESTREFUND001", decimal.NewFromInt(40))
 	paidAt := time.Now()
 	if err := db.Model(&orderdomain.Order{}).Where("id = ?", order.ID).Updates(map[string]interface{}{
 		"status":  constants.OrderStatusPaid,
@@ -467,7 +479,7 @@ func TestWalletServiceAdminRefundToWallet(t *testing.T) {
 func TestWalletServiceAdminRefundToWalletRejectUnpaidOrder(t *testing.T) {
 	svc, db := setupOrderRefundWalletTest(t)
 	createTestUser(t, db, 105)
-	order := createTestOrder(t, db, 105, "DJTESTREFUND002", decimal.NewFromInt(40))
+	order := createTestWalletOrder(t, db, 105, "DJTESTREFUND002", decimal.NewFromInt(40))
 	if err := db.Model(&orderdomain.Order{}).Where("id = ?", order.ID).Update("status", constants.OrderStatusCanceled).Error; err != nil {
 		t.Fatalf("update order status failed: %v", err)
 	}
@@ -485,7 +497,7 @@ func TestWalletServiceAdminRefundToWalletRejectUnpaidOrder(t *testing.T) {
 func TestWalletServiceAdminRefundToWalletExpiredWindow(t *testing.T) {
 	svc, db := setupOrderRefundWalletTest(t)
 	createTestUser(t, db, 111)
-	order := createTestOrder(t, db, 111, "DJTESTREFUND-EXPIRED", decimal.NewFromInt(40))
+	order := createTestWalletOrder(t, db, 111, "DJTESTREFUND-EXPIRED", decimal.NewFromInt(40))
 	paidAt := time.Now().AddDate(0, 0, -31)
 	if err := db.Model(&orderdomain.Order{}).Where("id = ?", order.ID).Updates(map[string]interface{}{
 		"status":  constants.OrderStatusCompleted,
@@ -507,7 +519,7 @@ func TestWalletServiceAdminRefundToWalletExpiredWindow(t *testing.T) {
 func TestWalletServiceAdminRefundToWalletNoLimitWhenZero(t *testing.T) {
 	svc, db := setupOrderRefundWalletTest(t)
 	createTestUser(t, db, 116)
-	order := createTestOrder(t, db, 116, "DJTESTREFUND-NOLIMIT", decimal.NewFromInt(40))
+	order := createTestWalletOrder(t, db, 116, "DJTESTREFUND-NOLIMIT", decimal.NewFromInt(40))
 	paidAt := time.Now().AddDate(0, 0, -90)
 	if err := db.Model(&orderdomain.Order{}).Where("id = ?", order.ID).Updates(map[string]interface{}{
 		"status":  constants.OrderStatusCompleted,
@@ -541,7 +553,7 @@ func TestWalletServiceAdminRefundToWalletNoLimitWhenZero(t *testing.T) {
 func TestWalletServiceAdminRefundToWalletCompletedOrderPartialSetsPartiallyRefunded(t *testing.T) {
 	svc, db := setupOrderRefundWalletTest(t)
 	createTestUser(t, db, 112)
-	order := createTestOrder(t, db, 112, "DJTESTREFUND003", decimal.NewFromInt(40))
+	order := createTestWalletOrder(t, db, 112, "DJTESTREFUND003", decimal.NewFromInt(40))
 	conn := createTestSiteConnection(t, db, 1)
 	paidAt := time.Now()
 	if err := db.Model(&orderdomain.Order{}).Where("id = ?", order.ID).Updates(map[string]interface{}{
@@ -594,7 +606,7 @@ func TestWalletServiceAdminRefundToWalletCompletedOrderPartialSetsPartiallyRefun
 func TestWalletServiceAdminRefundToWalletFullRefundUpdatesChildrenStatus(t *testing.T) {
 	svc, db := setupOrderRefundWalletTest(t)
 	createTestUser(t, db, 107)
-	parent := createTestOrder(t, db, 107, "DJTESTREFUNDCHILD001", decimal.NewFromInt(30))
+	parent := createTestWalletOrder(t, db, 107, "DJTESTREFUNDCHILD001", decimal.NewFromInt(30))
 	paidAt := time.Now()
 	if err := db.Model(&orderdomain.Order{}).Where("id = ?", parent.ID).Updates(map[string]interface{}{
 		"status":  constants.OrderStatusDelivered,

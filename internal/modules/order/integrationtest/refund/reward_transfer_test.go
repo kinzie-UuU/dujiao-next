@@ -19,7 +19,7 @@ import (
 )
 
 func TestTransferredRewardRefundBalanceAndLedger(t *testing.T) {
-	for _, channel := range []string{"manual", "wallet"} {
+	for _, channel := range []string{"wallet"} {
 		t.Run(channel, func(t *testing.T) {
 			refunds, db := setupOrderRefundWalletTest(t)
 			createTestUser(t, db, 1)
@@ -34,7 +34,7 @@ func TestTransferredRewardRefundBalanceAndLedger(t *testing.T) {
 			if err := db.Create(&profile).Error; err != nil {
 				t.Fatal(err)
 			}
-			order := createTestOrder(t, db, 2, "TRANSFER-REFUND", decimal.NewFromInt(100))
+			order := createTestWalletOrder(t, db, 2, "TRANSFER-REFUND", decimal.NewFromInt(100))
 			if err := db.Model(order).Updates(map[string]interface{}{"paid_at": time.Now(), "status": constants.OrderStatusCompleted}).Error; err != nil {
 				t.Fatal(err)
 			}

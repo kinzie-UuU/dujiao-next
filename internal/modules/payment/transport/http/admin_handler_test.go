@@ -78,7 +78,7 @@ func (f *fakeAdminPaymentQuery) GetPayment(id uint) (*paymentdomain.Payment, err
 	return nil, ErrPaymentNotFound
 }
 
-func (f *fakeAdminPaymentQuery) ConfirmManualPayment(id uint) (*paymentdomain.Payment, error) {
+func (f *fakeAdminPaymentQuery) ConfirmManualPayment(id uint, evidence ...paymentdomain.ManualPaymentEvidence) (*paymentdomain.Payment, error) {
 	f.confirmedID = id
 	if f.manualConfirmErr != nil {
 		return nil, f.manualConfirmErr
@@ -366,7 +366,7 @@ func TestConfirmAdminManualPayment(t *testing.T) {
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Params = gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(fixture.OrderPaymentID), 10)}}
-	c.Request = httptest.NewRequest(http.MethodPost, "/admin/payments/11/manual-confirm", nil)
+	c.Request = httptest.NewRequest(http.MethodPost, "/admin/payments/11/manual-confirm", strings.NewReader(`{"transaction_id":"2026101800000001","payer_verified":true,"amount":"100.00","currency":"CNY"}`))
 
 	h.ConfirmAdminManualPayment(c)
 

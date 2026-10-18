@@ -74,6 +74,7 @@ func (s *Service) AdminRefundToWallet(
 			return ErrOrderNotFound
 		}
 		order := *locked
+
 		if order.UserID == 0 {
 			return walletcontract.ErrNotSupportedForGuest
 		}
@@ -86,6 +87,18 @@ func (s *Service) AdminRefundToWallet(
 		}
 		if order.TotalAmount.Decimal.LessThanOrEqual(decimal.Zero) {
 			return ErrOrderStatusInvalid
+		}
+		// Children inherit the parent's funding source. Only an entirely wallet-
+		// funded original order may return to that same user's wallet.
+		source := &order
+		if order.ParentID != nil {
+			source, err = orderRepository.GetByIDForUpdate(*order.ParentID)
+			if err != nil || source == nil {
+				return ErrOrderFetchFailed
+			}
+		}
+		if source.UserID != order.UserID || !source.WalletPaidAmount.Decimal.Equal(source.TotalAmount.Decimal) || !source.OnlinePaidAmount.Decimal.IsZero() {
+			return orderapp.ErrOriginalRouteRefundRequired
 		}
 		refundedBefore := order.RefundedAmount.Decimal.Round(2)
 		refundable := order.TotalAmount.Decimal.Sub(refundedBefore).Round(2)

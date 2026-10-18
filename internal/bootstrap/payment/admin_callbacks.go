@@ -61,8 +61,8 @@ func (a adminQueryAdapter) GetPayment(id uint) (*paymentdomain.Payment, error) {
 	return payment, mapTransportError(err)
 }
 
-func (a adminQueryAdapter) ConfirmManualPayment(id uint) (*paymentdomain.Payment, error) {
-	payment, err := a.payments.ConfirmManualPayment(id)
+func (a adminQueryAdapter) ConfirmManualPayment(id uint, evidence ...paymentdomain.ManualPaymentEvidence) (*paymentdomain.Payment, error) {
+	payment, err := a.payments.ConfirmManualPayment(id, evidence...)
 	return payment, mapTransportError(err)
 }
 

@@ -5,6 +5,7 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Copy } from 'lucide-vue-next'
 import { adminAPI } from '@/api/admin'
+import { collectManualPaymentEvidence } from '@/utils/manualPaymentEvidence'
 import type { AdminPayment } from '@/api/types'
 import IdCell from '@/components/IdCell.vue'
 import { Button } from '@/components/ui/button'
@@ -154,12 +155,13 @@ const canConfirmManualPayment = (payment: AdminPayment | null) => {
 
 const confirmManualPayment = async () => {
   if (!canConfirmManualPayment(detailPayment.value) || manualConfirming.value) return
-  if (!window.confirm(t('admin.payments.manualConfirmPrompt'))) return
+  const evidence = collectManualPaymentEvidence(t, detailPayment.value?.channel_type)
+  if (!evidence) return
   const paymentId = detailPayment.value!.id
   manualConfirming.value = true
   manualConfirmError.value = ''
   try {
-    await adminAPI.confirmManualPayment(paymentId)
+    await adminAPI.confirmManualPayment(paymentId, evidence)
     await Promise.all([
       openDetail({ id: paymentId }),
       fetchPayments(pagination.value.page, { preserveRows: true }),

@@ -14,7 +14,7 @@ import (
 )
 
 func TestRefundBudgetSerializesParentAndChild(t *testing.T) {
-	for _, wallet := range []bool{false, true} {
+	for _, wallet := range []bool{true} {
 		t.Run(map[bool]string{false: "manual", true: "wallet"}[wallet], func(t *testing.T) {
 			svc, db := setupOrderRefundWalletTest(t)
 			createTestUser(t, db, 902)
@@ -22,11 +22,11 @@ func TestRefundBudgetSerializesParentAndChild(t *testing.T) {
 			sqlDB.SetMaxOpenConns(1)
 			now := time.Now()
 			fifty := money.FromDecimal(decimal.NewFromInt(50))
-			parent := orderdomain.Order{OrderNo: "BUDGET-P", UserID: 902, Status: constants.OrderStatusDelivered, Currency: "CNY", TotalAmount: fifty, PaidAt: &now, CreatedAt: now, UpdatedAt: now}
+			parent := orderdomain.Order{OrderNo: "BUDGET-P", UserID: 902, Status: constants.OrderStatusDelivered, Currency: "CNY", TotalAmount: fifty, WalletPaidAmount: fifty, PaidAt: &now, CreatedAt: now, UpdatedAt: now}
 			if err := db.Create(&parent).Error; err != nil {
 				t.Fatal(err)
 			}
-			child := orderdomain.Order{OrderNo: "BUDGET-C", ParentID: &parent.ID, UserID: 902, Status: constants.OrderStatusDelivered, Currency: "CNY", TotalAmount: fifty, PaidAt: &now, CreatedAt: now, UpdatedAt: now}
+			child := orderdomain.Order{OrderNo: "BUDGET-C", ParentID: &parent.ID, UserID: 902, Status: constants.OrderStatusDelivered, Currency: "CNY", TotalAmount: fifty, WalletPaidAmount: fifty, PaidAt: &now, CreatedAt: now, UpdatedAt: now}
 			if err := db.Create(&child).Error; err != nil {
 				t.Fatal(err)
 			}
@@ -77,22 +77,22 @@ func TestRefundBudgetCountsHistoricalChildRecordsWithoutDoubleCounting(t *testin
 	createTestUser(t, db, 903)
 	now := time.Now()
 	amount := func(n int64) money.Amount { return money.FromDecimal(decimal.NewFromInt(n)) }
-	parent := orderdomain.Order{OrderNo: "HISTORY-P", UserID: 903, Status: constants.OrderStatusDelivered, Currency: "CNY", TotalAmount: amount(100), PaidAt: &now, CreatedAt: now, UpdatedAt: now}
+	parent := orderdomain.Order{OrderNo: "HISTORY-P", UserID: 903, Status: constants.OrderStatusDelivered, Currency: "CNY", TotalAmount: amount(100), WalletPaidAmount: amount(100), PaidAt: &now, CreatedAt: now, UpdatedAt: now}
 	if err := db.Create(&parent).Error; err != nil {
 		t.Fatal(err)
 	}
-	child := orderdomain.Order{OrderNo: "HISTORY-C", ParentID: &parent.ID, UserID: 903, Status: constants.OrderStatusDelivered, Currency: "CNY", TotalAmount: amount(100), RefundedAmount: amount(25), PaidAt: &now, CreatedAt: now, UpdatedAt: now}
+	child := orderdomain.Order{OrderNo: "HISTORY-C", ParentID: &parent.ID, UserID: 903, Status: constants.OrderStatusDelivered, Currency: "CNY", TotalAmount: amount(100), WalletPaidAmount: amount(100), RefundedAmount: amount(25), PaidAt: &now, CreatedAt: now, UpdatedAt: now}
 	if err := db.Create(&child).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&orderdomain.OrderRefundRecord{OrderID: child.ID, UserID: 903, Amount: amount(25), Currency: "CNY"}).Error; err != nil {
 		t.Fatal(err)
 	}
-	// 25 historical + 25 child wallet + 50 parent manual exhausts the real 100.
+	// 25 historical + 25 child wallet + 50 parent wallet exhausts the real 100.
 	if _, _, _, err := svc.AdminRefundToWallet(AdminRefundToWalletInput{OrderID: child.ID, Amount: amount(25)}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := svc.AdminManualRefund(AdminManualRefundInput{OrderID: parent.ID, Amount: amount(50)}); err != nil {
+	if _, _, _, err := svc.AdminRefundToWallet(AdminRefundToWalletInput{OrderID: parent.ID, Amount: amount(50)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, _, err := svc.AdminRefundToWallet(AdminRefundToWalletInput{OrderID: child.ID, Amount: amount(1)}); !errors.Is(err, walletcontract.ErrRefundExceeded) {

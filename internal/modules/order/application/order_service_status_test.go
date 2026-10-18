@@ -232,7 +232,7 @@ func TestIsTransitionAllowedRefunded(t *testing.T) {
 	}
 }
 
-func TestUpdateOrderStatusParentToPartiallyRefundedSyncsChildren(t *testing.T) {
+func TestUpdateOrderStatusCannotBypassOriginalRouteRefund(t *testing.T) {
 	dsn := fmt.Sprintf("file:order_service_parent_partial_refund_%d?mode=memory&cache=shared", time.Now().UnixNano())
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
@@ -306,36 +306,19 @@ func TestUpdateOrderStatusParentToPartiallyRefundedSyncsChildren(t *testing.T) {
 	svc := NewOrderService(OrderServiceOptions{
 		OrderStore: ordergormstore.New(db, "test-guest-credential-secret-with-32-bytes"),
 	})
-	updated, err := svc.UpdateOrderStatus(parent.ID, constants.OrderStatusPartiallyRefunded)
-	if err != nil {
-		t.Fatalf("update parent status failed: %v", err)
-	}
-	if updated == nil || updated.Status != constants.OrderStatusPartiallyRefunded {
-		t.Fatalf("expected parent partially_refunded, got: %+v", updated)
-	}
-	if len(updated.Children) != 2 {
-		t.Fatalf("expected 2 children in updated order, got: %d", len(updated.Children))
-	}
-	for _, child := range updated.Children {
-		if child.Status != constants.OrderStatusPartiallyRefunded {
-			t.Fatalf("expected child partially_refunded, got: %s", child.Status)
+	for _, status := range []string{constants.OrderStatusPartiallyRefunded, constants.OrderStatusRefunded} {
+		if _, err := svc.UpdateOrderStatus(parent.ID, status); err != ErrOrderStatusInvalid {
+			t.Fatalf("refund status bypass accepted: %v", err)
 		}
 	}
+	var persisted orderdomain.Order
+	if err := db.First(&persisted, parent.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Status != constants.OrderStatusDelivered {
+		t.Fatal("order changed after denied refund")
+	}
 
-	var reloadedA orderdomain.Order
-	if err := db.First(&reloadedA, childA.ID).Error; err != nil {
-		t.Fatalf("reload childA failed: %v", err)
-	}
-	if reloadedA.Status != constants.OrderStatusPartiallyRefunded {
-		t.Fatalf("expected childA partially_refunded, got: %s", reloadedA.Status)
-	}
-	var reloadedB orderdomain.Order
-	if err := db.First(&reloadedB, childB.ID).Error; err != nil {
-		t.Fatalf("reload childB failed: %v", err)
-	}
-	if reloadedB.Status != constants.OrderStatusPartiallyRefunded {
-		t.Fatalf("expected childB partially_refunded, got: %s", reloadedB.Status)
-	}
 }
 
 func TestCanCompleteParentOrder(t *testing.T) {

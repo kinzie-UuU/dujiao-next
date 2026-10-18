@@ -43,3 +43,5 @@ var (
 	ErrResellerMarkupExceeded     = resellercontract.ErrMarkupExceeded
 	ErrResellerPricingModeInvalid = resellercontract.ErrPricingModeInvalid
 )
+
+var ErrOriginalRouteRefundRequired = errors.New("refund requires verified original payment route")

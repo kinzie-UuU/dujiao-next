@@ -186,7 +186,7 @@ func (s *OrderService) UpdateOrderStatus(orderID uint, targetStatus string) (*or
 	}
 	// “已支付”只能由钱包原子扣款或经过验签、金额校验的支付回调驱动。
 	// 管理端通用状态接口不得绕过支付事实直接触发库存、累计消费和交付副作用。
-	if target == constants.OrderStatusPaid {
+	if target == constants.OrderStatusPaid || target == constants.OrderStatusRefunded || target == constants.OrderStatusPartiallyRefunded {
 		return nil, ErrOrderStatusInvalid
 	}
 	isParent := order.ParentID == nil && len(order.Children) > 0

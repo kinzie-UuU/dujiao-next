@@ -491,6 +491,7 @@ func mapOrderTransportError(err error) error {
 		{orderapp.ErrGuestOrderNotFound, ordertransport.ErrGuestOrderNotFound},
 		{orderapp.ErrOrderCancelNotAllowed, ordertransport.ErrOrderCancelNotAllowed},
 		{orderapp.ErrOrderRefundExpired, ordertransport.ErrOrderRefundExpired},
+		{orderapp.ErrOriginalRouteRefundRequired, ordertransport.ErrOriginalRouteRefundRequired},
 		{walletcontract.ErrInvalidAmount, ordertransport.ErrWalletInvalidAmount},
 		{walletcontract.ErrRefundExceeded, ordertransport.ErrWalletRefundExceeded},
 		{walletcontract.ErrNotSupportedForGuest, ordertransport.ErrWalletNotSupportedForGuest},

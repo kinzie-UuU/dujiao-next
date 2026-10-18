@@ -6,6 +6,8 @@ import (
 	"fmt"
 	orderapp "github.com/dujiao-next/internal/modules/order/application"
 	walletapp "github.com/dujiao-next/internal/modules/wallet/application"
+	"github.com/shopspring/decimal"
+	"regexp"
 	"strings"
 	"time"
 
@@ -27,7 +29,7 @@ type CapturePaymentInput struct {
 const manualQRProviderType = "manual_qr"
 
 // ConfirmManualPayment 由管理员在核实到账后确认人工二维码支付。
-func (s *PaymentService) ConfirmManualPayment(paymentID uint) (*paymentdomain.Payment, error) {
+func (s *PaymentService) ConfirmManualPayment(paymentID uint, evidence ...paymentdomain.ManualPaymentEvidence) (*paymentdomain.Payment, error) {
 	payment, err := s.paymentRepo.GetByID(paymentID)
 	if err != nil {
 		return nil, ErrPaymentUpdateFailed
@@ -38,6 +40,92 @@ func (s *PaymentService) ConfirmManualPayment(paymentID uint) (*paymentdomain.Pa
 	if !strings.EqualFold(strings.TrimSpace(payment.ProviderType), manualQRProviderType) {
 		return nil, ErrPaymentProviderNotSupported
 	}
+	if len(evidence) != 1 {
+		return nil, ErrPaymentInvalid
+	}
+	proof := evidence[0]
+	transactionID := strings.TrimSpace(proof.TransactionID)
+	if !proof.PayerVerified || !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{9,127}$`).MatchString(transactionID) {
+		return nil, ErrPaymentInvalid
+	}
+	expectedAmount, expectedCurrency, settlementErr := manualSettlement(payment)
+	if settlementErr != nil {
+		return nil, settlementErr
+	}
+	received, amountErr := decimal.NewFromString(proof.Amount)
+	if amountErr != nil || !received.Equal(expectedAmount) {
+		return nil, ErrPaymentAmountMismatch
+	}
+	if proof.Currency != expectedCurrency {
+		return nil, ErrPaymentCurrencyMismatch
+	}
+	receiptKey := strings.ToLower(strings.TrimSpace(payment.ChannelType)) + ":" + strings.ToLower(transactionID)
+	// Claim the real platform receipt before capture. The nullable unique index
+	// prevents concurrent reuse across payment records; failed captures retain it.
+	if err := s.paymentRepo.WithinTransaction(func(tx paymentcontract.Transaction) error {
+		locked, err := tx.Payments().GetByIDForUpdate(paymentID)
+		if err != nil || locked == nil {
+			return ErrPaymentUpdateFailed
+		}
+		if locked.ProviderType != manualQRProviderType || locked.ChannelID != payment.ChannelID || locked.ChannelType != payment.ChannelType {
+			return ErrPaymentInvalid
+		}
+		lockedAmount, lockedCurrency, err := manualSettlement(locked)
+		if err != nil {
+			return err
+		}
+		if !received.Equal(lockedAmount) {
+			return ErrPaymentAmountMismatch
+		}
+		if proof.Currency != lockedCurrency {
+			return ErrPaymentCurrencyMismatch
+		}
+		if locked.Status != constants.PaymentStatusSuccess && locked.Status != constants.PaymentStatusPending && locked.Status != constants.PaymentStatusInitiated && locked.Status != constants.PaymentStatusExpired {
+			return ErrPaymentStatusInvalid
+		}
+		payment = locked
+		if locked.Status == constants.PaymentStatusSuccess {
+			if locked.ManualReceiptKey == nil || *locked.ManualReceiptKey != receiptKey || locked.ProviderRef != transactionID {
+				return ErrPaymentInvalid
+			}
+			return nil
+		}
+		{
+			risk, ok := tx.Payments().(interface{ ManualPaymentRiskAllowed(uint) (bool, error) })
+			if !ok {
+				return ErrPaymentStatusInvalid
+			}
+			allowed, err := risk.ManualPaymentRiskAllowed(paymentID)
+			if err != nil || !allowed {
+				return ErrPaymentStatusInvalid
+			}
+		}
+		if locked.ManualReceiptKey != nil {
+			if *locked.ManualReceiptKey != receiptKey {
+				return ErrPaymentInvalid
+			}
+			return nil
+		}
+		if locked.Status == constants.PaymentStatusSuccess {
+			return ErrPaymentStatusInvalid
+		}
+		previous, err := tx.Payments().GetLatestByProviderRef(transactionID)
+		if err != nil {
+			return ErrPaymentUpdateFailed
+		}
+		if previous != nil && previous.ID != paymentID {
+			return ErrPaymentInvalid
+		}
+		locked.ManualReceiptKey = &receiptKey
+		locked.ProviderRef = transactionID
+		if err := tx.Payments().Update(locked); err != nil {
+			return ErrPaymentInvalid
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	payment.ProviderRef = transactionID
 	if payment.Status == constants.PaymentStatusSuccess {
 		return payment, nil
 	}
@@ -55,8 +143,12 @@ func (s *PaymentService) ConfirmManualPayment(paymentID uint) (*paymentdomain.Pa
 		Currency:    payment.Currency,
 		PaidAt:      &paidAt,
 		Payload: jsonmap.JSON{
-			"manual_confirmed_by_admin": true,
-			"manual_confirmed_at":       paidAt.Format(time.RFC3339),
+			"manual_confirmed_by_admin":    true,
+			"manual_confirmed_at":          paidAt.Format(time.RFC3339),
+			"payer_verified_by_admin":      true,
+			"receipt_verification":         "manual_platform_record_review",
+			"verified_settlement_amount":   proof.Amount,
+			"verified_settlement_currency": proof.Currency,
 		},
 	})
 }
@@ -193,4 +285,75 @@ func mapProviderErrorToService(err error) error {
 	default:
 		return fmt.Errorf("%w: %v", ErrPaymentGatewayRequestFailed, err)
 	}
+}
+
+// verifyManualCapture runs under the capture transaction, closing the gap between
+// receipt reservation and delivery/wallet credit and blocking alternate callbacks.
+func verifyManualCapture(store paymentcontract.Store, payment *paymentdomain.Payment, status string, input PaymentCallbackInput) error {
+	if payment == nil || payment.ProviderType != manualQRProviderType || status != constants.PaymentStatusSuccess || payment.Status == constants.PaymentStatusSuccess {
+		return nil
+	}
+	if payment.ManualReceiptKey == nil || input.ProviderRef != payment.ProviderRef || input.Payload["payer_verified_by_admin"] != true {
+		return ErrPaymentInvalid
+	}
+	risk, ok := store.(interface{ ManualPaymentRiskAllowed(uint) (bool, error) })
+	if !ok {
+		return ErrPaymentStatusInvalid
+	}
+	allowed, err := risk.ManualPaymentRiskAllowed(payment.ID)
+	if err != nil || !allowed {
+		return ErrPaymentStatusInvalid
+	}
+	return nil
+}
+
+// manualSettlement uses the immutable collection quote, never CNY ledger values
+// as proof of a TWD or USDT transfer. Missing or inconsistent quotes fail closed.
+func manualSettlement(payment *paymentdomain.Payment) (decimal.Decimal, string, error) {
+	if payment.ChannelType == "wechat" || payment.ChannelType == "alipay" {
+		if payment.Currency != "CNY" {
+			return decimal.Zero, "", ErrPaymentCurrencyMismatch
+		}
+		return payment.Amount.Decimal, payment.Currency, nil
+	}
+	key, currency, ledgerKey := "twqr_quote", "TWD", "cnyAmount"
+	if payment.ChannelType == "binance_usdt" {
+		key, currency, ledgerKey = "crypto_quote", "USDT", "orderAmount"
+	} else if payment.ChannelType != "twqr" {
+		return decimal.Zero, "", ErrPaymentProviderNotSupported
+	}
+	var quote map[string]interface{}
+	switch value := payment.ProviderPayload[key].(type) {
+	case map[string]interface{}:
+		quote = value
+	case jsonmap.JSON:
+		quote = map[string]interface{}(value)
+	}
+	if quote == nil || quote["currency"] != currency || payment.Currency != "CNY" {
+		return decimal.Zero, "", ErrPaymentInvalid
+	}
+	amount, err := decimal.NewFromString(fmt.Sprint(quote["amount"]))
+	if err != nil || !amount.IsPositive() {
+		return decimal.Zero, "", ErrPaymentInvalid
+	}
+	ledger, err := decimal.NewFromString(fmt.Sprint(quote[ledgerKey]))
+	if err != nil || !ledger.Equal(payment.Amount.Decimal) {
+		return decimal.Zero, "", ErrPaymentAmountMismatch
+	}
+	rateKey := "exchangeRate"
+	if currency == "USDT" {
+		rateKey = "rate"
+	}
+	rate, err := decimal.NewFromString(fmt.Sprint(quote[rateKey]))
+	if err != nil || !rate.IsPositive() {
+		return decimal.Zero, "", ErrPaymentInvalid
+	}
+	converted := ledger.Mul(rate).Round(0)
+	if currency == "USDT" {
+		converted = ledger.Div(rate).Round(2)
+	}
+	if !amount.Equal(converted) {
+		return decimal.Zero, "", ErrPaymentAmountMismatch
+	}
+	return amount, currency, nil
 }

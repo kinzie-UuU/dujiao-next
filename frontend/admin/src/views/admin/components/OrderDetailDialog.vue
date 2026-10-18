@@ -461,15 +461,11 @@ const canRefundToWallet = (order: AdminOrder | null) => {
   if (!order.user_id) return false
   if (!isPaidOrder(order)) return false
   if (isOrderRefundWindowExpired(order)) return false
-  return refundableAmountValue(order) > 0
+  return parseMoneyValue(order.wallet_paid_amount) === parseMoneyValue(order.total_amount) && parseMoneyValue(order.online_paid_amount) === 0 && refundableAmountValue(order) > 0
 }
 
-const canManualRefund = (order: AdminOrder | null) => {
-  if (!order) return false
-  if (!isPaidOrder(order)) return false
-  if (isOrderRefundWindowExpired(order)) return false
-  return refundableAmountValue(order) > 0
-}
+// External refunds require provider-side original-transaction handling.
+const canManualRefund = (_order: AdminOrder | null) => false
 
 const shouldShowRefundCard = (order: AdminOrder | null) => {
   if (!order) return false
@@ -1222,13 +1218,13 @@ watch(
               v-if="refundTab === 'wallet' && canSelectWalletRefundTab(selectedOrder) && !canRefundToWallet(selectedOrder)"
               class="mt-3 text-xs text-muted-foreground"
             >
-              {{ t('admin.orders.refundNoRemaining') }}
+              {{ t('admin.orders.originalRefundOnly') }}
             </div>
             <div
               v-if="(refundTab !== 'wallet' || !canSelectWalletRefundTab(selectedOrder)) && !canManualRefund(selectedOrder)"
               class="mt-3 text-xs text-muted-foreground"
             >
-              {{ t('admin.orders.refundNoRemaining') }}
+              {{ t('admin.orders.originalRefundOnly') }}
             </div>
             <div
               v-if="refundTab === 'wallet' && canSelectWalletRefundTab(selectedOrder) && refundError"

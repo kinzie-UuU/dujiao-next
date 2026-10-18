@@ -3,6 +3,7 @@ package refund_test
 import (
 	"errors"
 	"fmt"
+	orderapp "github.com/dujiao-next/internal/modules/order/application"
 	"testing"
 	"time"
 
@@ -90,7 +91,7 @@ func createOrderRefundTestSiteConnection(t *testing.T, db *gorm.DB, id uint) *si
 	return conn
 }
 
-func TestOrderRefundServiceAdminManualRefundGuestCreatesRecord(t *testing.T) {
+func TestOrderRefundServiceAdminManualRefundGuestRejectedWithoutRecord(t *testing.T) {
 	svc, db := setupOrderRefundServiceTest(t)
 	now := time.Now()
 	order := &orderdomain.Order{
@@ -133,37 +134,9 @@ func TestOrderRefundServiceAdminManualRefundGuestCreatesRecord(t *testing.T) {
 		Amount:  money.FromDecimal(decimal.NewFromInt(20)),
 		Remark:  "manual partial refund",
 	})
-	if err != nil {
-		t.Fatalf("admin manual refund failed: %v", err)
-	}
-	if updatedOrder == nil || updatedOrder.Status != constants.OrderStatusPartiallyRefunded {
-		t.Fatalf("expected partially_refunded order, got %+v", updatedOrder)
-	}
-	if createdRecord == nil || createdRecord.ID == 0 {
-		t.Fatalf("expected created refund record, got %+v", createdRecord)
-	}
-
-	var record orderdomain.OrderRefundRecord
-	if err := db.Order("id DESC").First(&record).Error; err != nil {
-		t.Fatalf("query refund record failed: %v", err)
-	}
-	if record.OrderID != order.ID {
-		t.Fatalf("unexpected refund record order id: %d", record.OrderID)
-	}
-	if record.UserID != 0 {
-		t.Fatalf("unexpected refund record user id: %d", record.UserID)
-	}
-	if record.GuestEmail != "guest-refund-record@example.com" {
-		t.Fatalf("unexpected refund record guest email: %s", record.GuestEmail)
-	}
-	if record.Type != constants.OrderRefundTypeManual {
-		t.Fatalf("unexpected refund record type: %s", record.Type)
-	}
-	if !record.Amount.Decimal.Equal(decimal.NewFromInt(20)) {
-		t.Fatalf("unexpected refund record amount: %s", record.Amount.String())
-	}
-	if record.Remark != "manual partial refund" {
-		t.Fatalf("unexpected refund record remark: %s", record.Remark)
+	assertManualRefundRejected(t, db, order, err)
+	if updatedOrder != nil || createdRecord != nil {
+		t.Fatal("rejected refund returned success data")
 	}
 	var refreshedProc procurementdomain.Order
 	if err := db.First(&refreshedProc, proc.ID).Error; err != nil {
@@ -174,7 +147,7 @@ func TestOrderRefundServiceAdminManualRefundGuestCreatesRecord(t *testing.T) {
 	}
 }
 
-func TestOrderRefundServiceAdminManualRefundGuestReversesCommission(t *testing.T) {
+func TestOrderRefundServiceAdminManualRefundGuestPreservesCommission(t *testing.T) {
 	for _, status := range []string{constants.AffiliateCommissionStatusPendingConfirm, constants.AffiliateCommissionStatusAvailable} {
 		t.Run(status, func(t *testing.T) {
 			svc, db := setupOrderRefundServiceTest(t)
@@ -211,18 +184,15 @@ func TestOrderRefundServiceAdminManualRefundGuestReversesCommission(t *testing.T
 				_, record, err := svc.AdminManualRefund(AdminManualRefundInput{
 					OrderID: order.ID, Amount: money.FromDecimal(decimal.NewFromInt(step.refund)),
 				})
-				if err != nil {
-					t.Fatalf("refund guest order: %v", err)
-				}
-				if record == nil || record.UserID != 0 {
-					t.Fatalf("expected guest refund record, got %+v", record)
+				if !errors.Is(err, orderapp.ErrOriginalRouteRefundRequired) || record != nil {
+					t.Fatalf("unverified refund result: %v %+v", err, record)
 				}
 				var actual affiliatedomain.Commission
 				if err := db.First(&actual, commission.ID).Error; err != nil {
 					t.Fatalf("reload commission: %v", err)
 				}
-				if !actual.CommissionAmount.Decimal.Equal(decimal.NewFromInt(step.remainingCommission)) ||
-					!actual.BaseAmount.Decimal.Equal(decimal.NewFromInt(step.remainingBase)) || actual.Status != step.wantStatus {
+				if !actual.CommissionAmount.Decimal.Equal(decimal.NewFromInt(10)) ||
+					!actual.BaseAmount.Decimal.Equal(decimal.NewFromInt(100)) || actual.Status != status {
 					t.Fatalf("unexpected refunded commission: amount=%s base=%s status=%s", actual.CommissionAmount, actual.BaseAmount, actual.Status)
 				}
 			}
@@ -258,9 +228,7 @@ func TestOrderRefundServiceAdminManualRefundExpiredWindow(t *testing.T) {
 		Amount:  money.FromDecimal(decimal.NewFromInt(20)),
 		Remark:  "manual refund expired",
 	})
-	if !errors.Is(err, ErrOrderRefundExpired) {
-		t.Fatalf("expected refund expired, got: %v", err)
-	}
+	assertManualRefundRejected(t, db, order, err)
 }
 
 func TestOrderRefundServiceAdminManualRefundNoLimitWhenZero(t *testing.T) {
@@ -297,12 +265,11 @@ func TestOrderRefundServiceAdminManualRefundNoLimitWhenZero(t *testing.T) {
 		Amount:  money.FromDecimal(decimal.NewFromInt(20)),
 		Remark:  "manual refund no limit",
 	})
-	if err != nil {
-		t.Fatalf("expected no-limit refund success, got: %v", err)
+	assertManualRefundRejected(t, db, order, err)
+	if updatedOrder != nil {
+		t.Fatal("rejected refund returned order")
 	}
-	if updatedOrder == nil || updatedOrder.Status != constants.OrderStatusPartiallyRefunded {
-		t.Fatalf("expected partially_refunded order, got %+v", updatedOrder)
-	}
+
 }
 
 func createOrderRefundTestChildWithFulfillmentType(
@@ -419,14 +386,13 @@ func assertOrderManualRefundMixedChildrenStatus(t *testing.T, fixture orderManua
 		Amount:  money.FromDecimal(fixture.refundAmount),
 		Remark:  fixture.remark,
 	})
-	if err != nil {
-		t.Fatalf("admin manual refund failed: %v", err)
+	assertManualRefundRejected(t, db, parent, err)
+	if updatedOrder != nil {
+		t.Fatal("rejected refund returned order")
 	}
-	if updatedOrder == nil || updatedOrder.Status != fixture.expectedParentStatus {
-		t.Fatalf("expected parent %s, got %+v", fixture.expectedParentStatus, updatedOrder)
-	}
-	assertOrderRefundOrderStatus(t, db, manualChild.ID, "manual child", fixture.expectedChildStatus)
-	assertOrderRefundOrderStatus(t, db, autoChild.ID, "auto child", fixture.expectedChildStatus)
+	assertOrderRefundOrderStatus(t, db, manualChild.ID, "manual child", constants.OrderStatusPaid)
+	assertOrderRefundOrderStatus(t, db, autoChild.ID, "auto child", constants.OrderStatusCompleted)
+
 }
 
 func assertOrderRefundOrderStatus(t *testing.T, db *gorm.DB, orderID uint, label, expected string) {
@@ -607,5 +573,26 @@ func TestOrderRefundServiceResolveStatusEmailRefundDetails(t *testing.T) {
 	}
 	if !fallbackFromNilSvc.Amount.Decimal.Equal(decimal.NewFromInt(20)) || fallbackFromNilSvc.Reason != "" {
 		t.Fatalf("unexpected fallback from nil service: %+v", fallbackFromNilSvc)
+	}
+}
+
+func assertManualRefundRejected(t *testing.T, db *gorm.DB, order *orderdomain.Order, err error) {
+	t.Helper()
+	if !errors.Is(err, orderapp.ErrOriginalRouteRefundRequired) {
+		t.Fatalf("expected original-route restriction, got %v", err)
+	}
+	var persisted orderdomain.Order
+	if e := db.First(&persisted, order.ID).Error; e != nil {
+		t.Fatal(e)
+	}
+	if persisted.Status != order.Status || !persisted.RefundedAmount.Decimal.Equal(order.RefundedAmount.Decimal) {
+		t.Fatalf("rejected refund changed order: %+v", persisted)
+	}
+	var records int64
+	if e := db.Model(&orderdomain.OrderRefundRecord{}).Where("order_id=?", order.ID).Count(&records).Error; e != nil {
+		t.Fatal(e)
+	}
+	if records != 0 {
+		t.Fatalf("rejected refund wrote %d records", records)
 	}
 }

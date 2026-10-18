@@ -249,6 +249,9 @@ func (s *PaymentService) applyPaymentUpdate(payment *paymentdomain.Payment, orde
 		if err := validateCallbackPaymentFacts(lockedPayment, lockedOrder.OrderNo, status, input); err != nil {
 			return err
 		}
+		if err := verifyManualCapture(paymentRepo, lockedPayment, status, input); err != nil {
+			return err
+		}
 		adoptVerifiedLegacyDujiaoPayCurrency(lockedPayment, status, input)
 		returnVal = lockedPayment
 		processedOrder = lockedOrder

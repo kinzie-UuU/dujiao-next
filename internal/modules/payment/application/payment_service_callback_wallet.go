@@ -105,6 +105,9 @@ func (s *PaymentService) applyWalletRechargePaymentUpdate(payment *paymentdomain
 		if err := validateWalletCallbackPaymentFacts(lockedPayment, recharge.RechargeNo, status, input); err != nil {
 			return err
 		}
+		if err := verifyManualCapture(paymentRepo, lockedPayment, status, input); err != nil {
+			return err
+		}
 		adoptVerifiedLegacyDujiaoPayCurrency(lockedPayment, status, input)
 		paymentVal = lockedPayment
 		if lockedPayment.Status == constants.PaymentStatusSuccess {

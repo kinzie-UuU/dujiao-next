@@ -983,7 +983,7 @@ func TestManualUSDTCoreCreateAndAdminConfirm(t *testing.T) {
 	if order.Status != constants.OrderStatusPendingPayment {
 		t.Fatal("creation marked order paid")
 	}
-	if _, err := svc.ConfirmManualPayment(result.Payment.ID); err != nil {
+	if _, err := svc.ConfirmManualPayment(result.Payment.ID, receiptEvidence(t, db, result.Payment.ID)); err != nil {
 		t.Fatal(err)
 	}
 	var payment paymentdomain.Payment
@@ -1033,7 +1033,7 @@ func TestManualUSDTAdminConfirmIncludesFeesAndIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
-		if _, err := svc.ConfirmManualPayment(result.Payment.ID); err != nil {
+		if _, err := svc.ConfirmManualPayment(result.Payment.ID, receiptEvidence(t, db, result.Payment.ID)); err != nil {
 			t.Fatal(err)
 		}
 	}

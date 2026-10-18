@@ -25,9 +25,9 @@ func TestMixedGPTRewardRefundUsesSnapshot(t *testing.T) {
 			if err := db.Create(&profile).Error; err != nil {
 				t.Fatal(err)
 			}
-			parent := createTestOrder(t, db, 2, "MIXED-PARENT", decimal.NewFromInt(1000))
-			gpt := createTestOrder(t, db, 2, "MIXED-GPT", decimal.NewFromInt(10))
-			other := createTestOrder(t, db, 2, "MIXED-OTHER", decimal.NewFromInt(990))
+			parent := createTestWalletOrder(t, db, 2, "MIXED-PARENT", decimal.NewFromInt(1000))
+			gpt := createTestWalletOrder(t, db, 2, "MIXED-GPT", decimal.NewFromInt(10))
+			other := createTestWalletOrder(t, db, 2, "MIXED-OTHER", decimal.NewFromInt(990))
 			for _, o := range []*orderdomain.Order{parent, gpt, other} {
 				updates := map[string]interface{}{"paid_at": time.Now(), "status": constants.OrderStatusCompleted}
 				if o.ID != parent.ID {
@@ -60,7 +60,7 @@ func TestMixedGPTRewardRefundUsesSnapshot(t *testing.T) {
 				if scenario == "other-then-parent" && i == 1 {
 					refundAmount = m(10)
 				}
-				if _, _, err := svc.AdminManualRefund(refundapp.AdminManualRefundInput{OrderID: o.ID, Amount: refundAmount}); err != nil {
+				if _, _, _, err := svc.AdminRefundToWallet(refundapp.AdminRefundToWalletInput{OrderID: o.ID, Amount: refundAmount}); err != nil {
 					t.Fatal(err)
 				}
 				var actual affiliatedomain.Commission
@@ -84,7 +84,7 @@ func TestMixedGPTRewardRefundUsesSnapshot(t *testing.T) {
 }
 
 func TestChildRefundReversesParentWalletReward(t *testing.T) {
-	for _, channel := range []string{"manual", "wallet"} {
+	for _, channel := range []string{"wallet"} {
 		t.Run(channel, func(t *testing.T) {
 			svc, db := setupOrderRefundWalletTest(t)
 			createTestUser(t, db, 1)
@@ -94,12 +94,12 @@ func TestChildRefundReversesParentWalletReward(t *testing.T) {
 			if err := db.Create(&profile).Error; err != nil {
 				t.Fatal(err)
 			}
-			parent := createTestOrder(t, db, 2, "REWARD-PARENT", decimal.NewFromInt(100))
+			parent := createTestWalletOrder(t, db, 2, "REWARD-PARENT", decimal.NewFromInt(100))
 			now := time.Now()
 			if err := db.Model(parent).Updates(map[string]interface{}{"status": constants.OrderStatusCompleted, "paid_at": now}).Error; err != nil {
 				t.Fatal(err)
 			}
-			children := []*orderdomain.Order{createTestOrder(t, db, 2, "REWARD-CHILD-A", decimal.NewFromInt(50)), createTestOrder(t, db, 2, "REWARD-CHILD-B", decimal.NewFromInt(50))}
+			children := []*orderdomain.Order{createTestWalletOrder(t, db, 2, "REWARD-CHILD-A", decimal.NewFromInt(50)), createTestWalletOrder(t, db, 2, "REWARD-CHILD-B", decimal.NewFromInt(50))}
 			for _, child := range children {
 				if err := db.Model(child).Updates(map[string]interface{}{"parent_id": parent.ID, "paid_at": now, "status": constants.OrderStatusCompleted}).Error; err != nil {
 					t.Fatal(err)

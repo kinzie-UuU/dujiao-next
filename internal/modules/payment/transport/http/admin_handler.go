@@ -43,7 +43,7 @@ type AdminPaymentListFilter struct {
 type AdminPaymentQuery interface {
 	ListPayments(filter AdminPaymentListFilter) ([]paymentdomain.Payment, int64, error)
 	GetPayment(id uint) (*paymentdomain.Payment, error)
-	ConfirmManualPayment(id uint) (*paymentdomain.Payment, error)
+	ConfirmManualPayment(id uint, evidence ...paymentdomain.ManualPaymentEvidence) (*paymentdomain.Payment, error)
 }
 
 // AdminChannelLookup 后台支付渠道名称查询端口。
@@ -268,11 +268,22 @@ func (h *AdminHandler) ConfirmAdminManualPayment(c *gin.Context) {
 		return
 	}
 
-	payment, err := h.payments.ConfirmManualPayment(id)
+	var evidence paymentdomain.ManualPaymentEvidence
+	if err := c.ShouldBindJSON(&evidence); err != nil || !evidence.PayerVerified || strings.TrimSpace(evidence.TransactionID) == "" || evidence.Amount == "" || evidence.Currency == "" {
+		response.Error(c, response.CodeBadRequest, "请核对平台实际到账记录、付款人与订单一致，并填写原交易单号、到账金额和币种")
+		return
+	}
+	payment, err := h.payments.ConfirmManualPayment(id, evidence)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrPaymentNotFound):
 			ginutil.RespondError(c, response.CodeNotFound, "error.payment_not_found", nil)
+		case errors.Is(err, ErrPaymentInvalid):
+			response.Error(c, response.CodeBadRequest, "收款凭据无效或交易单号已被使用，请核对原支付平台记录")
+		case errors.Is(err, ErrPaymentAmountMismatch):
+			ginutil.RespondError(c, response.CodeBadRequest, "error.payment_amount_mismatch", nil)
+		case errors.Is(err, ErrPaymentCurrencyMismatch):
+			ginutil.RespondError(c, response.CodeBadRequest, "error.payment_currency_mismatch", nil)
 		case errors.Is(err, ErrPaymentProviderNotSupported):
 			ginutil.RespondError(c, response.CodeBadRequest, "error.payment_provider_not_supported", nil)
 		case errors.Is(err, ErrPaymentStatusInvalid), errors.Is(err, ErrOrderStatusInvalid):

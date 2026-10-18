@@ -1013,7 +1013,7 @@ func TestConfirmManualPaymentMarksPaymentAndOrderPaid(t *testing.T) {
 		t.Fatalf("create payment failed: %v", err)
 	}
 
-	updated, err := svc.ConfirmManualPayment(payment.ID)
+	updated, err := svc.ConfirmManualPayment(payment.ID, receiptEvidence(t, db, payment.ID))
 	if err != nil {
 		t.Fatalf("confirm manual payment failed: %v", err)
 	}
@@ -1476,7 +1476,7 @@ func TestConfirmExpiredManualPaymentUsesNormalGuards(t *testing.T) {
 			if err := db.Create(old).Error; err != nil {
 				t.Fatal(err)
 			}
-			got, err := svc.ConfirmManualPayment(old.ID)
+			got, err := svc.ConfirmManualPayment(old.ID, receiptEvidence(t, db, old.ID))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1767,7 +1767,7 @@ func TestManualPaymentImmediatelyUnlocksGPTRewardAndRefundClawsBack(t *testing.T
 			if err != nil || !credit.Decimal.IsZero() {
 				t.Fatalf("unconfirmed reward spendable: %v %v", credit, err)
 			}
-			confirmed, err := svc.ConfirmManualPayment(payment.ID)
+			confirmed, err := svc.ConfirmManualPayment(payment.ID, receiptEvidence(t, db, payment.ID))
 			if err != nil || confirmed.Status != constants.PaymentStatusSuccess {
 				t.Fatalf("confirmation failed: %v %v", confirmed, err)
 			}
@@ -1783,7 +1783,7 @@ func TestManualPaymentImmediatelyUnlocksGPTRewardAndRefundClawsBack(t *testing.T
 				t.Fatalf("reward out of bounds: %s", reward.CommissionAmount)
 			}
 			for i := 0; i < 2; i++ {
-				if _, err := svc.ConfirmManualPayment(payment.ID); err != nil {
+				if _, err := svc.ConfirmManualPayment(payment.ID, receiptEvidence(t, db, payment.ID)); err != nil {
 					t.Fatal(err)
 				}
 				if err := rewards.HandleOrderPaid(order.ID); err != nil {

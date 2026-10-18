@@ -26,11 +26,12 @@ it.each([
  api.getPayment.mockImplementation(() => response({ id: 17, provider_type: provider, status, exception_code: 'closed_order_payment_succeeded', currency: 'CNY', amount: 10 }))
  api.confirmManualPayment.mockImplementation(() => response({}))
  vi.spyOn(window, 'confirm').mockReturnValue(true)
+ vi.spyOn(window, 'prompt').mockReturnValueOnce('WX202610180001').mockReturnValueOnce('10.00').mockReturnValueOnce('CNY')
  const root = document.createElement('div'); document.body.append(root)
  app = createApp(Payments); app.mount(root); await settle()
  expect(root.textContent).toContain('admin.payments.exceptionHint')
  const button = [...root.querySelectorAll('button')].find(el => el.textContent?.trim() === 'admin.payments.manualConfirm')
  expect(Boolean(button)).toBe(confirm)
- if (button) { button.click(); await settle(); expect(api.confirmManualPayment).toHaveBeenCalledWith(17) }
+ if (button) { button.click(); await settle(); expect(api.confirmManualPayment).toHaveBeenCalledWith(17, { transaction_id: 'WX202610180001', amount: '10.00', currency: 'CNY', payer_verified: true }) }
  else { expect(api.confirmManualPayment).not.toHaveBeenCalled() }
 })

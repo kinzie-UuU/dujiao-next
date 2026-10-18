@@ -17,7 +17,6 @@ import (
 	walletapp "github.com/dujiao-next/internal/modules/wallet/application"
 	walletcontract "github.com/dujiao-next/internal/modules/wallet/contract"
 
-	"github.com/dujiao-next/internal/constants"
 	"github.com/dujiao-next/internal/shared/money"
 
 	"github.com/shopspring/decimal"
@@ -246,116 +245,13 @@ func (s *Service) GetAdminRefundItem(id uint) (*AdminOrderRefundItem, error) {
 	return &item, nil
 }
 
-// AdminManualRefund 管理端手动退款（不处理钱包/支付渠道，仅写 order_refund_records）
+// AdminManualRefund 拒绝以人工记账替代原支付渠道退款验证。
 func (s *Service) AdminManualRefund(input AdminManualRefundInput) (*orderdomain.Order, *orderdomain.OrderRefundRecord, error) {
-	if input.OrderID == 0 {
-		return nil, nil, ErrOrderNotFound
-	}
-	amount := input.Amount.Decimal.Round(2)
-	if amount.LessThanOrEqual(decimal.Zero) {
-		return nil, nil, walletcontract.ErrInvalidAmount
-	}
-	recordRemark := strings.TrimSpace(input.Remark)
-	var createdRecord *orderdomain.OrderRefundRecord
-
-	cfg := settingsapp.DefaultOrderRefundConfig()
-	if s.settingService != nil {
-		cfgLoaded, cfgErr := s.settingService.GetOrderRefundConfig()
-		if cfgErr != nil {
-			return nil, nil, cfgErr
-		}
-		cfg = cfgLoaded
-	}
-
-	if err := s.orderStore.WithinTransaction(func(tx ordercontract.Transaction) error {
-		orders := tx.Orders()
-		locked, err := lockRefundOrder(orders, input.OrderID)
-		if err != nil {
-			return err
-		}
-		if locked == nil {
-			return ErrOrderNotFound
-		}
-		order := *locked
-		if order.PaidAt == nil {
-			return ErrOrderStatusInvalid
-		}
-		if settingsapp.IsOrderRefundWindowExpired(order.CreatedAt, order.PaidAt, cfg.MaxRefundDays, time.Now()) {
-			return ErrOrderRefundExpired
-		}
-		if order.TotalAmount.Decimal.LessThanOrEqual(decimal.Zero) {
-			return ErrOrderStatusInvalid
-		}
-		refundedBefore := order.RefundedAmount.Decimal.Round(2)
-		refundable := order.TotalAmount.Decimal.Sub(refundedBefore).Round(2)
-		if amount.GreaterThan(refundable) {
-			return walletcontract.ErrRefundExceeded
-		}
-
-		if err := reserveParentRefund(orders, &order, amount, time.Now()); err != nil {
-			return err
-		}
-
-		newRefunded := refundedBefore.Add(amount).Round(2)
-		now := time.Now()
-		updates := map[string]interface{}{
-			"refunded_amount": money.FromDecimal(newRefunded),
-			"updated_at":      now,
-		}
-		markRefunded := newRefunded.GreaterThanOrEqual(order.TotalAmount.Decimal.Round(2))
-		if markRefunded {
-			updates["status"] = constants.OrderStatusRefunded
-		} else {
-			updates["status"] = constants.OrderStatusPartiallyRefunded
-		}
-		if err := orders.UpdateFields(order.ID, updates); err != nil {
-			return ErrOrderUpdateFailed
-		}
-		if order.ParentID == nil {
-			targetStatus := constants.OrderStatusPartiallyRefunded
-			if markRefunded {
-				targetStatus = constants.OrderStatusRefunded
-			}
-			if err := applyParentRefundChildStatusUpdates(orders, order.ID, targetStatus, now); err != nil {
-				return ErrOrderUpdateFailed
-			}
-		}
-		if order.ParentID != nil {
-			if _, err := orderapp.SyncParentStatus(orders, *order.ParentID, now); err != nil {
-				return ErrOrderUpdateFailed
-			}
-		}
-		record, err := s.createRefundRecordTx(orders, &order, constants.OrderRefundTypeManual, amount, recordRemark, now)
-		if err != nil {
-			return err
-		}
-		createdRecord = record
-		if err := s.reverseAffiliateRefund(tx, &order, amount, refundedBefore, "order_refunded_manual"); err != nil {
-			return err
-		}
-		if s.resellerAccounting != nil {
-			if err := s.resellerAccounting.HandleRefundDeduct(tx.ResellerAccounting(), &order, record, refundedBefore); err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
-		return nil, nil, err
-	}
-
-	order, err := s.orderStore.GetByID(input.OrderID)
-	if err != nil {
-		return nil, nil, ErrOrderFetchFailed
-	}
-	if order == nil {
-		return nil, nil, ErrOrderNotFound
-	}
-	return order, createdRecord, nil
+	// A local bookkeeping entry cannot prove an external original-route refund.
+	// Until a provider refund adapter verifies it, do not mark funds refunded.
+	return nil, nil, orderapp.ErrOriginalRouteRefundRequired
 }
 
-// Rewards belong to the checkout's parent order. A child refund must reverse
-// that reward too. reserveParentRefund already includes child refunds in the
-// parent total, so adding child amounts again would double-count the refund.
 func (s *Service) reverseAffiliateRefund(tx ordercontract.Transaction, order *orderdomain.Order, amount, before decimal.Decimal, reason string) error {
 	if s.affiliateRefund == nil {
 		return nil

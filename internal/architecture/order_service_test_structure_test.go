@@ -40,7 +40,7 @@ func TestOrderServiceTestsAreSplitByResponsibility(t *testing.T) {
 			"TestCalcParentStatus", "TestCalcParentStatusAllRefunded", "TestCalcParentStatusPartiallyRefunded",
 			"TestExpectedRefundStatus", "TestResolvedParentStatusPrefersOwnRefund",
 			"TestIsTransitionAllowedRefunded", "TestUpdateOrderStatusParentToDeliveredSyncsChildren",
-			"TestUpdateOrderStatusParentToPartiallyRefundedSyncsChildren",
+			"TestUpdateOrderStatusCannotBypassOriginalRouteRefund",
 			"TestUpdateOrderStatusRejectsManualPaidTransition",
 			"TestCanCompleteParentOrder", "TestCanCompleteParentOrderRejectInvalidStatus",
 			"TestCanCompleteParentOrderRejectInvalidChild",

@@ -4,6 +4,7 @@ import { useDebounceFn } from '@vueuse/core'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
+import { collectManualPaymentEvidence } from '@/utils/manualPaymentEvidence'
 import type { AdminOrder, AdminOrderItem, AdminPayment } from '@/api/types'
 import IdCell from '@/components/IdCell.vue'
 import { Copy } from 'lucide-vue-next'
@@ -189,11 +190,12 @@ const updateStatus = async (order: AdminOrder) => {
       statusEdits[order.id] = order.status
       return
     }
-    if (!window.confirm(t('admin.payments.manualConfirmPrompt'))) {
+    const evidence = collectManualPaymentEvidence(t, payment.channel_type)
+    if (!evidence) {
       statusEdits[order.id] = order.status
       return
     }
-    await adminAPI.confirmManualPayment(payment.id)
+    await adminAPI.confirmManualPayment(payment.id, evidence)
   } else {
     await adminAPI.updateOrderStatus(order.id, { status })
   }
