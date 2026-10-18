@@ -1159,42 +1159,27 @@ func TestOldPaymentUnderpaidDoesNotFulfillOrder(t *testing.T) {
 		t.Fatalf("underpaid callback must not fulfill the order: %+v", reloadedOrder)
 	}
 
-	// 用户实付的 10 元转入余额，加上退回的 5 元刚好可以补齐这一单。
-	if got := walletBalance(t, db, user.ID); got != "15.00" {
-		t.Fatalf("balance want 15.00 after underpaid credit got %s", got)
+	// 外部少付款保留到账异常，不能转为可支出的余额。
+	if got := walletBalance(t, db, user.ID); got != "5.00" {
+		t.Fatalf("external underpayment changed wallet: %s", got)
 	}
 	var credits []walletdomain.Transaction
 	if err := db.Where("user_id = ? AND type = ?", user.ID, constants.WalletTxnTypeOrderUnderpaidCredit).Find(&credits).Error; err != nil {
-		t.Fatalf("load underpaid credit transactions failed: %v", err)
+		t.Fatal(err)
 	}
-	if len(credits) != 1 || credits[0].Amount.StringFixed(2) != "10.00" {
-		t.Fatalf("underpaid credit transactions unexpected: %+v", credits)
+	if len(credits) != 0 {
+		t.Fatalf("external underpayment credited wallet: %+v", credits)
 	}
-
-	// 重复回调不得重复入账。
 	if _, err := svc.HandleCallback(PaymentCallbackInput{
 		PaymentID: supersededA.ID, OrderNo: order.OrderNo, ChannelID: channelA.ID,
 		Status: constants.PaymentStatusSuccess, Amount: supersededA.Amount, Currency: "CNY", ProviderRef: "underpaid-ref",
 	}); err != nil {
-		t.Fatalf("replay underpaid callback failed: %v", err)
+		t.Fatal(err)
 	}
-	if got := walletBalance(t, db, user.ID); got != "15.00" {
-		t.Fatalf("balance want 15.00 after replayed callback got %s", got)
+	if got := walletBalance(t, db, user.ID); got != "5.00" {
+		t.Fatalf("replay changed wallet: %s", got)
 	}
 
-	// 余额补齐后用户可以正常完成订单。
-	settled, err := svc.CreatePayment(CreatePaymentInput{
-		OrderID: order.ID, UseBalance: true, Context: context.Background(),
-	})
-	if err != nil {
-		t.Fatalf("settle order with wallet balance failed: %v", err)
-	}
-	if !settled.OrderPaid {
-		t.Fatalf("order should be paid by wallet balance: %+v", settled)
-	}
-	if got := walletBalance(t, db, user.ID); got != "0.00" {
-		t.Fatalf("balance want 0.00 after settling the order got %s", got)
-	}
 }
 
 // 游客订单没有钱包账户：同样不得履约，只留异常码等待人工处理。
@@ -1653,7 +1638,7 @@ func TestCreatePaymentAfterRewardDebtRecharge(t *testing.T) {
 	}
 }
 
-func TestOldPaymentLinkWithRewardDebtCreditsWithoutFulfillment(t *testing.T) {
+func TestOldPaymentLinkWithRewardDebtRetainsExternalFundsForReview(t *testing.T) {
 	for _, debt := range []int64{5, 20} {
 		t.Run(decimal.NewFromInt(debt).String(), func(t *testing.T) {
 			svc, db := setupPaymentServiceWalletTest(t)
@@ -1691,7 +1676,7 @@ func TestOldPaymentLinkWithRewardDebtCreditsWithoutFulfillment(t *testing.T) {
 				if actual.Status != constants.OrderStatusPendingPayment || actual.PaidAt != nil {
 					t.Fatal("debt callback fulfilled order")
 				}
-				if got := walletBalance(t, db, user.ID); got != decimal.NewFromInt(15-debt).StringFixed(2) {
+				if got := walletBalance(t, db, user.ID); got != decimal.NewFromInt(-debt).StringFixed(2) {
 					t.Fatalf("balance=%s", got)
 				}
 			}
@@ -1699,20 +1684,10 @@ func TestOldPaymentLinkWithRewardDebtCreditsWithoutFulfillment(t *testing.T) {
 			if err := db.Where("user_id = ? AND type = ?", user.ID, constants.WalletTxnTypeOrderDebtCredit).Find(&credits).Error; err != nil {
 				t.Fatal(err)
 			}
-			if len(credits) != 1 || !credits[0].Amount.Decimal.Equal(decimal.NewFromInt(15)) || !credits[0].BalanceBefore.Decimal.Equal(decimal.NewFromInt(-debt)) || !credits[0].BalanceAfter.Decimal.Equal(decimal.NewFromInt(15-debt)) {
-				t.Fatalf("credits=%+v", credits)
+			if len(credits) != 0 {
+				t.Fatalf("external payment offset wallet debt: %+v", credits)
 			}
-			// 补足欠额以及购货所需款项后，必须重新主动支付才履约。
-			if _, _, err := svc.walletSvc.Recharge(walletcontract.RechargeInput{UserID: user.ID, Amount: m(debt), Currency: "CNY"}); err != nil {
-				t.Fatal(err)
-			}
-			result, err := svc.CreatePayment(CreatePaymentInput{OrderID: order.ID, UseBalance: true, Context: context.Background()})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !result.OrderPaid || walletBalance(t, db, user.ID) != "0.00" {
-				t.Fatal("repaid wallet purchase failed")
-			}
+
 		})
 	}
 }
