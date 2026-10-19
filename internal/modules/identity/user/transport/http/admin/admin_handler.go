@@ -57,7 +57,7 @@ type UserDirectory interface {
 	List(filter UserListFilter) ([]userdomain.User, int64, error)
 	GetByID(id uint) (*userdomain.User, error)
 	GetByEmail(email string) (*userdomain.User, error)
-	Update(user *userdomain.User) error
+	Update(user *userdomain.User, expectedVersion ...uint64) error
 	BatchUpdateStatus(ids []uint, status string) error
 }
 
@@ -452,16 +452,17 @@ func (h *AdminHandler) UpdateAdminUser(c *gin.Context) {
 
 	now := time.Now()
 	user.UpdatedAt = now
+	expectedVersion := user.TokenVersion
 	if revokeToken {
 		user.TokenVersion++
 		user.TokenInvalidBefore = &now
 	}
-	if err := h.users.Update(user); err != nil {
+	if err := h.users.Update(user, expectedVersion); err != nil {
 		ginutil.RespondError(c, response.CodeInternal, "error.user_update_failed", err)
 		return
 	}
 	if h.authState != nil {
-		_ = h.authState.SetUserAuthState(c.Request.Context(), user)
+		_ = h.authState.DelUserAuthState(c.Request.Context(), user.ID)
 	}
 
 	response.Success(c, user)

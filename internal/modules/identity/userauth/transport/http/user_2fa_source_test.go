@@ -48,7 +48,7 @@ func (s sourceTest2FAAuth) ParseUserChallengeToken(string) (*UserChallengeClaims
 	}, nil
 }
 
-func (sourceTest2FAAuth) CompleteLoginAfter2FA(context.Context, uint, bool) (*AuthLoginResult, error) {
+func (sourceTest2FAAuth) CompleteLoginAfter2FA(context.Context, uint, bool, ...uint64) (*AuthLoginResult, error) {
 	now := time.Now()
 	return &AuthLoginResult{
 		User: &userdomain.User{
@@ -66,11 +66,12 @@ func (sourceTest2FAAuth) GetUserEmail(uint) (string, error) {
 
 type sourceTestChallengeStore struct{}
 
-func (sourceTestChallengeStore) IsRevoked(context.Context, string) bool { return false }
-func (sourceTestChallengeStore) BumpFails(context.Context, string) int64 {
-	return 0
+func (sourceTestChallengeStore) Reserve(context.Context, string) (bool, error) {
+	return true, nil
 }
-func (sourceTestChallengeStore) Revoke(context.Context, string) {}
+func (sourceTestChallengeStore) Consume(context.Context, string) (bool, error) {
+	return true, nil
+}
 
 type sourceTestLoginRecord struct {
 	source string

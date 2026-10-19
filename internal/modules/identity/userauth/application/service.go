@@ -148,13 +148,14 @@ func (s *Service) BindUserChallengeTenant(tokenString string, resellerID uint) (
 // 注：Typ 字段同时占用与 UserJWTClaims 兼容的 typ 键，写入 "2fa_challenge"，
 // 防止挑战 token 在被错误地解析为 UserJWTClaims 时通过中间件的 typ 校验。
 type UserChallengeClaims struct {
-	ResellerID  uint   `json:"rid,omitempty"`
-	UserID      uint   `json:"user_id"`
-	JTI         string `json:"jti"`
-	Purpose     string `json:"purpose"`
-	RememberMe  bool   `json:"remember_me"`
-	LoginSource string `json:"login_source,omitempty"`
-	Typ         string `json:"typ"`
+	TokenVersion *uint64 `json:"token_version"`
+	ResellerID   uint    `json:"rid,omitempty"`
+	UserID       uint    `json:"user_id"`
+	JTI          string  `json:"jti"`
+	Purpose      string  `json:"purpose"`
+	RememberMe   bool    `json:"remember_me"`
+	LoginSource  string  `json:"login_source,omitempty"`
+	Typ          string  `json:"typ"`
 	jwt.RegisteredClaims
 }
 
@@ -347,10 +348,14 @@ func (s *Service) Register(email, password, code string, agreementAccepted bool,
 	}
 
 	user.LastLoginAt = &now
-	if err := s.userRepo.Update(user); err != nil {
+	updated, err := s.userRepo.UpdateLastLogin(user.ID, user.TokenVersion, now)
+	if err != nil {
 		return nil, "", time.Time{}, err
 	}
-	_ = cache.SetUserAuthState(context.Background(), cache.BuildUserAuthState(user))
+	if !updated {
+		return nil, "", time.Time{}, ErrInvalidCredentials
+	}
+	_ = cache.DelUserAuthState(context.Background(), user.ID)
 
 	// 分配默认会员等级（必须在最后一次 Update 之后，避免被覆盖）
 	if s.memberLevelSvc != nil {
@@ -385,7 +390,7 @@ func (s *Service) LoginStep1(email, password string, rememberMe bool) (*UserLogi
 	}
 
 	if user.TOTPEnabledAt != nil {
-		challenge, jti, expiresAt, err := s.IssueUserChallengeToken(user.ID, rememberMe)
+		challenge, jti, expiresAt, err := s.IssueUserChallengeToken(user.ID, rememberMe, user.TokenVersion)
 		if err != nil {
 			return nil, err
 		}
@@ -408,10 +413,14 @@ func (s *Service) LoginStep1(email, password string, rememberMe bool) (*UserLogi
 	}
 	now := time.Now()
 	user.LastLoginAt = &now
-	if err := s.userRepo.Update(user); err != nil {
+	updated, err := s.userRepo.UpdateLastLogin(user.ID, user.TokenVersion, now)
+	if err != nil {
 		return nil, err
 	}
-	_ = cache.SetUserAuthState(context.Background(), cache.BuildUserAuthState(user))
+	if !updated {
+		return nil, ErrInvalidCredentials
+	}
+	_ = cache.DelUserAuthState(context.Background(), user.ID)
 
 	return &UserLoginResult{
 		RequiresTOTP: false,
@@ -422,22 +431,39 @@ func (s *Service) LoginStep1(email, password string, rememberMe bool) (*UserLogi
 }
 
 // IssueUserChallengeToken 签发用户 2FA 挑战 token
-func (s *Service) IssueUserChallengeToken(userID uint, rememberMe bool) (token, jti string, expiresAt time.Time, err error) {
-	return s.IssueUserChallengeTokenForSource(userID, rememberMe, constants.LoginLogSourceWeb)
+func (s *Service) IssueUserChallengeToken(userID uint, rememberMe bool, expectedVersion ...uint64) (token, jti string, expiresAt time.Time, err error) {
+	return s.IssueUserChallengeTokenForSource(userID, rememberMe, constants.LoginLogSourceWeb, expectedVersion...)
 }
 
 // IssueUserChallengeTokenForSource signs a 2FA challenge while retaining the
 // original login provider for the completion audit log.
-func (s *Service) IssueUserChallengeTokenForSource(userID uint, rememberMe bool, loginSource string) (token, jti string, expiresAt time.Time, err error) {
+func (s *Service) IssueUserChallengeTokenForSource(userID uint, rememberMe bool, loginSource string, expectedVersion ...uint64) (token, jti string, expiresAt time.Time, err error) {
+	var version uint64
+	if len(expectedVersion) > 0 {
+		version = expectedVersion[0]
+	} else {
+		if s.userRepo == nil {
+			return "", "", time.Time{}, ErrNotFound
+		}
+		user, loadErr := s.userRepo.GetByID(userID)
+		if loadErr != nil {
+			return "", "", time.Time{}, loadErr
+		}
+		if user == nil {
+			return "", "", time.Time{}, ErrNotFound
+		}
+		version = user.TokenVersion
+	}
 	jti = uuid.NewString()
 	expiresAt = time.Now().Add(challenge.TTL)
 	claims := UserChallengeClaims{
-		UserID:      userID,
-		JTI:         jti,
-		Purpose:     challenge.PurposeTwoFactor,
-		RememberMe:  rememberMe,
-		LoginSource: normalizeLoginSource(loginSource),
-		Typ:         jwttoken.TypeTwoFactorChallenge,
+		TokenVersion: &version,
+		UserID:       userID,
+		JTI:          jti,
+		Purpose:      challenge.PurposeTwoFactor,
+		RememberMe:   rememberMe,
+		LoginSource:  normalizeLoginSource(loginSource),
+		Typ:          jwttoken.TypeTwoFactorChallenge,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -474,23 +500,42 @@ func (s *Service) ParseUserChallengeToken(tokenString string) (*UserChallengeCla
 		return nil, err
 	}
 	claims, ok := tok.Claims.(*UserChallengeClaims)
-	if !ok || !tok.Valid {
+	if !ok || !tok.Valid || claims.UserID == 0 || claims.JTI == "" || claims.ExpiresAt == nil {
 		return nil, errors.New("invalid challenge token")
 	}
 	if claims.Purpose != challenge.PurposeTwoFactor || claims.Typ != jwttoken.TypeTwoFactorChallenge {
 		return nil, errors.New("invalid challenge purpose")
 	}
+	if s.userRepo == nil {
+		return nil, ErrNotFound
+	}
+	user, err := s.userRepo.GetByID(claims.UserID)
+	if err != nil {
+		return nil, err
+	}
+	if user == nil || claims.TokenVersion == nil || *claims.TokenVersion != user.TokenVersion {
+		return nil, ErrInvalidCredentials
+	}
+	if strings.ToLower(user.Status) != constants.UserStatusActive {
+		return nil, ErrUserDisabled
+	}
 	return claims, nil
 }
 
 // CompleteLoginAfter2FA 用户 2FA 验证通过后完成登录：发正式 JWT、更新 last_login
-func (s *Service) CompleteLoginAfter2FA(userID uint, rememberMe bool) (*UserLoginResult, error) {
+func (s *Service) CompleteLoginAfter2FA(userID uint, rememberMe bool, expectedVersion ...uint64) (*UserLoginResult, error) {
 	user, err := s.userRepo.GetByID(userID)
 	if err != nil {
 		return nil, err
 	}
 	if user == nil {
 		return nil, ErrNotFound
+	}
+	if len(expectedVersion) > 0 && user.TokenVersion != expectedVersion[0] {
+		return nil, ErrInvalidCredentials
+	}
+	if strings.ToLower(user.Status) != constants.UserStatusActive {
+		return nil, ErrUserDisabled
 	}
 	expireHours := resolveUserJWTExpireHours(s.cfg.UserJWT)
 	if rememberMe {
@@ -502,10 +547,14 @@ func (s *Service) CompleteLoginAfter2FA(userID uint, rememberMe bool) (*UserLogi
 	}
 	now := time.Now()
 	user.LastLoginAt = &now
-	if err := s.userRepo.Update(user); err != nil {
+	updated, err := s.userRepo.UpdateLastLogin(user.ID, user.TokenVersion, now)
+	if err != nil {
 		return nil, err
 	}
-	_ = cache.SetUserAuthState(context.Background(), cache.BuildUserAuthState(user))
+	if !updated {
+		return nil, ErrInvalidCredentials
+	}
+	_ = cache.DelUserAuthState(context.Background(), user.ID)
 	return &UserLoginResult{RequiresTOTP: false, User: user, Token: token, ExpiresAt: expiresAt}, nil
 }
 

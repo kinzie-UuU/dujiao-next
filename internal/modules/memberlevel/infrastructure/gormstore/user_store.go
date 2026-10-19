@@ -32,15 +32,12 @@ func (r *UserStore) GetByID(id uint) (*userdomain.User, error) {
 	return &user, nil
 }
 
+// Update changes only membership, never an old authentication snapshot.
 func (r *UserStore) Update(user *userdomain.User) error {
 	if user == nil || user.ID == 0 {
 		return nil
 	}
-	return r.db.Model(&userdomain.User{}).
-		Where("id = ? AND deleted_at IS NULL", user.ID).
-		Select("*").
-		Omit("id", "deleted_at").
-		Updates(user).Error
+	return r.db.Model(&userdomain.User{}).Where("id = ? AND deleted_at IS NULL", user.ID).Update("member_level_id", user.MemberLevelID).Error
 }
 
 func (r *UserStore) IncrementTotalRecharged(userID uint, amount decimal.Decimal) error {

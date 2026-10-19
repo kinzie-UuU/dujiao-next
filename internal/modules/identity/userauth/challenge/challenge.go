@@ -3,7 +3,8 @@ package challenge
 import "time"
 
 const (
-	PurposeTwoFactor = "user_2fa_challenge"
+	// Reject pre-migration challenges whose revocations existed only in Redis.
+	PurposeTwoFactor = "user_2fa_challenge_v2"
 	TTL              = 5 * time.Minute
 	MaxFailures      = 5
 )

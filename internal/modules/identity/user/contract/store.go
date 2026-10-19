@@ -29,7 +29,7 @@ type Store interface {
 	GetByID(uint) (*userdomain.User, error)
 	ListByIDs([]uint) ([]userdomain.User, error)
 	Create(*userdomain.User) error
-	Update(*userdomain.User) error
+	Update(*userdomain.User, ...uint64) error
 	IncrementTotalRecharged(uint, decimal.Decimal) error
 	IncrementTotalSpent(uint, decimal.Decimal) error
 	UpdateMemberLevelIfCurrent(uint, uint, uint) (int64, error)
@@ -39,5 +39,7 @@ type Store interface {
 	UpdateTOTPPending(uint, string, time.Time) error
 	UpdateTOTPEnabled(uint, string, time.Time, string) error
 	UpdateRecoveryCodes(uint, string) error
+	CompareAndSwapRecoveryCodes(uint, string, string) (bool, error)
+	UpdateLastLogin(uint, uint64, time.Time) (bool, error)
 	ClearTOTP(uint) error
 }

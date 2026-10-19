@@ -20,6 +20,7 @@ import (
 	emailverificationdomain "github.com/dujiao-next/internal/modules/identity/emailverification/domain"
 	externalidentitydomain "github.com/dujiao-next/internal/modules/identity/externalidentity/domain"
 	userdomain "github.com/dujiao-next/internal/modules/identity/user/domain"
+	userchallengestore "github.com/dujiao-next/internal/modules/identity/userauth/infrastructure/gormstore"
 	memberleveldomain "github.com/dujiao-next/internal/modules/memberlevel/domain"
 	notificationdomain "github.com/dujiao-next/internal/modules/notification/domain"
 	orderdomain "github.com/dujiao-next/internal/modules/order/domain"
@@ -42,6 +43,7 @@ func AutoMigrate() error {
 		&admindomain.Admin{},
 		&adminchallengestore.ChallengeRecord{},
 		&userdomain.User{},
+		&userchallengestore.ChallengeRecord{},
 		&externalidentitydomain.Identity{},
 		&affiliatedomain.Profile{},
 		&affiliatedomain.Click{},

@@ -581,7 +581,7 @@ func (s *Service) completeExternalLogin(user *userdomain.User, source string) (*
 		return nil, ErrNotFound
 	}
 	if user.TOTPEnabledAt != nil {
-		challengeToken, jti, expiresAt, err := s.IssueUserChallengeTokenForSource(user.ID, false, source)
+		challengeToken, jti, expiresAt, err := s.IssueUserChallengeTokenForSource(user.ID, false, source, user.TokenVersion)
 		if err != nil {
 			return nil, err
 		}
@@ -601,10 +601,14 @@ func (s *Service) completeExternalLogin(user *userdomain.User, source string) (*
 	now := time.Now()
 	user.LastLoginAt = &now
 	user.UpdatedAt = now
-	if err := s.userRepo.Update(user); err != nil {
+	updated, err := s.userRepo.UpdateLastLogin(user.ID, user.TokenVersion, now)
+	if err != nil {
 		return nil, err
 	}
-	_ = cache.SetUserAuthState(context.Background(), cache.BuildUserAuthState(user))
+	if !updated {
+		return nil, ErrInvalidCredentials
+	}
+	_ = cache.DelUserAuthState(context.Background(), user.ID)
 	return &UserLoginResult{
 		User:      user,
 		Token:     token,
