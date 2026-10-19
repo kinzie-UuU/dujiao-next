@@ -126,13 +126,14 @@ func (a admin2FAAuthTransportAdapter) ParseChallengeToken(tokenString string) (*
 		return nil, nil
 	}
 	return &adminauthtransport.ChallengeClaims{
-		AdminID: claims.AdminID,
-		JTI:     claims.JTI,
+		AdminID:      claims.AdminID,
+		JTI:          claims.JTI,
+		TokenVersion: *claims.TokenVersion,
 	}, nil
 }
 
-func (a admin2FAAuthTransportAdapter) CompleteLoginAfter2FA(adminID uint) (*adminauthtransport.AuthLoginResult, error) {
-	res, err := a.auth.CompleteLoginAfter2FA(adminID)
+func (a admin2FAAuthTransportAdapter) CompleteLoginAfter2FA(adminID uint, expectedVersion ...uint64) (*adminauthtransport.AuthLoginResult, error) {
+	res, err := a.auth.CompleteLoginAfter2FA(adminID, expectedVersion...)
 	if err != nil {
 		return nil, mapAdminAuthTransportError(err)
 	}

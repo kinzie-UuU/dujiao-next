@@ -50,8 +50,9 @@ type TOTPEnableResult struct {
 
 // ChallengeClaims 是 transport 层挑战 token 视图。
 type ChallengeClaims struct {
-	AdminID uint
-	JTI     string
+	TokenVersion uint64
+	AdminID      uint
+	JTI          string
 }
 
 // AuthLoginResult 是 transport 层管理员登录结果视图。
@@ -90,7 +91,7 @@ type TOTPService interface {
 // AuthService 是 2FA 登录完成端口。
 type AuthService interface {
 	ParseChallengeToken(tokenString string) (*ChallengeClaims, error)
-	CompleteLoginAfter2FA(adminID uint) (*AuthLoginResult, error)
+	CompleteLoginAfter2FA(adminID uint, expectedVersion ...uint64) (*AuthLoginResult, error)
 	GetAdminUsername(adminID uint) (string, error)
 }
 
@@ -362,7 +363,7 @@ func (h *Admin2FAHandler) Verify2FA(c *gin.Context) {
 		ginutil.RespondError(c, response.CodeUnauthorized, "error.totp_challenge_invalid", nil)
 		return
 	}
-	loginRes, err := h.auth.CompleteLoginAfter2FA(claims.AdminID)
+	loginRes, err := h.auth.CompleteLoginAfter2FA(claims.AdminID, claims.TokenVersion)
 	if err != nil {
 		ginutil.RespondError(c, response.CodeInternal, "error.login_failed", err)
 		return

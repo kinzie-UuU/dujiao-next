@@ -12,11 +12,13 @@ type Store interface {
 	List() ([]admindomain.Admin, error)
 	Count() (int64, error)
 	Create(*admindomain.Admin) error
-	Update(*admindomain.Admin) error
+	Update(*admindomain.Admin, ...uint64) error
 	Delete(uint) error
 	UpdateTOTPPending(uint, string, time.Time) error
 	UpdateTOTPEnabled(uint, string, time.Time, string) error
 	UpdateRecoveryCodes(uint, string) error
+	CompareAndSwapRecoveryCodes(uint, string, string) (bool, error)
+	UpdateLastLogin(uint, uint64, time.Time) (bool, error)
 	ClearTOTP(uint) error
-	UpdatePassword(uint, string) error
+	UpdatePassword(uint, string, ...uint64) error
 }

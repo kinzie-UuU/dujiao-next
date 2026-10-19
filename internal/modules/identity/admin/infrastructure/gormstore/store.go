@@ -72,8 +72,32 @@ func (r *Store) Create(admin *admindomain.Admin) error {
 }
 
 // Update 更新管理员
-func (r *Store) Update(admin *admindomain.Admin) error {
-	return r.db.Save(admin).Error
+func (r *Store) Update(admin *admindomain.Admin, expectedVersion ...uint64) error {
+	if admin == nil || admin.ID == 0 {
+		return errors.New("invalid admin update")
+	}
+	previous := admin.TokenVersion
+	if len(expectedVersion) > 0 {
+		previous = expectedVersion[0]
+	}
+	if admin.TokenVersion != previous && admin.TokenVersion != previous+1 {
+		return errors.New("invalid admin token version")
+	}
+	// Account editing must never persist its stale MFA, recovery or login snapshot.
+	result := r.db.Model(&admindomain.Admin{}).Where("id = ? AND deleted_at IS NULL AND token_version = ?", admin.ID, previous).Updates(map[string]interface{}{
+		"username":             admin.Username,
+		"is_super":             admin.IsSuper,
+		"password_hash":        admin.PasswordHash,
+		"token_version":        admin.TokenVersion,
+		"token_invalid_before": admin.TokenInvalidBefore,
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("admin update rejected")
+	}
+	return nil
 }
 
 // Delete 删除管理员（软删除）
@@ -138,7 +162,7 @@ func (r *Store) ClearTOTP(adminID uint) error {
 
 // UpdatePassword 更新管理员密码哈希，TokenVersion++ 强制旧 token 失效
 // 用于 admin-tool CLI 重置密码（超管忘记密码恢复路径）。
-func (r *Store) UpdatePassword(adminID uint, passwordHash string) error {
+func (r *Store) UpdatePassword(adminID uint, passwordHash string, expectedVersion ...uint64) error {
 	if adminID == 0 {
 		return errors.New("invalid admin id")
 	}
@@ -146,9 +170,36 @@ func (r *Store) UpdatePassword(adminID uint, passwordHash string) error {
 		return errors.New("password hash is empty")
 	}
 	now := time.Now()
-	return r.db.Model(&admindomain.Admin{}).Where("id = ? AND deleted_at IS NULL", adminID).Updates(map[string]interface{}{
+	query := r.db.Model(&admindomain.Admin{}).Where("id = ? AND deleted_at IS NULL", adminID)
+	if len(expectedVersion) > 0 {
+		query = query.Where("token_version = ?", expectedVersion[0])
+	}
+	result := query.Updates(map[string]interface{}{
 		"password_hash":        passwordHash,
 		"token_version":        gorm.Expr("token_version + 1"),
 		"token_invalid_before": now,
-	}).Error
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 && len(expectedVersion) > 0 {
+		return errors.New("admin password update rejected")
+	}
+	return nil
+}
+
+// CompareAndSwapRecoveryCodes consumes only the verified snapshot. A concurrent
+// consumption, regeneration or disable must not be overwritten by a stale read.
+func (r *Store) CompareAndSwapRecoveryCodes(id uint, previous, next string) (bool, error) {
+	if id == 0 || previous == "" || next == "" {
+		return false, errors.New("invalid recovery update")
+	}
+	result := r.db.Model(&admindomain.Admin{}).Where("id = ? AND deleted_at IS NULL AND totp_enabled_at IS NOT NULL AND recovery_codes = ?", id, previous).Update("recovery_codes", next)
+	return result.RowsAffected == 1, result.Error
+}
+
+// UpdateLastLogin never saves a stale account snapshot over security fields.
+func (r *Store) UpdateLastLogin(id uint, version uint64, at time.Time) (bool, error) {
+	result := r.db.Model(&admindomain.Admin{}).Where("id = ? AND deleted_at IS NULL AND token_version = ?", id, version).Update("last_login_at", at)
+	return result.RowsAffected == 1, result.Error
 }

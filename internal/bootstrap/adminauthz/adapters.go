@@ -83,8 +83,8 @@ func (a adminAuthzDirectoryAdapter) Create(admin *admindomain.Admin) error {
 	return a.admins.Create(admin)
 }
 
-func (a adminAuthzDirectoryAdapter) Update(admin *admindomain.Admin) error {
-	return a.admins.Update(admin)
+func (a adminAuthzDirectoryAdapter) Update(admin *admindomain.Admin, expectedVersion ...uint64) error {
+	return a.admins.Update(admin, expectedVersion...)
 }
 
 func (a adminAuthzDirectoryAdapter) Delete(id uint) error {

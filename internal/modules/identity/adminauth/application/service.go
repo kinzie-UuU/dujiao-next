@@ -68,10 +68,11 @@ type JWTClaims struct {
 // 注：Typ 字段同时占用与 JWTClaims 兼容的 typ 键，写入 "2fa_challenge"，
 // 防止挑战 token 在被错误地解析为 JWTClaims 时通过中间件的 typ 校验。
 type ChallengeClaims struct {
-	AdminID uint   `json:"admin_id"`
-	JTI     string `json:"jti"`
-	Purpose string `json:"purpose"`
-	Typ     string `json:"typ"`
+	TokenVersion *uint64 `json:"token_version"`
+	AdminID      uint    `json:"admin_id"`
+	JTI          string  `json:"jti"`
+	Purpose      string  `json:"purpose"`
+	Typ          string  `json:"typ"`
 	jwt.RegisteredClaims
 }
 
@@ -145,7 +146,7 @@ func (s *Service) Login(username, password string) (*LoginResult, error) {
 
 	// 已启用 2FA → 仅签发挑战 token
 	if admin.TOTPEnabledAt != nil {
-		challenge, jti, expiresAt, err := s.IssueChallengeToken(admin.ID)
+		challenge, jti, expiresAt, err := s.IssueChallengeToken(admin.ID, admin.TokenVersion)
 		if err != nil {
 			return nil, err
 		}
@@ -165,10 +166,15 @@ func (s *Service) Login(username, password string) (*LoginResult, error) {
 	}
 	now := time.Now()
 	admin.LastLoginAt = &now
-	if err := s.adminRepo.Update(admin); err != nil {
+	updated, err := s.adminRepo.UpdateLastLogin(admin.ID, admin.TokenVersion, now)
+	if err != nil {
 		return nil, err
 	}
-	_ = cache.SetAdminAuthState(context.Background(), cache.BuildAdminAuthState(admin))
+	if !updated {
+		return nil, ErrInvalidCredentials
+	}
+	// Do not publish a potentially stale security snapshot after concurrent revocation.
+	_ = cache.DelAdminAuthState(context.Background(), admin.ID)
 	return &LoginResult{
 		RequiresTOTP: false,
 		Admin:        admin,
@@ -178,14 +184,28 @@ func (s *Service) Login(username, password string) (*LoginResult, error) {
 }
 
 // IssueChallengeToken 签发 2FA 挑战 token
-func (s *Service) IssueChallengeToken(adminID uint) (token, jti string, expiresAt time.Time, err error) {
+func (s *Service) IssueChallengeToken(adminID uint, expectedVersion ...uint64) (token, jti string, expiresAt time.Time, err error) {
+	var version uint64
+	if len(expectedVersion) > 0 {
+		version = expectedVersion[0]
+	} else {
+		admin, loadErr := s.adminRepo.GetByID(adminID)
+		if loadErr != nil {
+			return "", "", time.Time{}, loadErr
+		}
+		if admin == nil {
+			return "", "", time.Time{}, ErrNotFound
+		}
+		version = admin.TokenVersion
+	}
 	jti = uuid.NewString()
 	expiresAt = time.Now().Add(challenge.TTL)
 	claims := ChallengeClaims{
-		AdminID: adminID,
-		JTI:     jti,
-		Purpose: challenge.PurposeTwoFactor,
-		Typ:     jwttoken.TypeTwoFactorChallenge,
+		TokenVersion: &version,
+		AdminID:      adminID,
+		JTI:          jti,
+		Purpose:      challenge.PurposeTwoFactor,
+		Typ:          jwttoken.TypeTwoFactorChallenge,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -217,11 +237,18 @@ func (s *Service) ParseChallengeToken(tokenString string) (*ChallengeClaims, err
 	if claims.Purpose != challenge.PurposeTwoFactor || claims.Typ != jwttoken.TypeTwoFactorChallenge {
 		return nil, errors.New("invalid challenge purpose")
 	}
+	admin, err := s.adminRepo.GetByID(claims.AdminID)
+	if err != nil {
+		return nil, err
+	}
+	if admin == nil || claims.TokenVersion == nil || *claims.TokenVersion != admin.TokenVersion {
+		return nil, ErrInvalidCredentials
+	}
 	return claims, nil
 }
 
 // CompleteLoginAfter2FA 在 2FA 验证通过后完成登录：发正式 JWT、更新 last_login
-func (s *Service) CompleteLoginAfter2FA(adminID uint) (*LoginResult, error) {
+func (s *Service) CompleteLoginAfter2FA(adminID uint, expectedVersion ...uint64) (*LoginResult, error) {
 	admin, err := s.adminRepo.GetByID(adminID)
 	if err != nil {
 		return nil, err
@@ -229,16 +256,24 @@ func (s *Service) CompleteLoginAfter2FA(adminID uint) (*LoginResult, error) {
 	if admin == nil {
 		return nil, ErrNotFound
 	}
+	if len(expectedVersion) > 0 && admin.TokenVersion != expectedVersion[0] {
+		return nil, ErrInvalidCredentials
+	}
 	token, expiresAt, err := s.GenerateJWT(admin)
 	if err != nil {
 		return nil, err
 	}
 	now := time.Now()
 	admin.LastLoginAt = &now
-	if err := s.adminRepo.Update(admin); err != nil {
+	updated, err := s.adminRepo.UpdateLastLogin(admin.ID, admin.TokenVersion, now)
+	if err != nil {
 		return nil, err
 	}
-	_ = cache.SetAdminAuthState(context.Background(), cache.BuildAdminAuthState(admin))
+	if !updated {
+		return nil, ErrInvalidCredentials
+	}
+	// Do not publish a potentially stale security snapshot after concurrent revocation.
+	_ = cache.DelAdminAuthState(context.Background(), admin.ID)
 	return &LoginResult{RequiresTOTP: false, Admin: admin, Token: token, ExpiresAt: expiresAt}, nil
 }
 
@@ -270,13 +305,9 @@ func (s *Service) ChangePassword(adminID uint, oldPassword, newPassword string) 
 		return err
 	}
 
-	admin.PasswordHash = hashedPassword
-	now := time.Now()
-	admin.TokenVersion++
-	admin.TokenInvalidBefore = &now
-	if err := s.adminRepo.Update(admin); err != nil {
+	if err := s.adminRepo.UpdatePassword(admin.ID, hashedPassword, admin.TokenVersion); err != nil {
 		return err
 	}
-	_ = cache.SetAdminAuthState(context.Background(), cache.BuildAdminAuthState(admin))
+	_ = cache.DelAdminAuthState(context.Background(), admin.ID)
 	return nil
 }

@@ -58,7 +58,7 @@ func (s *bootstrapStoreStub) Create(admin *admindomain.Admin) error {
 	return nil
 }
 
-func (s *bootstrapStoreStub) Update(admin *admindomain.Admin) error {
+func (s *bootstrapStoreStub) Update(admin *admindomain.Admin, expectedVersion ...uint64) error {
 	copy := *admin
 	s.admins[admin.ID] = &copy
 	return nil
@@ -69,7 +69,7 @@ func (s *bootstrapStoreStub) UpdateTOTPPending(uint, string, time.Time) error   
 func (s *bootstrapStoreStub) UpdateTOTPEnabled(uint, string, time.Time, string) error { return nil }
 func (s *bootstrapStoreStub) UpdateRecoveryCodes(uint, string) error                  { return nil }
 func (s *bootstrapStoreStub) ClearTOTP(uint) error                                    { return nil }
-func (s *bootstrapStoreStub) UpdatePassword(uint, string) error                       { return nil }
+func (s *bootstrapStoreStub) UpdatePassword(uint, string, ...uint64) error            { return nil }
 
 func TestInitDefaultAdminMarksBootstrapAdminAsSuper(t *testing.T) {
 	store := newBootstrapStoreStub()
@@ -120,3 +120,8 @@ func TestInitDefaultAdminLeavesOtherExistingAdminsUnchanged(t *testing.T) {
 		t.Fatalf("count = %d, want 1", count)
 	}
 }
+
+func (s *bootstrapStoreStub) CompareAndSwapRecoveryCodes(uint, string, string) (bool, error) {
+	return true, nil
+}
+func (s *bootstrapStoreStub) UpdateLastLogin(uint, uint64, time.Time) (bool, error) { return true, nil }
