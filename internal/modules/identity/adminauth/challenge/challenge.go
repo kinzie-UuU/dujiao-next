@@ -3,7 +3,8 @@ package challenge
 import "time"
 
 const (
-	PurposeTwoFactor = "2fa_challenge"
+	// Versioned purpose rejects pre-migration challenges without invalidating access sessions.
+	PurposeTwoFactor = "2fa_challenge_v2"
 	TTL              = 5 * time.Minute
 	MaxFailures      = 5
 )

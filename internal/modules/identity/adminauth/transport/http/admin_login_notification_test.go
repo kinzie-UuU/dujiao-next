@@ -114,7 +114,7 @@ func TestTwoFANotificationOnlyAfterFinalLogin(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			spy := &loginNoticeSpy{}
-			h := NewAdmin2FAHandler(twoFACodeStub{err: test.codeErr}, twoFAAuthStub{err: test.loginErr}, nil, nil, spy)
+			h := NewAdmin2FAHandler(twoFACodeStub{err: test.codeErr}, twoFAAuthStub{err: test.loginErr}, testChallengeStore(t), nil, spy)
 			c, _ := loginContext(test.body)
 			h.Verify2FA(c)
 			if len(spy.items) != test.want {
@@ -159,7 +159,7 @@ func TestFailureNoticesCoverPasswordAndTwoFAWithoutCredentials(t *testing.T) {
 			err = ErrTOTPRecoveryInvalid
 			body = `{"challenge_token":"private-challenge","recovery_code":"private-recovery"}`
 		}
-		h := NewAdmin2FAHandler(twoFACodeStub{err: err}, twoFAAuthStub{}, nil, nil, spy)
+		h := NewAdmin2FAHandler(twoFACodeStub{err: err}, twoFAAuthStub{}, testChallengeStore(t), nil, spy)
 		c, _ := loginContext(body)
 		h.Verify2FA(c)
 		if len(spy.failures) != 1 || spy.failures[0].ClientIP != "203.0.113.7" {
