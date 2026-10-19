@@ -13,6 +13,7 @@ import (
 	admintotpapp "github.com/dujiao-next/internal/modules/identity/adminauth/totp/application"
 
 	"github.com/glebarez/sqlite"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/pquerna/otp/totp"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -113,5 +114,46 @@ func TestParseChallengeRejectsWrongPurpose(t *testing.T) {
 	}
 	if _, err := auth.ParseChallengeToken(regular); err == nil {
 		t.Fatalf("expected error for non-challenge token")
+	}
+}
+
+// Cutover rejects old Redis-backed challenges, not already-issued access sessions.
+func TestChallengeCutoverRejectsLegacyAndMissingBounds(t *testing.T) {
+	auth, _, repo := newAuthTestService(t)
+	admin := createAuthTestAdmin(t, repo, "cutover", "test-password")
+	access, _, err := auth.GenerateJWT(admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = auth.ParseJWT(access); err != nil {
+		t.Fatalf("access session invalidated: %v", err)
+	}
+	token, _, _, err := auth.IssueChallengeToken(admin.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := auth.ParseChallengeToken(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"legacy", "expiry", "jti", "admin"} {
+		altered := *claims
+		switch field {
+		case "legacy":
+			altered.Purpose = "2fa_challenge"
+		case "expiry":
+			altered.ExpiresAt = nil
+		case "jti":
+			altered.JTI = ""
+		case "admin":
+			altered.AdminID = 0
+		}
+		signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, altered).SignedString([]byte("jwt-secret-for-test"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = auth.ParseChallengeToken(signed); err == nil {
+			t.Fatalf("accepted %s challenge", field)
+		}
 	}
 }

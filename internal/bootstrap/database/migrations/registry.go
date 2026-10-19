@@ -16,6 +16,7 @@ import (
 	fulfillmentdomain "github.com/dujiao-next/internal/modules/fulfillment/domain"
 	giftcarddomain "github.com/dujiao-next/internal/modules/giftcard/domain"
 	admindomain "github.com/dujiao-next/internal/modules/identity/admin/domain"
+	adminchallengestore "github.com/dujiao-next/internal/modules/identity/adminauth/infrastructure/gormstore"
 	emailverificationdomain "github.com/dujiao-next/internal/modules/identity/emailverification/domain"
 	externalidentitydomain "github.com/dujiao-next/internal/modules/identity/externalidentity/domain"
 	userdomain "github.com/dujiao-next/internal/modules/identity/user/domain"
@@ -39,6 +40,7 @@ func AutoMigrate() error {
 	db := gormdb.DB
 	if err := db.AutoMigrate(
 		&admindomain.Admin{},
+		&adminchallengestore.ChallengeRecord{},
 		&userdomain.User{},
 		&externalidentitydomain.Identity{},
 		&affiliatedomain.Profile{},

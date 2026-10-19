@@ -3,7 +3,9 @@ package adminauthwiring
 import (
 	"github.com/dujiao-next/internal/app/container"
 	captchahttp "github.com/dujiao-next/internal/modules/captcha/transport/http"
+	adminchallengestore "github.com/dujiao-next/internal/modules/identity/adminauth/infrastructure/gormstore"
 	adminauthtransport "github.com/dujiao-next/internal/modules/identity/adminauth/transport/http"
+	"github.com/dujiao-next/internal/platform/database/gormdb"
 )
 
 type Handlers struct {
@@ -25,7 +27,7 @@ func New(c *container.Container) Handlers {
 		TwoFA: adminauthtransport.NewAdmin2FAHandler(
 			admin2FATOTPTransportAdapter{totp: c.TOTPService},
 			admin2FAAuthTransportAdapter{auth: c.AuthService},
-			admin2FAChallengeStoreAdapter{},
+			adminchallengestore.NewChallengeStore(gormdb.DB),
 			recorder,
 			notifier,
 		),

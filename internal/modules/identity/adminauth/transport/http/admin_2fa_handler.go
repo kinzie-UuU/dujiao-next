@@ -14,10 +14,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const (
-	challengeMaxFailures = 5
-)
-
 var (
 	ErrNotFound            = errors.New("not found")
 	ErrTOTPAlreadyEnabled  = errors.New("totp already enabled")
@@ -68,11 +64,10 @@ type AuthLoginResult struct {
 	ChallengeExpiresAt time.Time
 }
 
-// ChallengeStore 管理挑战失败计数与撤销。
+// ChallengeStore atomically reserves bounded attempts and consumes challenges.
 type ChallengeStore interface {
-	IsRevoked(ctx context.Context, jti string) bool
-	BumpFails(ctx context.Context, jti string) int64
-	Revoke(ctx context.Context, jti string)
+	Reserve(ctx context.Context, jti string) (bool, error)
+	Consume(ctx context.Context, jti string) (bool, error)
 }
 
 // AdminLoginRecorder 记录管理员登录审计日志。
@@ -321,19 +316,23 @@ func (h *Admin2FAHandler) Verify2FA(c *gin.Context) {
 		ginutil.RespondError(c, response.CodeUnauthorized, "error.totp_challenge_invalid", nil)
 		return
 	}
-	ctx := context.Background()
-	if h.challenges != nil && h.challenges.IsRevoked(ctx, claims.JTI) {
-		notifyAdminLoginFailure(c, h.notifier, "2fa_challenge")
+	if claims == nil || claims.JTI == "" || claims.AdminID == 0 || h.challenges == nil {
+		ginutil.RespondError(c, response.CodeInternal, "error.login_failed", nil)
+		return
+	}
+	ctx := c.Request.Context()
+	allowed, storeErr := h.challenges.Reserve(ctx, claims.JTI)
+	if storeErr != nil {
+		ginutil.RespondError(c, response.CodeInternal, "error.login_failed", storeErr)
+		return
+	}
+	if !allowed {
 		ginutil.RespondError(c, response.CodeUnauthorized, "error.totp_challenge_invalid", nil)
 		return
 	}
 	verifyErr := h.verifyChallengeAttempt(claims.AdminID, req.Code, req.RecoveryCode)
 	username, _ := h.auth.GetAdminUsername(claims.AdminID)
 	if verifyErr != nil {
-		failCnt := int64(0)
-		if h.challenges != nil {
-			failCnt = h.challenges.BumpFails(ctx, claims.JTI)
-		}
 		event := constants.AdminLoginEventLogin2FAVerify
 		failReason := constants.AdminLoginFailInvalidTOTPCode
 		if req.RecoveryCode != "" {
@@ -343,13 +342,6 @@ func (h *Admin2FAHandler) Verify2FA(c *gin.Context) {
 		h.writeLoginLog(c, claims.AdminID, username, event, constants.AdminLoginStatusFailed, failReason, nil)
 		if errors.Is(verifyErr, ErrTOTPCodeInvalid) || errors.Is(verifyErr, ErrTOTPRecoveryInvalid) {
 			notifyAdminLoginFailure(c, h.notifier, event)
-		}
-		if failCnt >= challengeMaxFailures {
-			if h.challenges != nil {
-				h.challenges.Revoke(ctx, claims.JTI)
-			}
-			ginutil.RespondError(c, response.CodeUnauthorized, "error.totp_too_many_attempts", nil)
-			return
 		}
 		switch {
 		case errors.Is(verifyErr, ErrTOTPCodeInvalid):
@@ -361,8 +353,14 @@ func (h *Admin2FAHandler) Verify2FA(c *gin.Context) {
 		}
 		return
 	}
-	if h.challenges != nil {
-		h.challenges.Revoke(ctx, claims.JTI)
+	consumed, storeErr := h.challenges.Consume(ctx, claims.JTI)
+	if storeErr != nil {
+		ginutil.RespondError(c, response.CodeInternal, "error.login_failed", storeErr)
+		return
+	}
+	if !consumed {
+		ginutil.RespondError(c, response.CodeUnauthorized, "error.totp_challenge_invalid", nil)
+		return
 	}
 	loginRes, err := h.auth.CompleteLoginAfter2FA(claims.AdminID)
 	if err != nil {

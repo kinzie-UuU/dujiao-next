@@ -1,7 +1,6 @@
 package adminauthwiring
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,10 +11,8 @@ import (
 	userdomain "github.com/dujiao-next/internal/modules/identity/user/domain"
 	usertotpapp "github.com/dujiao-next/internal/modules/identity/userauth/totp/application"
 
-	"github.com/dujiao-next/internal/cache"
 	auditlogapp "github.com/dujiao-next/internal/modules/auditlog/application"
 	adminauthapp "github.com/dujiao-next/internal/modules/identity/adminauth/application"
-	adminchallenge "github.com/dujiao-next/internal/modules/identity/adminauth/challenge"
 	admintotpapp "github.com/dujiao-next/internal/modules/identity/adminauth/totp/application"
 	adminauthtransport "github.com/dujiao-next/internal/modules/identity/adminauth/transport/http"
 )
@@ -161,37 +158,6 @@ func (a admin2FAAuthTransportAdapter) GetAdminUsername(adminID uint) (string, er
 		return "", nil
 	}
 	return admin.Username, nil
-}
-
-type admin2FAChallengeStoreAdapter struct{}
-
-func (admin2FAChallengeStoreAdapter) IsRevoked(ctx context.Context, jti string) bool {
-	rdb := cache.Client()
-	if rdb == nil {
-		return false
-	}
-	v, _ := rdb.Exists(ctx, adminchallenge.RevocationKey(jti)).Result()
-	return v == 1
-}
-
-func (admin2FAChallengeStoreAdapter) BumpFails(ctx context.Context, jti string) int64 {
-	rdb := cache.Client()
-	if rdb == nil {
-		return 0
-	}
-	cnt, err := rdb.Incr(ctx, adminchallenge.FailureKey(jti)).Result()
-	if err == nil && cnt == 1 {
-		_ = rdb.Expire(ctx, adminchallenge.FailureKey(jti), adminchallenge.TTL).Err()
-	}
-	return cnt
-}
-
-func (admin2FAChallengeStoreAdapter) Revoke(ctx context.Context, jti string) {
-	rdb := cache.Client()
-	if rdb == nil {
-		return
-	}
-	_ = rdb.Set(ctx, adminchallenge.RevocationKey(jti), "1", adminchallenge.TTL).Err()
 }
 
 type adminLoginRecorderAdapter struct {
