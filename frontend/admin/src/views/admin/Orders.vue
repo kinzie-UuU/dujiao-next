@@ -4,7 +4,7 @@ import { useDebounceFn } from '@vueuse/core'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
-import { collectManualPaymentEvidence } from '@/utils/manualPaymentEvidence'
+import ManualPaymentConfirmDialog from '@/components/ManualPaymentConfirmDialog.vue'
 import type { AdminOrder, AdminOrderItem, AdminPayment } from '@/api/types'
 import IdCell from '@/components/IdCell.vue'
 import { Copy } from 'lucide-vue-next'
@@ -52,6 +52,18 @@ const handleCopyOrderNo = async (orderNo: string) => {
   try { await copyText(orderNo) } catch {}
 }
 const statusEdits = reactive<Record<number, string>>({})
+const confirmPayment = ref<AdminPayment | null>(null)
+const confirmOrder = ref<AdminOrder | null>(null)
+const preparingPayment = ref(false)
+const closePaymentConfirmation = () => {
+  if (confirmOrder.value) statusEdits[confirmOrder.value.id] = confirmOrder.value.status
+  confirmPayment.value = null
+  confirmOrder.value = null
+}
+const onManualPaymentConfirmed = () => {
+  closePaymentConfirmation()
+  fetchOrders(pagination.value.page)
+}
 const showDetail = ref(false)
 const showFulfillmentModal = ref(false)
 const selectedOrder = ref<AdminOrder | null>(null)
@@ -183,19 +195,26 @@ const updateStatus = async (order: AdminOrder) => {
   const status = statusEdits[order.id]
   if (!status || status === order.status) return
   if (order.status === 'pending_payment' && status === 'paid') {
-    const response = await adminAPI.getOrder(order.id)
-    const payment = latestConfirmableManualPayment(response.data.data?.payments)
-    if (!payment) {
-      window.alert(t('admin.payments.manualConfirmUnavailable'))
+    if (preparingPayment.value || confirmPayment.value) return
+    preparingPayment.value = true
+    try {
+      const response = await adminAPI.getOrder(order.id)
+      const payment = latestConfirmableManualPayment(response.data.data?.payments)
+      if (!payment) {
+        window.alert(t('admin.payments.manualConfirmUnavailable'))
+        statusEdits[order.id] = order.status
+        return
+      }
+      const detail = await adminAPI.getPayment(payment.id)
+      confirmOrder.value = order
+      confirmPayment.value = { ...detail.data.data, order_no: order.order_no }
+    } catch (err: any) {
       statusEdits[order.id] = order.status
-      return
+      window.alert(err?.message || t('admin.payments.manualConfirmFailed'))
+    } finally {
+      preparingPayment.value = false
     }
-    const evidence = collectManualPaymentEvidence(t, payment.channel_type)
-    if (!evidence) {
-      statusEdits[order.id] = order.status
-      return
-    }
-    await adminAPI.confirmManualPayment(payment.id, evidence)
+    return
   } else {
     await adminAPI.updateOrderStatus(order.id, { status })
   }
@@ -305,6 +324,7 @@ watch(
 </script>
 
 <template>
+  <ManualPaymentConfirmDialog :payment="confirmPayment" @close="closePaymentConfirmation" @confirmed="onManualPaymentConfirmed" />
   <div class="space-y-6">
     <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div>

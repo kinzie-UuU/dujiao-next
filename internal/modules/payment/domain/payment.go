@@ -9,14 +9,17 @@ import (
 
 // Payment 支付记录
 type ManualPaymentEvidence struct {
-	TransactionID string `json:"transaction_id"`
+	// TransactionID is optional; omission records an admin attestation, not a platform receipt.
+	TransactionID string `json:"transaction_id,omitempty"`
 	PayerVerified bool   `json:"payer_verified"`
 	Amount        string `json:"amount"`
 	Currency      string `json:"currency"`
 }
 
 type Payment struct {
-	ManualReceiptKey *string `gorm:"size:180;uniqueIndex" json:"-"`
+	SettlementAmount   string  `gorm:"-" json:"settlement_amount,omitempty"`
+	SettlementCurrency string  `gorm:"-" json:"settlement_currency,omitempty"`
+	ManualReceiptKey   *string `gorm:"size:180;uniqueIndex" json:"-"`
 
 	ExceptionCode      string       `gorm:"size:64" json:"exception_code,omitempty"`
 	ID                 uint         `gorm:"primarykey" json:"id"`                                    // 主键

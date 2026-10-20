@@ -1,28 +1,17 @@
-import { afterEach, expect, it, vi } from 'vitest'
-import { collectManualPaymentEvidence } from './manualPaymentEvidence'
-const t = (key: string) => key
-afterEach(() => vi.restoreAllMocks())
-it('requires actual receipt values and explicit payer verification', () => {
-  vi.spyOn(window, 'prompt').mockReturnValueOnce('WX202610180001').mockReturnValueOnce('10.00').mockReturnValueOnce('cny')
-  vi.spyOn(window, 'confirm').mockReturnValue(true)
-  expect(collectManualPaymentEvidence(t)).toEqual({transaction_id:'WX202610180001',amount:'10.00',currency:'CNY',payer_verified:true})
+import { expect, it } from 'vitest'
+import type { AdminPayment } from '@/api/types'
+import { manualPaymentSettlement, validManualPaymentEvidence } from './manualPaymentEvidence'
+it.each(['NaN', 'Infinity', '-1', '0', '1.001', '1e3'])('rejects invalid CNY amount %s', amount => {
+  expect(validManualPaymentEvidence(amount, 'CNY', 'wechat', true)).toBe(false)
 })
-it('does not confirm when operator cancels or refuses payer verification', () => {
-  const prompt = vi.spyOn(window, 'prompt').mockReturnValue(null)
-  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
-  expect(collectManualPaymentEvidence(t)).toBeNull()
-  expect(confirm).not.toHaveBeenCalled()
-  prompt.mockReturnValueOnce('WX202610180001').mockReturnValueOnce('10').mockReturnValueOnce('CNY')
-  expect(collectManualPaymentEvidence(t)).toBeNull()
+it('requires verification and permits six decimal USDT receipts', () => {
+  expect(validManualPaymentEvidence('10', 'CNY', 'wechat', false)).toBe(false)
+  expect(validManualPaymentEvidence('10.123456', 'USDT', 'binance_usdt', true)).toBe(true)
+  expect(validManualPaymentEvidence('10.1234567', 'USDT', 'binance_usdt', true)).toBe(false)
 })
-it.each(['NaN','Infinity','-1','1.001'])('rejects invalid received amount %s', (amount) => {
-  vi.spyOn(window,'prompt').mockReturnValueOnce('WX202610180001').mockReturnValueOnce(amount).mockReturnValueOnce('CNY')
-  const confirm=vi.spyOn(window,'confirm'); vi.spyOn(window,'alert').mockImplementation(()=>{})
-  expect(collectManualPaymentEvidence(t)).toBeNull(); expect(confirm).not.toHaveBeenCalled()
-})
-
-it('accepts six-decimal actual USDT receipts only for USDT', () => {
- vi.spyOn(window,'prompt').mockReturnValueOnce('0x123456789abcdef').mockReturnValueOnce('10.123456').mockReturnValueOnce('USDT')
- vi.spyOn(window,'confirm').mockReturnValue(true)
- expect(collectManualPaymentEvidence(t,'binance_usdt')?.amount).toBe('10.123456')
+it.each([['twqr', 'TWD', '450'], ['binance_usdt', 'USDT', '14.29']])('uses locked settlement quote for %s', (channel_type, currency, amount) => {
+  const payment = { channel_type, currency: 'CNY', amount: 100, settlement_amount: amount, settlement_currency: currency } as AdminPayment
+  expect(manualPaymentSettlement(payment)).toEqual({ amount, currency })
+  delete payment.settlement_amount
+  expect(manualPaymentSettlement(payment)).toEqual({ amount: '', currency })
 })

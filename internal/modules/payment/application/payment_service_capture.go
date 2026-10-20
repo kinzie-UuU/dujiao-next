@@ -45,7 +45,7 @@ func (s *PaymentService) ConfirmManualPayment(paymentID uint, evidence ...paymen
 	}
 	proof := evidence[0]
 	transactionID := strings.TrimSpace(proof.TransactionID)
-	if !proof.PayerVerified || !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{9,127}$`).MatchString(transactionID) {
+	if !proof.PayerVerified || (transactionID != "" && !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{9,127}$`).MatchString(transactionID)) {
 		return nil, ErrPaymentInvalid
 	}
 	expectedAmount, expectedCurrency, settlementErr := manualSettlement(payment)
@@ -60,8 +60,8 @@ func (s *PaymentService) ConfirmManualPayment(paymentID uint, evidence ...paymen
 		return nil, ErrPaymentCurrencyMismatch
 	}
 	receiptKey := strings.ToLower(strings.TrimSpace(payment.ChannelType)) + ":" + strings.ToLower(transactionID)
-	// Claim the real platform receipt before capture. The nullable unique index
-	// prevents concurrent reuse across payment records; failed captures retain it.
+	// Supplied platform receipts retain cross-payment uniqueness. Without one,
+	// reserve an internal confirmation key only; never invent a platform reference.
 	if err := s.paymentRepo.WithinTransaction(func(tx paymentcontract.Transaction) error {
 		locked, err := tx.Payments().GetByIDForUpdate(paymentID)
 		if err != nil || locked == nil {
@@ -82,6 +82,16 @@ func (s *PaymentService) ConfirmManualPayment(paymentID uint, evidence ...paymen
 		}
 		if locked.Status != constants.PaymentStatusSuccess && locked.Status != constants.PaymentStatusPending && locked.Status != constants.PaymentStatusInitiated && locked.Status != constants.PaymentStatusExpired {
 			return ErrPaymentStatusInvalid
+		}
+		if strings.TrimSpace(proof.TransactionID) == "" {
+			// Preserve a previous claim on retries, including legacy receipt claims.
+			transactionID = locked.ProviderRef
+			receiptKey = fmt.Sprintf("admin-confirm:%d", paymentID)
+			if locked.ManualReceiptKey != nil {
+				receiptKey = *locked.ManualReceiptKey
+			} else {
+				transactionID = ""
+			}
 		}
 		payment = locked
 		if locked.Status == constants.PaymentStatusSuccess {
@@ -109,12 +119,14 @@ func (s *PaymentService) ConfirmManualPayment(paymentID uint, evidence ...paymen
 		if locked.Status == constants.PaymentStatusSuccess {
 			return ErrPaymentStatusInvalid
 		}
-		previous, err := tx.Payments().GetLatestByProviderRef(transactionID)
-		if err != nil {
-			return ErrPaymentUpdateFailed
-		}
-		if previous != nil && previous.ID != paymentID {
-			return ErrPaymentInvalid
+		if transactionID != "" {
+			previous, err := tx.Payments().GetLatestByProviderRef(transactionID)
+			if err != nil {
+				return ErrPaymentUpdateFailed
+			}
+			if previous != nil && previous.ID != paymentID {
+				return ErrPaymentInvalid
+			}
 		}
 		locked.ManualReceiptKey = &receiptKey
 		locked.ProviderRef = transactionID
@@ -133,6 +145,10 @@ func (s *PaymentService) ConfirmManualPayment(paymentID uint, evidence ...paymen
 		return nil, ErrPaymentStatusInvalid
 	}
 
+	verification := "manual_platform_record_review"
+	if strings.TrimSpace(proof.TransactionID) == "" {
+		verification = "admin_attestation"
+	}
 	paidAt := time.Now()
 	return s.HandleCallback(PaymentCallbackInput{
 		PaymentID:   payment.ID,
@@ -146,7 +162,7 @@ func (s *PaymentService) ConfirmManualPayment(paymentID uint, evidence ...paymen
 			"manual_confirmed_by_admin":    true,
 			"manual_confirmed_at":          paidAt.Format(time.RFC3339),
 			"payer_verified_by_admin":      true,
-			"receipt_verification":         "manual_platform_record_review",
+			"receipt_verification":         verification,
 			"verified_settlement_amount":   proof.Amount,
 			"verified_settlement_currency": proof.Currency,
 		},
@@ -356,4 +372,17 @@ func manualSettlement(payment *paymentdomain.Payment) (decimal.Decimal, string, 
 		return decimal.Zero, "", ErrPaymentAmountMismatch
 	}
 	return amount, currency, nil
+}
+
+// populateManualSettlement exposes only validated quote totals to the admin UI.
+// Raw gateway payloads remain redacted by the HTTP layer.
+func populateManualSettlement(payment *paymentdomain.Payment) {
+	payment.SettlementAmount, payment.SettlementCurrency = "", ""
+	if payment.ProviderType != manualQRProviderType {
+		return
+	}
+	amount, currency, err := manualSettlement(payment)
+	if err == nil {
+		payment.SettlementAmount, payment.SettlementCurrency = amount.String(), currency
+	}
 }

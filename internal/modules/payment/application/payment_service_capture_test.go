@@ -346,7 +346,7 @@ func TestManualSettlementUsesLockedTWDAndUSDTQuotes(t *testing.T) {
 		{"binance_usdt", "crypto_quote", "USDT", "orderAmount", "rate", "7", "14.29"},
 	} {
 		t.Run(tc.channel, func(t *testing.T) {
-			p := paymentdomain.Payment{ChannelType: tc.channel, Currency: "CNY", Amount: base}
+			p := paymentdomain.Payment{ProviderType: manualQRProviderType, ChannelType: tc.channel, Currency: "CNY", Amount: base}
 			if _, _, err := manualSettlement(&p); err == nil {
 				t.Fatal("missing settlement accepted")
 			}
@@ -356,9 +356,17 @@ func TestManualSettlementUsesLockedTWDAndUSDTQuotes(t *testing.T) {
 			if err != nil || amount.String() != tc.amount || currency != tc.currency {
 				t.Fatalf("settlement=%s %s err=%v", amount, currency, err)
 			}
+			populateManualSettlement(&p)
+			if p.SettlementAmount != tc.amount || p.SettlementCurrency != tc.currency {
+				t.Fatal("safe admin settlement missing")
+			}
 			quote["amount"] = "100"
 			if _, _, err := manualSettlement(&p); err == nil {
 				t.Fatal("incorrect conversion accepted")
+			}
+			populateManualSettlement(&p)
+			if p.SettlementAmount != "" || p.SettlementCurrency != "" {
+				t.Fatal("invalid quote exposed to admin")
 			}
 			quote["amount"] = tc.amount
 			quote[tc.ledger] = "99"
@@ -513,6 +521,93 @@ func TestManualReceiptNamespaceAcrossOrderAndRecharge(t *testing.T) {
 			if _, err := svc.ConfirmManualPayment(p.ID, bad); err == nil {
 				t.Fatalf("successful replay accepted invalid %s", field)
 			}
+		}
+	}
+}
+
+func TestManualAdminAttestationWithoutTransaction(t *testing.T) {
+	for _, rechargeCase := range []bool{false, true} {
+		t.Run(fmt.Sprintf("recharge=%v", rechargeCase), func(t *testing.T) {
+			svc, db := setupPaymentServiceWalletTest(t)
+			sqlDB, _ := db.DB()
+			sqlDB.SetMaxOpenConns(1)
+			var p paymentdomain.Payment
+			var userID uint
+			if rechargeCase {
+				payment, recharge := createWalletRechargeFixture(t, db, constants.PaymentStatusPending, constants.WalletRechargeStatusPending)
+				p, userID = *payment, recharge.UserID
+				db.Model(&p).Update("provider_type", manualQRProviderType)
+			} else {
+				order := createUnderpaidOrder(t, db, "ADMIN-ATTESTATION", 0, 88)
+				p = paymentdomain.Payment{OrderID: order.ID, ChannelID: 1, ProviderType: manualQRProviderType, ChannelType: "wechat", Amount: order.TotalAmount, Currency: "CNY", Status: constants.PaymentStatusPending}
+				if err := db.Create(&p).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			proof := receiptEvidence(t, db, p.ID)
+			proof.TransactionID = ""
+			for _, field := range []string{"payer", "amount", "currency", "hold"} {
+				bad := proof
+				switch field {
+				case "payer":
+					bad.PayerVerified = false
+				case "amount":
+					bad.Amount = "0.01"
+				case "currency":
+					bad.Currency = "USD"
+				case "hold":
+					db.Exec("UPDATE payment_risk_reservations SET status='review_required'")
+				}
+				if _, err := svc.ConfirmManualPayment(p.ID, bad); err == nil {
+					t.Fatalf("accepted invalid %s without transaction", field)
+				}
+			}
+			receiptEvidence(t, db, p.ID)
+			start, done := make(chan struct{}), make(chan error, 8)
+			for i := 0; i < 8; i++ {
+				go func() { <-start; _, err := svc.ConfirmManualPayment(p.ID, proof); done <- err }()
+			}
+			close(start)
+			for i := 0; i < 8; i++ {
+				if err := <-done; err != nil {
+					t.Fatal(err)
+				}
+			}
+			var got paymentdomain.Payment
+			db.First(&got, p.ID)
+			if got.Status != constants.PaymentStatusSuccess || got.ManualReceiptKey == nil || *got.ManualReceiptKey != fmt.Sprintf("admin-confirm:%d", p.ID) || got.ProviderRef != "" {
+				t.Fatalf("invalid attestation state: status=%s key=%v ref=%q", got.Status, got.ManualReceiptKey, got.ProviderRef)
+			}
+			if got.ProviderPayload["receipt_verification"] != "admin_attestation" {
+				t.Fatal("attestation mislabeled as platform receipt")
+			}
+			if rechargeCase && walletBalance(t, db, userID) != "88.00" {
+				t.Fatal("repeated confirmation credited wallet more than once")
+			}
+		})
+	}
+}
+
+func TestManualAdminAttestationPreservesLegacyReceipt(t *testing.T) {
+	svc, db := setupPaymentServiceWalletTest(t)
+	for i := 0; i < 2; i++ {
+		order := createUnderpaidOrder(t, db, fmt.Sprintf("LEGACY-ATTESTATION-%d", i), 0, 88)
+		p := paymentdomain.Payment{OrderID: order.ID, ChannelID: 1, ProviderType: manualQRProviderType, ChannelType: "wechat", Amount: order.TotalAmount, Currency: "CNY", Status: constants.PaymentStatusPending}
+		if err := db.Create(&p).Error; err != nil {
+			t.Fatal(err)
+		}
+		proof := receiptEvidence(t, db, p.ID)
+		originalRef := proof.TransactionID
+		if _, err := svc.ConfirmManualPayment(p.ID, proof); err != nil {
+			t.Fatal(err)
+		}
+		proof.TransactionID = ""
+		got, err := svc.ConfirmManualPayment(p.ID, proof)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.ProviderRef != originalRef || got.ManualReceiptKey == nil || *got.ManualReceiptKey != "wechat:"+originalRef {
+			t.Fatal("retry lost original platform receipt")
 		}
 	}
 }

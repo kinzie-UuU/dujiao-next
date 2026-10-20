@@ -9,8 +9,9 @@ vi.mock('vue-i18n', async (original) => ({ ...await original<typeof import('vue-
 vi.mock('@/components/ComplianceGuardWrapper.vue', () => ({ default: { template: '<div><slot /></div>' } }))
 vi.mock('@/components/ui/dialog', () => {
  const component = { template: '<div><slot /></div>' }
- return { Dialog: component, DialogScrollContent: component, DialogHeader: component, DialogTitle: component }
+ return { Dialog: { props: ['open'], template: '<div v-if="open"><slot /></div>' }, DialogScrollContent: component, DialogHeader: component, DialogTitle: component, DialogFooter: component, DialogDescription: component }
 })
+vi.mock('reka-ui', async (original) => ({ ...await original<typeof import('reka-ui')>(), DialogPortal: { template: '<div><slot /></div>' }, DialogOverlay: { template: '<div />' }, DialogContent: { template: '<div><slot /></div>' }, Primitive: { template: '<button><slot /></button>' } }))
 let app: App | undefined
 const settle = async () => { for (let i = 0; i < 5; i++) { await Promise.resolve(); await nextTick() } }
 afterEach(() => { app?.unmount(); document.body.innerHTML = ''; vi.restoreAllMocks(); vi.clearAllMocks() })
@@ -23,15 +24,21 @@ it.each([
 ])('exact payment confirmation for $provider/$status', async ({ provider, status, confirm }) => {
  const response = (data: unknown) => Promise.resolve({ data: { data } })
  api.getPayments.mockImplementation(() => response([]))
- api.getPayment.mockImplementation(() => response({ id: 17, provider_type: provider, status, exception_code: 'closed_order_payment_succeeded', currency: 'CNY', amount: 10 }))
+ api.getPayment.mockImplementation(() => response({ id: 17, provider_type: provider, status, channel_type: 'wechat', exception_code: 'closed_order_payment_succeeded', currency: 'CNY', amount: 10 }))
  api.confirmManualPayment.mockImplementation(() => response({}))
- vi.spyOn(window, 'confirm').mockReturnValue(true)
- vi.spyOn(window, 'prompt').mockReturnValueOnce('WX202610180001').mockReturnValueOnce('10.00').mockReturnValueOnce('CNY')
+
  const root = document.createElement('div'); document.body.append(root)
  app = createApp(Payments); app.mount(root); await settle()
  expect(root.textContent).toContain('admin.payments.exceptionHint')
  const button = [...root.querySelectorAll('button')].find(el => el.textContent?.trim() === 'admin.payments.manualConfirm')
  expect(Boolean(button)).toBe(confirm)
- if (button) { button.click(); await settle(); expect(api.confirmManualPayment).toHaveBeenCalledWith(17, { transaction_id: 'WX202610180001', amount: '10.00', currency: 'CNY', payer_verified: true }) }
+ if (button) {
+   button.click(); await settle()
+   expect(api.confirmManualPayment).not.toHaveBeenCalled()
+   const input = root.querySelector<HTMLInputElement>('#manual-received-amount')!; input.value = '10.00'; input.dispatchEvent(new Event('input', { bubbles: true }))
+   const checkbox = root.querySelector<HTMLInputElement>('input[type=checkbox]')!; checkbox.checked = true; checkbox.dispatchEvent(new Event('change', { bubbles: true })); await settle()
+   root.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await settle()
+   expect(api.confirmManualPayment).toHaveBeenCalledWith(17, { amount: '10.00', currency: 'CNY', payer_verified: true })
+ }
  else { expect(api.confirmManualPayment).not.toHaveBeenCalled() }
 })

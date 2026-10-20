@@ -152,7 +152,11 @@ func NewPaymentService(opts PaymentServiceOptions) *PaymentService {
 
 // ListPayments 管理端支付列表。
 func (s *PaymentService) ListPayments(filter paymentcontract.ListFilter) ([]paymentdomain.Payment, int64, error) {
-	return s.paymentRepo.ListAdmin(filter)
+	payments, total, err := s.paymentRepo.ListAdmin(filter)
+	for i := range payments {
+		populateManualSettlement(&payments[i])
+	}
+	return payments, total, err
 }
 
 // GetPayment 获取支付记录。
@@ -167,6 +171,7 @@ func (s *PaymentService) GetPayment(id uint) (*paymentdomain.Payment, error) {
 	if payment == nil {
 		return nil, ErrPaymentNotFound
 	}
+	populateManualSettlement(payment)
 	return payment, nil
 }
 

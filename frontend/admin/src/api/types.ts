@@ -439,6 +439,8 @@ export interface AdminPaymentChannel {
 
 // --- Payment ---
 export interface AdminPayment {
+  settlement_amount?: string
+  settlement_currency?: string
   exception_code?: string
   id: number
   payment_no: string

@@ -5,7 +5,7 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Copy } from 'lucide-vue-next'
 import { adminAPI } from '@/api/admin'
-import { collectManualPaymentEvidence } from '@/utils/manualPaymentEvidence'
+import ManualPaymentConfirmDialog from '@/components/ManualPaymentConfirmDialog.vue'
 import type { AdminPayment } from '@/api/types'
 import IdCell from '@/components/IdCell.vue'
 import { Button } from '@/components/ui/button'
@@ -48,8 +48,7 @@ const showDetail = ref(false)
 const detailLoading = ref(false)
 const detailError = ref('')
 const detailPayment = ref<AdminPayment | null>(null)
-const manualConfirming = ref(false)
-const manualConfirmError = ref('')
+const confirmPayment = ref<AdminPayment | null>(null)
 const exporting = ref(false)
 const exportError = ref('')
 
@@ -136,7 +135,6 @@ const openDetail = async (payment: { id: number }) => {
   showDetail.value = true
   detailLoading.value = true
   detailError.value = ''
-  manualConfirmError.value = ''
   detailPayment.value = null
   try {
     const response = await adminAPI.getPayment(payment.id)
@@ -153,24 +151,12 @@ const canConfirmManualPayment = (payment: AdminPayment | null) => {
   return payment.status === 'pending' || payment.status === 'initiated' || payment.status === 'expired'
 }
 
-const confirmManualPayment = async () => {
-  if (!canConfirmManualPayment(detailPayment.value) || manualConfirming.value) return
-  const evidence = collectManualPaymentEvidence(t, detailPayment.value?.channel_type)
-  if (!evidence) return
-  const paymentId = detailPayment.value!.id
-  manualConfirming.value = true
-  manualConfirmError.value = ''
-  try {
-    await adminAPI.confirmManualPayment(paymentId, evidence)
-    await Promise.all([
-      openDetail({ id: paymentId }),
-      fetchPayments(pagination.value.page, { preserveRows: true }),
-    ])
-  } catch (err: any) {
-    manualConfirmError.value = err?.message || t('admin.payments.manualConfirmFailed')
-  } finally {
-    manualConfirming.value = false
-  }
+const confirmManualPayment = () => {
+  if (canConfirmManualPayment(detailPayment.value)) confirmPayment.value = detailPayment.value
+}
+const onManualPaymentConfirmed = async (paymentId: number) => {
+  confirmPayment.value = null
+  await Promise.all([openDetail({ id: paymentId }), fetchPayments(pagination.value.page, { preserveRows: true })])
 }
 
 const openDetailById = async (paymentId: number) => {
@@ -316,6 +302,7 @@ watch(
 </script>
 
 <template>
+  <ManualPaymentConfirmDialog :payment="confirmPayment" @close="confirmPayment = null" @confirmed="onManualPaymentConfirmed" />
   <ComplianceGuardWrapper>
   <div class="space-y-6">
     <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -502,10 +489,9 @@ watch(
             </div>
             <div v-if="canConfirmManualPayment(detailPayment)" class="rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-950">
               <p class="mb-3">{{ t('admin.payments.manualConfirmHint') }}</p>
-              <Button :disabled="manualConfirming" @click="confirmManualPayment">
-                {{ manualConfirming ? t('admin.payments.manualConfirming') : t('admin.payments.manualConfirm') }}
+              <Button @click="confirmManualPayment">
+                {{ t('admin.payments.manualConfirm') }}
               </Button>
-              <p v-if="manualConfirmError" class="mt-3 text-sm text-destructive">{{ manualConfirmError }}</p>
             </div>
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <Card class="rounded-lg border-border bg-background shadow-none">

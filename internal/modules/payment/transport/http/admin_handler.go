@@ -269,8 +269,8 @@ func (h *AdminHandler) ConfirmAdminManualPayment(c *gin.Context) {
 	}
 
 	var evidence paymentdomain.ManualPaymentEvidence
-	if err := c.ShouldBindJSON(&evidence); err != nil || !evidence.PayerVerified || strings.TrimSpace(evidence.TransactionID) == "" || evidence.Amount == "" || evidence.Currency == "" {
-		response.Error(c, response.CodeBadRequest, "请核对平台实际到账记录、付款人与订单一致，并填写原交易单号、到账金额和币种")
+	if err := c.ShouldBindJSON(&evidence); err != nil || !evidence.PayerVerified || evidence.Amount == "" || evidence.Currency == "" {
+		response.Error(c, response.CodeBadRequest, "请核对平台实际到账记录、付款人与订单一致，并填写到账金额和币种")
 		return
 	}
 	payment, err := h.payments.ConfirmManualPayment(id, evidence)
