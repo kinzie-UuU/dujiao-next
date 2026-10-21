@@ -211,7 +211,7 @@ func (s *Service) ParseChallengeToken(tokenString string) (*ChallengeClaims, err
 		return nil, err
 	}
 	claims, ok := tok.Claims.(*ChallengeClaims)
-	if !ok || !tok.Valid {
+	if !ok || !tok.Valid || claims.AdminID == 0 || claims.JTI == "" || claims.ExpiresAt == nil {
 		return nil, errors.New("invalid challenge token")
 	}
 	if claims.Purpose != challenge.PurposeTwoFactor || claims.Typ != jwttoken.TypeTwoFactorChallenge {

@@ -1,16 +1,17 @@
 package adminauthhttp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
-	"net/http/httptest"
-	"strings"
-	"testing"
-	"time"
-
 	"github.com/dujiao-next/internal/constants"
 	admindomain "github.com/dujiao-next/internal/modules/identity/admin/domain"
 	"github.com/gin-gonic/gin"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
 )
 
 type loginNoticeSpy struct {
@@ -114,7 +115,7 @@ func TestTwoFANotificationOnlyAfterFinalLogin(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			spy := &loginNoticeSpy{}
-			h := NewAdmin2FAHandler(twoFACodeStub{err: test.codeErr}, twoFAAuthStub{err: test.loginErr}, nil, nil, spy)
+			h := NewAdmin2FAHandler(twoFACodeStub{err: test.codeErr}, twoFAAuthStub{err: test.loginErr}, testChallengeStore(t), nil, spy)
 			c, _ := loginContext(test.body)
 			h.Verify2FA(c)
 			if len(spy.items) != test.want {
@@ -159,7 +160,7 @@ func TestFailureNoticesCoverPasswordAndTwoFAWithoutCredentials(t *testing.T) {
 			err = ErrTOTPRecoveryInvalid
 			body = `{"challenge_token":"private-challenge","recovery_code":"private-recovery"}`
 		}
-		h := NewAdmin2FAHandler(twoFACodeStub{err: err}, twoFAAuthStub{}, nil, nil, spy)
+		h := NewAdmin2FAHandler(twoFACodeStub{err: err}, twoFAAuthStub{}, testChallengeStore(t), nil, spy)
 		c, _ := loginContext(body)
 		h.Verify2FA(c)
 		if len(spy.failures) != 1 || spy.failures[0].ClientIP != "203.0.113.7" {
@@ -207,5 +208,108 @@ func TestEnable2FAReissuesCurrentSession(t *testing.T) {
 	}
 	if body.Data.Token != finalLoginResult().Token || len(body.Data.RecoveryCodes) != 1 {
 		t.Fatalf("session/recovery response: %s", w.Body.String())
+	}
+}
+
+func TestMFAMissingStoreMustNotIssueSession(t *testing.T) {
+	h := NewAdmin2FAHandler(twoFACodeStub{}, twoFAAuthStub{}, nil, nil)
+	c, w := loginContext(`{"challenge_token":"valid-test-challenge","code":"123456"}`)
+	h.Verify2FA(c)
+	if strings.Contains(w.Body.String(), "private-session-token") {
+		t.Fatal("MFA issued a session without challenge replay protection")
+	}
+}
+
+type memoryChallengeStore struct {
+	mu       sync.Mutex
+	attempts map[string]int
+	used     map[string]bool
+}
+
+func testChallengeStore(t *testing.T) ChallengeStore {
+	t.Helper()
+	return &memoryChallengeStore{attempts: map[string]int{}, used: map[string]bool{}}
+}
+func (s *memoryChallengeStore) Reserve(_ context.Context, jti string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.used[jti] || s.attempts[jti] >= 5 {
+		return false, nil
+	}
+	s.attempts[jti]++
+	return true, nil
+}
+func (s *memoryChallengeStore) Consume(_ context.Context, jti string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.used[jti] || s.attempts[jti] == 0 {
+		return false, nil
+	}
+	s.used[jti] = true
+	return true, nil
+}
+
+type brokenChallengeStore struct{ consume bool }
+
+func (s brokenChallengeStore) Reserve(context.Context, string) (bool, error) {
+	if s.consume {
+		return true, nil
+	}
+	return false, errors.New("store offline")
+}
+func (s brokenChallengeStore) Consume(context.Context, string) (bool, error) {
+	return false, errors.New("store offline")
+}
+func TestMFAStorageErrorsNeverIssueSession(t *testing.T) {
+	for _, consume := range []bool{false, true} {
+		h := NewAdmin2FAHandler(twoFACodeStub{}, twoFAAuthStub{}, brokenChallengeStore{consume}, nil)
+		c, w := loginContext(`{"challenge_token":"test","code":"123456"}`)
+		h.Verify2FA(c)
+		if strings.Contains(w.Body.String(), "private-session-token") {
+			t.Fatal("store error issued a session")
+		}
+	}
+}
+func TestMFAFiveAttemptsAndNewChallenge(t *testing.T) {
+	s := testChallengeStore(t)
+	h := NewAdmin2FAHandler(twoFACodeStub{err: ErrTOTPCodeInvalid}, twoFAAuthStub{}, s, nil)
+	for i := 0; i < 5; i++ {
+		c, w := loginContext(`{"challenge_token":"test","code":"bad"}`)
+		h.Verify2FA(c)
+		if strings.Contains(w.Body.String(), "private-session-token") {
+			t.Fatal("invalid code accepted")
+		}
+	}
+	h = NewAdmin2FAHandler(twoFACodeStub{}, twoFAAuthStub{}, s, nil)
+	c, w := loginContext(`{"challenge_token":"test","code":"123456"}`)
+	h.Verify2FA(c)
+	if strings.Contains(w.Body.String(), "private-session-token") {
+		t.Fatal("sixth attempt accepted")
+	}
+	if ok, err := s.Reserve(context.Background(), "new-challenge"); err != nil || !ok {
+		t.Fatal("account locked")
+	}
+}
+func TestMFAConcurrentSuccessOnlyOneSession(t *testing.T) {
+	h := NewAdmin2FAHandler(twoFACodeStub{}, twoFAAuthStub{}, testChallengeStore(t), nil)
+	var mu sync.Mutex
+	count := 0
+	var wg sync.WaitGroup
+	for i := 0; i < 12; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c, w := loginContext(`{"challenge_token":"test","code":"123456"}`)
+			h.Verify2FA(c)
+			if strings.Contains(w.Body.String(), "private-session-token") {
+				mu.Lock()
+				count++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if count != 1 {
+		t.Fatalf("sessions=%d", count)
 	}
 }
