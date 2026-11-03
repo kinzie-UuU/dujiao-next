@@ -8,6 +8,7 @@ import (
 	"github.com/dujiao-next/internal/config"
 	"github.com/dujiao-next/internal/constants"
 	procurementcontract "github.com/dujiao-next/internal/modules/procurement/contract"
+	procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
 	settingsapp "github.com/dujiao-next/internal/modules/settings/application"
 	"github.com/dujiao-next/internal/queue"
 	"github.com/dujiao-next/internal/shared/jsonmap"
@@ -59,8 +60,8 @@ type lifecycleFulfillmentRecord struct {
 	OrderID       uint           `gorm:"uniqueIndex;not null"`
 	Type          string         `gorm:"not null"`
 	Status        string         `gorm:"not null"`
-	Payload       string         `gorm:"type:text"`
-	LogisticsJSON jsonmap.JSON   `gorm:"type:json"`
+	Payload       string         `gorm:"serializer:secure_string;type:text"`
+	LogisticsJSON jsonmap.JSON   `gorm:"serializer:secure_json;type:json"`
 	DeliveredAt   *time.Time     `gorm:"index"`
 	CreatedAt     time.Time      `gorm:"index"`
 	UpdatedAt     time.Time      `gorm:"index"`
@@ -88,29 +89,46 @@ func (s *Store) NewLifecycle(
 	return NewLifecycle(s.db, queueClient, settings, defaultEmailConfig)
 }
 
-func (l *Lifecycle) CreateUpstreamFulfillment(orderID uint, fulfillment *procurementcontract.Fulfillment, now time.Time) error {
-	deliveredAt := fulfillment.DeliveredAt
-	if deliveredAt == nil {
-		deliveredAt = &now
-	}
-	return l.db.Transaction(func(tx *gorm.DB) error {
-		var existing lifecycleFulfillmentRecord
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("order_id = ?", orderID).
-			First(&existing).Error
-		if err == nil {
-			return nil
+// CompleteUpstreamDelivery publishes credentials and advances both order states in
+// the same transaction. A late or competing callback cannot expose an unpaid
+// or canceled order's delivery, even if its procurement is still accepted.
+func (l *Lifecycle) CompleteUpstreamDelivery(order *procurementdomain.Order, fulfillment *procurementcontract.Fulfillment, now time.Time) (bool, error) {
+	stale := errors.New("delivery state changed")
+	err := l.db.Transaction(func(tx *gorm.DB) error {
+		local := tx.Model(&lifecycleOrderRecord{}).Where("id = ? AND status IN ?", order.LocalOrderID, []string{constants.OrderStatusPaid, constants.OrderStatusFulfilling}).Updates(map[string]interface{}{"status": constants.OrderStatusDelivered, "updated_at": now})
+		if local.Error != nil {
+			return local.Error
 		}
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
+		if local.RowsAffected != 1 {
+			return stale
+		}
+		updates := map[string]interface{}{"updated_at": now}
+		if fulfillment != nil {
+			updates["upstream_payload"] = fulfillment.Payload
+		}
+		changed, err := New(tx).UpdateStatus(order.ID, order.Status, constants.ProcurementStatusFulfilled, updates)
+		if err != nil {
 			return err
 		}
-		return tx.Create(&lifecycleFulfillmentRecord{
-			OrderID: orderID, Type: constants.FulfillmentTypeUpstream,
-			Status: constants.FulfillmentStatusDelivered, Payload: fulfillment.Payload,
-			LogisticsJSON: fulfillment.DeliveryData, DeliveredAt: deliveredAt,
-			CreatedAt: now, UpdatedAt: now,
+		if !changed {
+			return stale
+		}
+		if fulfillment == nil {
+			return nil
+		}
+		deliveredAt := fulfillment.DeliveredAt
+		if deliveredAt == nil {
+			deliveredAt = &now
+		}
+		return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "order_id"}}, DoNothing: true}).Create(&lifecycleFulfillmentRecord{
+			OrderID: order.LocalOrderID, Type: constants.FulfillmentTypeUpstream, Status: constants.FulfillmentStatusDelivered, Payload: fulfillment.Payload,
+			LogisticsJSON: fulfillment.DeliveryData, DeliveredAt: deliveredAt, CreatedAt: now, UpdatedAt: now,
 		}).Error
 	})
+	if errors.Is(err, stale) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 func (l *Lifecycle) SyncParentStatus(parentID uint, now time.Time) (string, error) {

@@ -195,6 +195,7 @@ type newzoeOrderResponse struct {
 	Order struct {
 		ID, Status, Amount, Currency string
 		Quantity                     int
+		PaymentReceived              bool `json:"payment_received"`
 	}
 }
 
@@ -246,6 +247,9 @@ func (a *newzoeAdapter) GetOrderByNumber(ctx context.Context, orderNo string) (*
 		detail.Status = "failed"
 		return detail, nil
 	case "completed":
+		if !order.PaymentReceived {
+			return nil, errors.New("Newzoe completed order lacks payment confirmation")
+		}
 	default:
 		return nil, errors.New("unknown Newzoe order status")
 	}
