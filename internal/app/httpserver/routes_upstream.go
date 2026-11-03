@@ -19,8 +19,9 @@ func registerUpstreamRoutes(
 ) {
 	// 上游 API（本站作为 B 站点，暴露给下游 A 调用）
 	upstreamAPI := apiV1.Group("/upstream")
-	upstreamAPI.Use(middleware.RateLimitMiddleware(redisClient, upstreamAPIRule, middleware.KeyByUpstreamApiKey))
+	upstreamAPI.Use(middleware.RateLimitMiddleware(redisClient, upstreamAPIRule.SourceIPCeiling(), middleware.KeyByIP))
 	upstreamAPI.Use(middleware.UpstreamAPIAuthMiddleware(c.ApiCredentialRepo))
+	upstreamAPI.Use(middleware.RateLimitMiddleware(redisClient, upstreamAPIRule, middleware.KeyByUpstreamCredentialAndIP))
 	upstreamtransport.RegisterAuthenticatedRoutes(upstreamAPI, upstreamHandler)
 
 	// 上游回调接收（本站作为 A 站点，接收 B 的回调）
