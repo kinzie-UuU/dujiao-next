@@ -247,24 +247,20 @@ func KeyByUserIDAndIP(c *gin.Context) string {
 	return fmt.Sprintf("%v|%s", userID, c.ClientIP())
 }
 
-// KeyByIPAndHeader 以 "IP|header 值" 作为限流 key。
-// 限流位于鉴权之前，header 未经校验，因此计数必须同时绑定来源 IP。
-func KeyByIPAndHeader(header string) RateLimitKeyFunc {
-	return func(c *gin.Context) string {
-		value := c.GetHeader(header)
-		if len(value) > 128 {
-			value = value[:128]
-		}
-		if value == "" {
-			return c.ClientIP()
-		}
-		return c.ClientIP() + "|" + value
-	}
+// SourceIPCeiling bounds unauthenticated requests before credential lookup.
+// Allow two clients behind one address to use their individual quotas.
+func (rule RateLimitRule) SourceIPCeiling() RateLimitRule {
+	rule.Prefix += ":source_ip"
+	rule.MaxRequests *= 2
+	return rule
 }
 
-// KeyByUpstreamApiKey 使用 "IP|上游 API Key" 作为限流 key
-func KeyByUpstreamApiKey(c *gin.Context) string {
-	return KeyByIPAndHeader("Dujiao-Next-Api-Key")(c)
+func KeyByUpstreamCredentialAndIP(c *gin.Context) string {
+	return fmt.Sprintf("%s|%d", c.ClientIP(), c.GetUint(upstreamCredentialIDKey))
+}
+
+func KeyByChannelClientAndIP(c *gin.Context) string {
+	return fmt.Sprintf("%s|%d", c.ClientIP(), c.GetUint(channelClientIDKey))
 }
 
 // KeyByIPAndJSONField 使用 IP + JSON 字段作为限流 key

@@ -4,20 +4,30 @@ import (
 	settingsintegration "github.com/dujiao-next/internal/modules/settings/schema/integration"
 	"github.com/gin-gonic/gin"
 	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
-func TestUpstreamRateKeyIsBoundToSourceIP(t *testing.T) {
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest("GET", "/", nil)
-	c.Request.RemoteAddr = "192.0.2.1:1234"
-	c.Request.Header.Set("Dujiao-Next-Api-Key", strings.Repeat("k", 200))
-	first := KeyByUpstreamApiKey(c)
-	c.Request.RemoteAddr = "192.0.2.2:1234"
-	second := KeyByUpstreamApiKey(c)
-	if first == second || !strings.HasPrefix(first, "192.0.2.1|") || len(first) != len("192.0.2.1|")+128 {
-		t.Fatalf("keys %q %q", first, second)
+func TestAuthenticatedRateKeysUseIdentityAndSourceIP(t *testing.T) {
+	for _, tc := range []struct {
+		contextKey string
+		key        RateLimitKeyFunc
+	}{
+		{upstreamCredentialIDKey, KeyByUpstreamCredentialAndIP}, {channelClientIDKey, KeyByChannelClientAndIP},
+	} {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest("GET", "/", nil)
+		c.Request.RemoteAddr = "192.0.2.1:1234"
+		c.Set(tc.contextKey, uint(1))
+		first := tc.key(c)
+		c.Set(tc.contextKey, uint(2))
+		if first == tc.key(c) {
+			t.Fatal("different authenticated clients share a credential quota")
+		}
+		c.Set(tc.contextKey, uint(1))
+		c.Request.RemoteAddr = "192.0.2.2:1234"
+		if first == tc.key(c) {
+			t.Fatal("different source IPs share a credential quota")
+		}
 	}
 }
 

@@ -60,7 +60,7 @@ func (h *Handler) HandleCallback(c *gin.Context) {
 	// 根据 api_key 查找对应的站点连接
 	conn, err := h.Connections.GetByApiKey(apiKey)
 	if err != nil {
-		logger.Errorw("upstream_callback_lookup_connection_failed", "api_key", apiKey, "error", err)
+		logger.Errorw("upstream_callback_lookup_connection_failed", "error", err)
 		c.JSON(http.StatusOK, gin.H{"ok": false, "message": "internal error"})
 		return
 	}
@@ -93,7 +93,7 @@ func (h *Handler) HandleCallback(c *gin.Context) {
 	}
 
 	if !upstreamadapter.Verify(apiSecret, "POST", "/api/v1/upstream/callback", signature, timestamp, body) {
-		logger.Warnw("upstream_callback_signature_invalid", "api_key", apiKey)
+		logger.Warnw("upstream_callback_signature_invalid", "connection_id", conn.ID)
 		c.JSON(http.StatusOK, gin.H{"ok": false, "message": "signature verification failed"})
 		return
 	}
@@ -132,7 +132,6 @@ func (h *Handler) HandleCallback(c *gin.Context) {
 	if procOrder.ConnectionID != conn.ID ||
 		(procOrder.UpstreamOrderID != 0 && payload.OrderID != procOrder.UpstreamOrderID) {
 		logger.Warnw("upstream_callback_ownership_mismatch",
-			"api_key", apiKey,
 			"connection_id", conn.ID,
 			"procurement_connection_id", procOrder.ConnectionID,
 			"downstream_order_no", payload.DownstreamOrderNo,
