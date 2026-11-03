@@ -411,6 +411,7 @@ const (
 // 对接协议类型常量
 const (
 	ConnectionProtocolDujiaoNext = "dujiao-next"
+	ConnectionProtocolNewzoe     = "newzoe"
 )
 
 // API 凭证状态常量

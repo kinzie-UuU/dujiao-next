@@ -225,7 +225,7 @@ func (s *Service) fillUpstreamRefundRecordsForProcurementOrder(order *procuremen
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	detail, err := connection.GetOrder(ctx, order.UpstreamOrderID)
+	detail, err := connection.GetOrder(ctx, order.UpstreamOrderID, order.UpstreamOrderNo)
 	if err != nil || detail == nil {
 		return
 	}

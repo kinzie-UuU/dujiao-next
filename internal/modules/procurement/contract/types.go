@@ -28,12 +28,13 @@ type Fulfillment struct {
 }
 
 type CreateOrderRequest struct {
-	SKUID             uint
-	Quantity          int
-	ManualFormData    jsonmap.JSON
-	DownstreamOrderNo string
-	TraceID           string
-	CallbackURL       string
+	ProcurementCreatedAt time.Time
+	SKUID                uint
+	Quantity             int
+	ManualFormData       jsonmap.JSON
+	DownstreamOrderNo    string
+	TraceID              string
+	CallbackURL          string
 }
 
 type CreateOrderResult struct {
@@ -63,7 +64,7 @@ type UpstreamConnection interface {
 	RetryMax() int
 	RetryIntervals() string
 	CreateOrder(ctx context.Context, request CreateOrderRequest) (*CreateOrderResult, error)
-	GetOrder(ctx context.Context, orderID uint) (*UpstreamOrder, error)
+	GetOrder(ctx context.Context, orderID uint, orderNo string) (*UpstreamOrder, error)
 	CancelOrder(ctx context.Context, orderID uint) error
 }
 

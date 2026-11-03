@@ -47,7 +47,7 @@ func (s *Service) PollUpstreamStatus(procurementOrderID uint) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	detail, err := connection.GetOrder(ctx, procOrder.UpstreamOrderID)
+	detail, err := connection.GetOrder(ctx, procOrder.UpstreamOrderID, procOrder.UpstreamOrderNo)
 	if err != nil {
 		logger.Warnw("procurement_poll_status_error",
 			"procurement_order_id", procOrder.ID,
@@ -62,6 +62,9 @@ func (s *Service) PollUpstreamStatus(procurementOrderID uint) error {
 	switch mappedStatus {
 	case "delivered":
 		return s.HandleUpstreamCallback(procOrder.ID, mappedStatus, detail.Fulfillment)
+	case "failed":
+		s.rejectProcurement(procOrder, "upstream delivery failed; reconcile the paid order")
+		return nil
 	case "canceled":
 		return s.HandleUpstreamCallback(procOrder.ID, mappedStatus, nil)
 	case "refunded", "partially_refunded":
@@ -124,7 +127,7 @@ func (s *Service) SyncAcceptedOrders() {
 
 	for i := range orders {
 		procOrder := &orders[i]
-		if procOrder.UpstreamOrderID == 0 {
+		if procOrder.UpstreamOrderID == 0 && procOrder.UpstreamOrderNo == "" {
 			continue
 		}
 
@@ -134,7 +137,7 @@ func (s *Service) SyncAcceptedOrders() {
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		detail, err := connection.GetOrder(ctx, procOrder.UpstreamOrderID)
+		detail, err := connection.GetOrder(ctx, procOrder.UpstreamOrderID, procOrder.UpstreamOrderNo)
 		cancel()
 
 		if err != nil {
@@ -159,6 +162,8 @@ func (s *Service) SyncAcceptedOrders() {
 					"procurement_order_id", procOrder.ID,
 				)
 			}
+		case "failed":
+			s.rejectProcurement(procOrder, "upstream delivery failed; reconcile the paid order")
 		case "canceled":
 			_ = s.HandleUpstreamCallback(procOrder.ID, mappedStatus, nil)
 			logger.Infow("procurement_sync_accepted_canceled",
