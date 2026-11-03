@@ -1,7 +1,9 @@
 package procurement_test
 
 import (
+	"errors"
 	"testing"
+	"time"
 
 	mappingdomain "github.com/dujiao-next/internal/modules/catalog/mapping/domain"
 
@@ -49,5 +51,49 @@ func TestCreateForOrder_IdempotentSkipsDuplicate(t *testing.T) {
 	err := svc.CreateForOrder(order.ID)
 	if err != ErrExists {
 		t.Errorf("expected ErrExists on duplicate, got: %v", err)
+	}
+}
+
+type failingSubmissionQueue struct {
+	err error
+	ids []uint
+}
+
+func (q *failingSubmissionQueue) EnqueueSubmit(id uint) error {
+	q.ids = append(q.ids, id)
+	return q.err
+}
+func (q *failingSubmissionQueue) EnqueuePoll(uint, time.Duration) error { return nil }
+
+func TestQueueOutageAllowsRetryOfSameProcurement(t *testing.T) {
+	db := setupProcurementTestDB(t)
+	order := createProcTestOrder(t, db, "PROC-QUEUE-OUTAGE", constants.OrderStatusPaid, constants.FulfillmentTypeUpstream)
+	if err := db.Create(&mappingdomain.Mapping{ConnectionID: 1, LocalProductID: 1, UpstreamProductID: 21, IsActive: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	q := &failingSubmissionQueue{err: errors.New("queue offline")}
+	svc := newTestProcurementServiceWithQueue(db, newTestSiteConnectionService(db, "test-key", t.TempDir()), q)
+	if err := svc.CreateForOrder(order.ID); !errors.Is(err, q.err) {
+		t.Fatalf("expected queue error, got %v", err)
+	}
+	var row ProcurementOrder
+	if err := db.Where("local_order_id = ?", order.ID).First(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != "failed" || row.ErrorMessage == "" {
+		t.Fatalf("initial enqueue failure not actionable: %q, %q", row.Status, row.ErrorMessage)
+	}
+	if err := svc.RetryManual(row.ID); !errors.Is(err, q.err) {
+		t.Fatalf("retry during outage: %v", err)
+	}
+	q.err = nil
+	if err := svc.RetryManual(row.ID); err != nil {
+		t.Fatalf("retry after recovery: %v", err)
+	}
+	if len(q.ids) != 3 || q.ids[0] != row.ID || q.ids[1] != row.ID || q.ids[2] != row.ID {
+		t.Fatalf("unexpected procurement IDs: %v", q.ids)
+	}
+	if err := db.First(&row, row.ID).Error; err != nil || row.Status != "pending" {
+		t.Fatalf("expected pending, got %q, %v", row.Status, err)
 	}
 }
