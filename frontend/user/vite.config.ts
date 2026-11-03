@@ -30,10 +30,6 @@ export default defineConfig(({ mode }) => ({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
-  // vue-i18n 9.x 需显式开启 JIT，runtime 才能解释预编译的 AST 消息（v10+ 默认开启，届时可移除）
-  define: {
-    __INTLIFY_JIT_COMPILATION__: true,
-  },
   esbuild: mode === 'production' ? { drop: ['console', 'debugger'] } : {},
   build: {
     rollupOptions: {

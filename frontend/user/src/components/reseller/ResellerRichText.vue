@@ -121,7 +121,7 @@ const btnClass = (active: boolean) =>
 const editor = useEditor({
     content: processHtmlForDisplay(props.modelValue),
     extensions: [
-        StarterKit,
+        StarterKit.configure({ link: false, underline: false, trailingNode: false }),
         Underline,
         Link.configure({ openOnClick: false, HTMLAttributes: { class: 'text-primary underline' } }),
         Image.configure({ HTMLAttributes: { class: 'max-w-full h-auto rounded-lg' }, allowBase64: false }),
@@ -146,7 +146,7 @@ watch(
         if (!editor.value) return
         const displayValue = processHtmlForDisplay(value || '')
         if (editor.value.getHTML() !== displayValue) {
-            editor.value.commands.setContent(displayValue, false)
+            editor.value.commands.setContent(displayValue, { emitUpdate: false })
         }
     },
 )
