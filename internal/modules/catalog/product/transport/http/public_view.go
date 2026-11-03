@@ -80,7 +80,7 @@ func (v *publicProductView) toProductResp() productpresenter.Product {
 		SeoMeta:              v.Product.SeoMetaJSON,
 		Title:                v.Product.TitleJSON,
 		Description:          v.Product.DescriptionJSON,
-		Content:              v.Product.ContentJSON,
+		Content:              publicProductContent(v.Product.ContentJSON),
 		PriceAmount:          v.Product.PriceAmount,
 		WholesalePrices:      productpresenter.WholesalePrices(v.Product.WholesalePrices),
 		Images:               v.Product.Images,
