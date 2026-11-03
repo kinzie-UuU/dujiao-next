@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dujiao-next/internal/constants"
 	"github.com/dujiao-next/internal/logger"
 	procurementcontract "github.com/dujiao-next/internal/modules/procurement/contract"
 	"github.com/dujiao-next/internal/shared/jsonmap"
@@ -63,7 +64,7 @@ func (h *Handler) HandleCallback(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "message": "internal error"})
 		return
 	}
-	if conn == nil || conn.Status != "active" {
+	if conn == nil || conn.Status != "active" || conn.Protocol == constants.ConnectionProtocolNewzoe {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "message": "invalid api key"})
 		return
 	}

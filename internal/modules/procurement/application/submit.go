@@ -49,6 +49,10 @@ func (s *Service) SubmitToUpstream(procurementOrderID uint) error {
 		s.rejectProcurement(procOrder, fmt.Sprintf("local order %d not found", procOrder.LocalOrderID))
 		return nil // 永久性错误，不重试
 	}
+	if localOrder.Status != constants.OrderStatusPaid && localOrder.Status != constants.OrderStatusFulfilling {
+		s.rejectProcurement(procOrder, "local order is no longer awaiting fulfillment")
+		return nil
+	}
 	if len(localOrder.Items) == 0 {
 		s.rejectProcurement(procOrder, fmt.Sprintf("local order %d has no items", localOrder.ID))
 		return nil // 永久性错误，不重试
@@ -68,11 +72,12 @@ func (s *Service) SubmitToUpstream(procurementOrderID uint) error {
 
 	// 构建上游请求
 	req := procurementcontract.CreateOrderRequest{
-		SKUID:             upstreamSKUID,
-		Quantity:          item.Quantity,
-		DownstreamOrderNo: localOrder.OrderNo,
-		TraceID:           procOrder.TraceID,
-		CallbackURL:       connection.CallbackURL(),
+		ProcurementCreatedAt: procOrder.CreatedAt,
+		SKUID:                upstreamSKUID,
+		Quantity:             item.Quantity,
+		DownstreamOrderNo:    localOrder.OrderNo,
+		TraceID:              procOrder.TraceID,
+		CallbackURL:          connection.CallbackURL(),
 	}
 
 	// 传递人工表单数据（如有）
