@@ -76,7 +76,7 @@ const presetColors = [
 const editor = useEditor({
   content: processHtmlForDisplay(props.modelValue),
   extensions: [
-    StarterKit,
+    StarterKit.configure({ link: false, underline: false, trailingNode: false }),
     TextStyle,
     Color,
     Image.extend({
@@ -142,7 +142,7 @@ watch(
       const isSame = editor.value?.getHTML() === displayValue
 
       if (!isSame && editor.value) {
-        editor.value.commands.setContent(displayValue)
+        editor.value.commands.setContent(displayValue, { emitUpdate: false })
       }
     }
   }
@@ -152,7 +152,7 @@ const toggleSourceMode = () => {
   if (isSourceMode.value) {
     if (editor.value) {
       const displayValue = processHtmlForDisplay(sourceContent.value)
-      editor.value.commands.setContent(displayValue)
+      editor.value.commands.setContent(displayValue, { emitUpdate: false })
       emit('update:modelValue', sourceContent.value)
     }
   } else {
