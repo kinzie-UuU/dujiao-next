@@ -47,10 +47,7 @@ func (s *Service) RetryManual(id uint) error {
 		"procurement_order_id", procOrder.ID,
 	)
 
-	if s.queue != nil {
-		return s.queue.EnqueueSubmit(procOrder.ID)
-	}
-	return nil
+	return s.enqueuePending(procOrder)
 }
 
 // CancelManual 手动取消采购单
