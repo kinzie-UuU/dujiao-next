@@ -35,41 +35,12 @@ func (s *Service) HandleUpstreamCallback(procurementOrderID uint, upstreamStatus
 
 	switch upstreamStatus {
 	case "delivered", "completed", "fulfilled":
-		// 先创建交付记录（幂等），再推进采购单状态；写入失败时采购单保持非终态以便上游重试
-		if fulfillment != nil && s.orderLifecycle != nil {
-			if err := s.createUpstreamFulfillment(procOrder.LocalOrderID, fulfillment, now); err != nil {
-				logger.Warnw("procurement_create_fulfillment_failed",
-					"procurement_order_id", procOrder.ID,
-					"local_order_id", procOrder.LocalOrderID,
-					"error", err,
-				)
-				return err
-			}
+		if s.orderLifecycle == nil {
+			return fmt.Errorf("upstream delivery lifecycle unavailable")
 		}
-
-		// 更新采购单状态
-		updates := map[string]interface{}{
-			"updated_at": now,
-		}
-		if fulfillment != nil {
-			updates["upstream_payload"] = fulfillment.Payload
-		}
-		fulfilled, err := s.procRepo.UpdateStatus(procOrder.ID, procOrder.Status, constants.ProcurementStatusFulfilled, updates)
+		delivered, err := s.orderLifecycle.CompleteUpstreamDelivery(procOrder, fulfillment, now)
 		if err != nil {
-			return fmt.Errorf("update procurement status: %w", err)
-		}
-		if !fulfilled {
-			// 回调与轮询/巡检并发：已由另一路径完成交付，避免重复通知
-			return nil
-		}
-
-		// 更新本地订单状态
-		delivered, updateErr := s.orderRepo.UpdateStatusIfCurrent(procOrder.LocalOrderID, []string{constants.OrderStatusPaid, constants.OrderStatusFulfilling}, constants.OrderStatusDelivered, map[string]interface{}{
-			"updated_at": now,
-		})
-
-		if updateErr != nil {
-			return fmt.Errorf("update local delivery status: %w", updateErr)
+			return fmt.Errorf("complete upstream delivery: %w", err)
 		}
 		if !delivered {
 			return nil
@@ -165,11 +136,6 @@ func (s *Service) HandleUpstreamCallback(procurementOrderID uint, upstreamStatus
 	}
 
 	return nil
-}
-
-// createUpstreamFulfillment 在本地订单上创建上游交付记录
-func (s *Service) createUpstreamFulfillment(orderID uint, uf *procurementcontract.Fulfillment, now time.Time) error {
-	return s.orderLifecycle.CreateUpstreamFulfillment(orderID, uf, now)
 }
 
 // isUpstreamTransitionAllowed 上游回调允许的采购单状态转换：

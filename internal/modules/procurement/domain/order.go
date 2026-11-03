@@ -5,6 +5,7 @@ import (
 	"time"
 
 	siteconnectiondomain "github.com/dujiao-next/internal/modules/siteconnection/domain"
+	_ "github.com/dujiao-next/internal/securestore/serializer"
 	"github.com/dujiao-next/internal/shared/jsonmap"
 	"github.com/dujiao-next/internal/shared/money"
 )
@@ -27,7 +28,7 @@ type Order struct {
 	ErrorMessage             string       `gorm:"type:text" json:"error_message,omitempty"`
 	RetryCount               int          `gorm:"not null;default:0" json:"retry_count"`
 	NextRetryAt              *time.Time   `gorm:"index" json:"next_retry_at,omitempty"`
-	UpstreamPayload          string       `gorm:"type:text" json:"upstream_payload,omitempty"`
+	UpstreamPayload          string       `gorm:"serializer:secure_string;type:text" json:"upstream_payload,omitempty"`
 	UpstreamPayloadLineCount int          `gorm:"-" json:"upstream_payload_line_count"`
 	TraceID                  string       `gorm:"type:varchar(64);index" json:"trace_id"`
 	CreatedAt                time.Time    `gorm:"index" json:"created_at"`

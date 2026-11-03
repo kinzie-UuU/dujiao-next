@@ -81,6 +81,7 @@ func TestNewzoeDelivery(t *testing.T) {
 	}{
 		{"processing", "processing", "REMOTE-09", "", "fulfilling", "", false},
 		{"failed", "failure", "REMOTE-09", "", "failed", "", false},
+		{"completed without payment", "completed", "REMOTE-09", "", "", "", true},
 		{"wrong order", "completed", "REMOTE-10", "", "", "", true},
 		{"not ready", "completed", "REMOTE-09", `{"available":false}`, "fulfilling", "", false},
 		{"partial", "completed", "REMOTE-09", `{"available":true,"status":"completed","type":"automatic","items":["a"]}`, "", "", true},
@@ -91,7 +92,7 @@ func TestNewzoeDelivery(t *testing.T) {
 			a := testNewzoeClient(t, func(r *http.Request) (*http.Response, error) {
 				switch r.URL.Path {
 				case "/api/v1/orders/REMOTE-09":
-					return newzoeTestResponse(200, fmt.Sprintf(`{"ok":true,"data":{"order":{"id":%q,"quantity":2,"status":%q}}}`, tc.id, tc.status)), nil
+					return newzoeTestResponse(200, fmt.Sprintf(`{"ok":true,"data":{"order":{"id":%q,"quantity":2,"status":%q,"payment_received":%t}}}`, tc.id, tc.status, tc.name != "completed without payment")), nil
 				case "/api/v1/orders/REMOTE-09/delivery":
 					if tc.delivery != "" {
 						return newzoeTestResponse(200, `{"ok":true,"data":{"delivery":`+tc.delivery+`}}`), nil

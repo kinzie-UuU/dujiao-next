@@ -6,13 +6,15 @@ import (
 
 	cardsecretdomain "github.com/dujiao-next/internal/modules/cardsecret/domain"
 	fulfillmentdomain "github.com/dujiao-next/internal/modules/fulfillment/domain"
+	procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
 	securestoreserializer "github.com/dujiao-next/internal/securestore/serializer"
 	"gorm.io/gorm"
 )
 
 type BackfillResult struct {
-	CardSecrets  int
-	Fulfillments int
+	CardSecrets         int
+	Fulfillments        int
+	ProcurementPayloads int
 }
 
 // Backfill encrypts legacy plaintext values in one database transaction.
@@ -72,6 +74,23 @@ func Backfill(db *gorm.DB) (BackfillResult, error) {
 				return err
 			}
 			result.Fulfillments++
+		}
+		var rawProcurements []struct {
+			ID              uint
+			UpstreamPayload string
+		}
+		if err := tx.Table("procurement_orders").Select("id", "upstream_payload").Where("upstream_payload <> ''").Find(&rawProcurements).Error; err != nil {
+			return err
+		}
+		for _, raw := range rawProcurements {
+			if securestoreserializer.IsEncryptedString(raw.UpstreamPayload) {
+				continue
+			}
+			item := procurementdomain.Order{ID: raw.ID, UpstreamPayload: raw.UpstreamPayload}
+			if err := tx.Model(&item).Select("UpstreamPayload").UpdateColumns(&item).Error; err != nil {
+				return err
+			}
+			result.ProcurementPayloads++
 		}
 		return nil
 	})

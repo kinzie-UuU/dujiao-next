@@ -12,6 +12,7 @@ import (
 	"github.com/dujiao-next/internal/constants"
 	procurementcontract "github.com/dujiao-next/internal/modules/procurement/contract"
 	procurementgormstore "github.com/dujiao-next/internal/modules/procurement/infrastructure/gormstore"
+	securestoreserializer "github.com/dujiao-next/internal/securestore/serializer"
 )
 
 type procurementCallbackStatusFixture struct {
@@ -264,5 +265,49 @@ func TestProcurementLocalStatusCannotOverwriteTerminalOrder(t *testing.T) {
 				t.Fatalf("terminal order changed: %s %v", reloaded.Status, err)
 			}
 		})
+	}
+}
+
+func TestLateUpstreamDeliveryCannotPublishSecretsToIneligibleOrder(t *testing.T) {
+	for _, status := range []string{constants.OrderStatusPendingPayment, constants.OrderStatusCanceled, constants.OrderStatusRefunded, constants.OrderStatusPartiallyRefunded} {
+		t.Run(status, func(t *testing.T) {
+			db := setupProcurementTestDB(t)
+			order := createProcTestOrder(t, db, "SEC-LATE-"+status, status, constants.FulfillmentTypeUpstream)
+			proc := createTestProcurementOrder(t, db, 1, order.ID, order.OrderNo, constants.ProcurementStatusAccepted)
+			svc := newTestProcurementService(db, newTestSiteConnectionService(db, "test-key", t.TempDir()))
+			_ = svc.HandleUpstreamCallback(proc.ID, "delivered", &procurementcontract.Fulfillment{Payload: "test-only-secret"})
+			var count int64
+			if err := db.Model(&fulfillmentdomain.Fulfillment{}).Where("order_id = ?", order.ID).Count(&count).Error; err != nil || count != 0 {
+				t.Fatalf("ineligible buyer has fulfillment: count=%d err=%v", count, err)
+			}
+			var result ProcurementOrder
+			if err := db.First(&result, proc.ID).Error; err != nil || result.UpstreamPayload != "" || result.Status == constants.ProcurementStatusFulfilled {
+				t.Fatal("late delivery persisted credential or marked procurement fulfilled")
+			}
+		})
+	}
+}
+func TestUpstreamCredentialsEncryptedInBothOrderRecords(t *testing.T) {
+	if err := securestoreserializer.Configure("test-only-encryption-key"); err != nil {
+		t.Fatal(err)
+	}
+	db := setupProcurementTestDB(t)
+	order := createProcTestOrder(t, db, "SEC-PAID", constants.OrderStatusPaid, constants.FulfillmentTypeUpstream)
+	proc := createTestProcurementOrder(t, db, 1, order.ID, order.OrderNo, constants.ProcurementStatusAccepted)
+	svc := newTestProcurementService(db, newTestSiteConnectionService(db, "test-key", t.TempDir()))
+	f := &procurementcontract.Fulfillment{Payload: "test-only-secret"}
+	if err := svc.HandleUpstreamCallback(proc.ID, "delivered", f); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{"SELECT payload FROM fulfillments WHERE order_id = ?", "SELECT upstream_payload FROM procurement_orders WHERE local_order_id = ?"} {
+		var raw string
+		if err := db.Raw(q, order.ID).Scan(&raw).Error; err != nil || !securestoreserializer.IsEncryptedString(raw) {
+			t.Errorf("database copy not protected: %s", q)
+		}
+	}
+	var record fulfillmentdomain.Fulfillment
+	saved, err := svc.GetByLocalOrderNo(order.OrderNo)
+	if err != nil || saved.UpstreamPayload != f.Payload || db.Where("order_id=?", order.ID).First(&record).Error != nil || record.Payload != f.Payload {
+		t.Fatal("authorized reads did not round trip")
 	}
 }

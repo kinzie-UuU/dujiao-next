@@ -43,7 +43,7 @@ type Enqueuer interface {
 }
 
 type OrderLifecycle interface {
-	CreateUpstreamFulfillment(orderID uint, fulfillment *Fulfillment, now time.Time) error
+	CompleteUpstreamDelivery(order *procurementdomain.Order, fulfillment *Fulfillment, now time.Time) (bool, error)
 	SyncParentStatus(parentID uint, now time.Time) (string, error)
 	EnqueueStatusEmail(orderID uint, status string) (skipped bool, err error)
 }
