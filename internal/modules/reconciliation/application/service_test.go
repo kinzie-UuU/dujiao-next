@@ -69,7 +69,7 @@ type upstreamReaderStub struct {
 	details map[uint]reconciliationcontract.UpstreamOrder
 }
 
-func (s *upstreamReaderStub) Get(_ context.Context, orderID uint) (*reconciliationcontract.UpstreamOrder, error) {
+func (s *upstreamReaderStub) Get(_ context.Context, orderID uint, _ string) (*reconciliationcontract.UpstreamOrder, error) {
 	s.calls++
 	detail := s.details[orderID]
 	return &detail, nil

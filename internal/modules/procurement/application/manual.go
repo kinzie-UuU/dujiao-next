@@ -20,6 +20,10 @@ func (s *Service) RetryManual(id uint) error {
 		return procurementcontract.ErrNotFound
 	}
 
+	if procOrder.UpstreamOrderID == 0 && procOrder.UpstreamOrderNo != "" {
+		// This supplier has already accepted and charged this order.
+		return procurementcontract.ErrStatusInvalid
+	}
 	if procOrder.Status != "failed" && procOrder.Status != "rejected" {
 		return procurementcontract.ErrStatusInvalid
 	}
@@ -69,6 +73,10 @@ func (s *Service) CancelManual(id uint) error {
 	}
 
 	// 已被上游接受：尝试取消上游订单
+	if procOrder.Status == "accepted" && procOrder.UpstreamOrderID == 0 && procOrder.UpstreamOrderNo != "" {
+		// Number-based NewZoe orders have no cancellation endpoint. Keep polling.
+		return procurementcontract.ErrStatusInvalid
+	}
 	if procOrder.Status == "accepted" && procOrder.UpstreamOrderID > 0 {
 		connection, err := s.connections.Open(procOrder.ConnectionID)
 		if err == nil && connection != nil {

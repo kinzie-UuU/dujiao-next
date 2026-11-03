@@ -2,6 +2,9 @@ package upstreamgateway
 
 import (
 	"context"
+	"time"
+
+	"github.com/dujiao-next/internal/constants"
 
 	procurementcontract "github.com/dujiao-next/internal/modules/procurement/contract"
 	siteconnectiondomain "github.com/dujiao-next/internal/modules/siteconnection/domain"
@@ -50,6 +53,11 @@ func (s *session) RetryMax() int          { return s.connection.RetryMax }
 func (s *session) RetryIntervals() string { return s.connection.RetryIntervals }
 
 func (s *session) CreateOrder(ctx context.Context, request procurementcontract.CreateOrderRequest) (*procurementcontract.CreateOrderResult, error) {
+	// NewZoe documents a default 24-hour idempotency window. Stop early
+	// even on manual retries if a previous request could have been charged.
+	if s.connection.Protocol == constants.ConnectionProtocolNewzoe && time.Since(request.ProcurementCreatedAt) >= 23*time.Hour {
+		return &procurementcontract.CreateOrderResult{ErrorCode: "invalid_request", ErrorMessage: "NewZoe retry window expired; reconcile the upstream account before proceeding"}, nil
+	}
 	result, err := s.adapter.CreateOrder(ctx, upstream.CreateUpstreamOrderReq{
 		SKUID: request.SKUID, Quantity: request.Quantity, ManualFormData: request.ManualFormData,
 		DownstreamOrderNo: request.DownstreamOrderNo, TraceID: request.TraceID, CallbackURL: request.CallbackURL,
@@ -64,8 +72,8 @@ func (s *session) CreateOrder(ctx context.Context, request procurementcontract.C
 	}, nil
 }
 
-func (s *session) GetOrder(ctx context.Context, orderID uint) (*procurementcontract.UpstreamOrder, error) {
-	detail, err := s.adapter.GetOrder(ctx, orderID)
+func (s *session) GetOrder(ctx context.Context, orderID uint, orderNo string) (*procurementcontract.UpstreamOrder, error) {
+	detail, err := upstream.LookupOrder(ctx, s.adapter, orderID, orderNo)
 	if err != nil {
 		return nil, err
 	}

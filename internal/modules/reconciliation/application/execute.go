@@ -28,11 +28,11 @@ func (s *Service) execute(ctx context.Context, job *reconciliationdomain.Job) er
 	skippedCount, errorCount := 0, 0
 	for index := range orders {
 		order := &orders[index]
-		if order.UpstreamOrderID == 0 {
+		if order.UpstreamOrderID == 0 && order.UpstreamOrderNo == "" {
 			skippedCount++
 			continue
 		}
-		detail, err := upstreamOrders.Get(ctx, order.UpstreamOrderID)
+		detail, err := upstreamOrders.Get(ctx, order.UpstreamOrderID, order.UpstreamOrderNo)
 		if err != nil {
 			logger.Warnw("reconciliation_get_upstream_order_failed", "job_id", job.ID,
 				"procurement_id", order.ID, "upstream_order_id", order.UpstreamOrderID, "error", err)

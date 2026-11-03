@@ -75,7 +75,7 @@ func (unit *mappingImportUoW) WithinTransaction(fn func(mappingcontract.ImportRe
 	})
 }
 
-func setupAdminHandlerTest(t *testing.T, upstreamHandler http.HandlerFunc) (*mappinghttp.AdminHandler, *gorm.DB, uint, func()) {
+func setupAdminHandlerTest(t *testing.T, protocol string, upstreamHandler http.HandlerFunc) (*mappinghttp.AdminHandler, *gorm.DB, uint, func()) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
@@ -104,8 +104,16 @@ func setupAdminHandlerTest(t *testing.T, upstreamHandler http.HandlerFunc) (*map
 		BaseURL:   server.URL,
 		ApiKey:    "test-key",
 		ApiSecret: "test-secret",
-		Protocol:  constants.ConnectionProtocolDujiaoNext,
+		Protocol:  protocol,
 		Status:    constants.ConnectionStatusActive,
+	}
+	// Newzoe only signs requests to its fixed HTTPS origin. Route those requests
+	// directly to the fixture without opening an external network connection.
+	if protocol == constants.ConnectionProtocolNewzoe {
+		conn.BaseURL = "https://shop.newzoe.cloud"
+		previous := http.DefaultTransport
+		http.DefaultTransport = fixtureTransport(upstreamHandler)
+		t.Cleanup(func() { http.DefaultTransport = previous })
 	}
 	if err := db.Create(&conn).Error; err != nil {
 		t.Fatalf("create connection failed: %v", err)
@@ -145,8 +153,74 @@ func setupAdminHandlerTest(t *testing.T, upstreamHandler http.HandlerFunc) (*map
 	return h, db, conn.ID, server.Close
 }
 
+type fixtureTransport http.HandlerFunc
+
+func (serve fixtureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	w := httptest.NewRecorder()
+	serve(w, req)
+	return w.Result(), nil
+}
+
+func TestBatchImportNewzoeCreatesThreeMappedProducts(t *testing.T) {
+	h, db, connID, cleanup := setupAdminHandlerTest(t, constants.ConnectionProtocolNewzoe, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/products" || r.Header.Get("X-Api-Signature") == "" {
+			t.Errorf("unexpected catalog request: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `{"ok":true,"data":{"products":[
+			{"id":21,"name":"Muse 1B","price":"5.00","stock":12,"max_quantity":4,"type":"automatic"},
+			{"id":22,"name":"Muse 31B","price":"8.34","stock":8,"max_quantity":2,"type":"automatic"},
+			{"id":24,"name":"Duolingo Super annual","price":"6.03","stock":5,"max_quantity":1,"type":"automatic"}
+		]}}`)
+	})
+	defer cleanup()
+
+	category := categorydomain.Category{Slug: "provider-other", NameJSON: jsonmap.JSON{"zh-CN": "其他"}, IsActive: true}
+	if err := db.Create(&category).Error; err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"connection_id":%d,"category_id":%d,"upstream_product_ids":[24,21,22]}`, connID, category.ID)
+	for _, expectedNew := range []int{3, 0} {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/admin/product-mappings/batch-import", strings.NewReader(body))
+		c.Request.Header.Set("Content-Type", "application/json")
+		h.BatchImportUpstreamProducts(c)
+		var result struct {
+			Data struct {
+				SuccessCount int `json:"success_count"`
+				Total        int
+			}
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || w.Code != http.StatusOK || result.Data.Total != 3 || result.Data.SuccessCount != expectedNew {
+			t.Fatalf("expected %d new imports: status %d body %s", expectedNew, w.Code, w.Body)
+		}
+	}
+	for _, item := range []struct {
+		id    uint
+		limit int
+	}{{21, 4}, {22, 2}, {24, 1}} {
+		var m mappingdomain.Mapping
+		if err := db.Where("connection_id = ? AND upstream_product_id = ?", connID, item.id).First(&m).Error; err != nil {
+			t.Fatal(err)
+		}
+		var product productdomain.Product
+		if err := db.First(&product, m.LocalProductID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if !m.IsActive || m.UpstreamFulfillmentType != constants.FulfillmentTypeAuto || product.FulfillmentType != constants.FulfillmentTypeUpstream || product.IsActive || !product.IsMapped || product.CategoryID != category.ID || product.MaxPurchaseQuantity != item.limit {
+			t.Errorf("incorrect mapped product: upstream %d, fulfillment %s/%s, mapped %v, published %v, category %d, limit %d", item.id, m.UpstreamFulfillmentType, product.FulfillmentType, product.IsMapped, product.IsActive, product.CategoryID, product.MaxPurchaseQuantity)
+		}
+		var sku mappingdomain.SKUMapping
+		if err := db.Where("product_mapping_id = ?", m.ID).First(&sku).Error; err != nil || sku.UpstreamSKUID != item.id || sku.UpstreamStock <= 0 {
+			t.Errorf("missing purchasable SKU for product %d: %+v, %v", item.id, sku, err)
+		}
+	}
+}
+
 func TestBatchImportUpstreamProductsAutoCreatesCategory(t *testing.T) {
-	h, db, connID, cleanup := setupAdminHandlerTest(t, func(w http.ResponseWriter, r *http.Request) {
+	h, db, connID, cleanup := setupAdminHandlerTest(t, constants.ConnectionProtocolDujiaoNext, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/v1/upstream/categories":
@@ -213,7 +287,7 @@ func TestBatchImportUpstreamProductsAutoCreatesCategory(t *testing.T) {
 }
 
 func TestBatchImportUpstreamProductsRestoresSoftDeletedAutoCategory(t *testing.T) {
-	h, db, connID, cleanup := setupAdminHandlerTest(t, func(w http.ResponseWriter, r *http.Request) {
+	h, db, connID, cleanup := setupAdminHandlerTest(t, constants.ConnectionProtocolDujiaoNext, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/v1/upstream/categories":

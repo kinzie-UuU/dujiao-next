@@ -148,6 +148,22 @@ const closeModal = () => {
   clearErrors()
 }
 
+const newzoeOrigin = 'https://shop.newzoe.cloud'
+const applyProtocolDefaults = (protocol: unknown) => {
+  if (protocol === 'newzoe') {
+    form.base_url = newzoeOrigin
+    form.callback_url = ''
+    form.price_markup_percent = 60
+    form.price_rounding_mode = 'ceil_int'
+    form.auto_sync_price = 'true'
+  } else if (form.base_url === newzoeOrigin) {
+    form.base_url = ''
+    form.price_markup_percent = 0
+    form.price_rounding_mode = 'none'
+    form.auto_sync_price = 'false'
+  }
+}
+
 const buildPayload = () => {
   const intervals = form.retry_intervals
     .split(',')
@@ -379,9 +395,21 @@ onMounted(() => {
               <Input v-model="form.name" required :placeholder="t('siteConnections.form.namePlaceholder')" />
               <p v-if="errors.name" class="text-xs text-destructive mt-1">{{ errors.name }}</p>
             </div>
+            <div>
+              <label class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ t('siteConnections.form.protocol') }}</label>
+              <Select v-model="form.protocol" :disabled="isEditing" @update:model-value="applyProtocolDefaults">
+                <SelectTrigger class="h-9 w-full">
+                  <SelectValue :placeholder="t('siteConnections.form.protocolPlaceholder')" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="dujiao-next">dujiao-next</SelectItem>
+                  <SelectItem value="newzoe">NewZoe Shop API v1</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
             <div class="md:col-span-2">
               <label class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ t('siteConnections.form.baseUrl') }}</label>
-              <Input v-model="form.base_url" required :placeholder="t('siteConnections.form.baseUrlPlaceholder')" />
+              <Input v-model="form.base_url" :readonly="form.protocol === 'newzoe'" required :placeholder="t('siteConnections.form.baseUrlPlaceholder')" />
               <p v-if="errors.base_url" class="text-xs text-destructive mt-1">{{ errors.base_url }}</p>
             </div>
             <div>
@@ -393,18 +421,7 @@ onMounted(() => {
               <label class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ t('siteConnections.form.apiSecret') }}</label>
               <Input v-model="form.api_secret" type="password" :placeholder="t('siteConnections.form.apiSecretPlaceholder')" />
             </div>
-            <div>
-              <label class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ t('siteConnections.form.protocol') }}</label>
-              <Select v-model="form.protocol">
-                <SelectTrigger class="h-9 w-full">
-                  <SelectValue :placeholder="t('siteConnections.form.protocolPlaceholder')" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="dujiao-next">dujiao-next</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
+            <div v-if="form.protocol !== 'newzoe'">
               <label class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ t('siteConnections.form.callbackUrl') }}</label>
               <Input v-model="form.callback_url" :placeholder="t('siteConnections.form.callbackUrlPlaceholder')" />
             </div>
