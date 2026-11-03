@@ -1,8 +1,10 @@
 package application
 
 import (
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/dujiao-next/internal/constants"
 	"github.com/dujiao-next/internal/logger"
@@ -24,6 +26,7 @@ func (s *Service) CreateForOrder(orderID uint) error {
 
 	// 父订单有子订单：遍历子订单
 	if order.ParentID == nil && len(order.Children) > 0 {
+		var childErrors []error
 		for i := range order.Children {
 			child := &order.Children[i]
 			if !s.hasUpstreamItems(child) {
@@ -35,10 +38,12 @@ func (s *Service) CreateForOrder(orderID uint) error {
 					"child_order_id", child.ID,
 					"error", err,
 				)
-				return err
+				if !errors.Is(err, procurementcontract.ErrExists) {
+					childErrors = append(childErrors, err)
+				}
 			}
 		}
-		return nil
+		return errors.Join(childErrors...)
 	}
 
 	// 单订单
@@ -93,16 +98,31 @@ func (s *Service) createProcurementForSingleOrder(order *procurementdomain.Local
 		"connection_id", connectionID,
 	)
 
-	// 入队提交任务
-	if s.queue != nil {
-		if err := s.queue.EnqueueSubmit(procOrder.ID); err != nil {
-			logger.Warnw("procurement_enqueue_submit_failed",
-				"procurement_order_id", procOrder.ID,
-				"error", err,
-			)
-		}
-	}
+	return s.enqueuePending(procOrder)
+}
 
+// A failed enqueue must leave an order the operator can retry. If a worker
+// already advanced the order, keep its state instead.
+func (s *Service) enqueuePending(order *procurementdomain.Order) error {
+	if s.queue == nil {
+		return nil
+	}
+	err := s.queue.EnqueueSubmit(order.ID)
+	if err == nil {
+		return nil
+	}
+	message := fmt.Sprintf("enqueue procurement submission: %v", err)
+	failed, updateErr := s.procRepo.UpdateStatus(order.ID, constants.ProcurementStatusPending, constants.ProcurementStatusFailed, map[string]interface{}{
+		"error_message": message,
+		"updated_at":    time.Now(),
+	})
+	if updateErr != nil {
+		return errors.Join(err, updateErr)
+	}
+	if failed {
+		s.notifyProcurementFailure(order, message)
+		return err
+	}
 	return nil
 }
 
