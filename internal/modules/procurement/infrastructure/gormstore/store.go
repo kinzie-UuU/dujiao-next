@@ -2,6 +2,8 @@ package gormstore
 
 import (
 	"errors"
+	"maps"
+	"reflect"
 	"time"
 
 	orderdomain "github.com/dujiao-next/internal/modules/order/domain"
@@ -9,9 +11,11 @@ import (
 	procurementcontract "github.com/dujiao-next/internal/modules/procurement/contract"
 	procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
 	"github.com/dujiao-next/internal/modules/procurement/infrastructure/orderreader"
+	securestoreserializer "github.com/dujiao-next/internal/securestore/serializer"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"gorm.io/gorm/schema"
 )
 
 type Store struct {
@@ -65,6 +69,20 @@ func (s *Store) Create(order *procurementdomain.Order) error {
 func (s *Store) UpdateStatus(id uint, fromStatus, toStatus string, updates map[string]interface{}) (bool, error) {
 	if updates == nil {
 		updates = map[string]interface{}{}
+	}
+	// Map updates bypass GORM field serializers. Serialize the fulfillment material
+	// before it reaches the SQL driver (including refund callback updates).
+	if payload, ok := updates["upstream_payload"]; ok {
+		updates = maps.Clone(updates)
+		codec, registered := schema.GetSerializer(securestoreserializer.StringSerializerName)
+		if !registered {
+			return false, errors.New("secure string serializer unavailable")
+		}
+		value, err := codec.Value(s.db.Statement.Context, nil, reflect.Value{}, payload)
+		if err != nil {
+			return false, err
+		}
+		updates["upstream_payload"] = value
 	}
 	updates["status"] = toStatus
 	result := s.db.Model(&procurementdomain.Order{}).

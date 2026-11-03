@@ -208,7 +208,7 @@ func SetupRouter(cfg *config.Config, c *container.Container) *gin.Engine {
 		BlockSeconds:  30,
 		MessageKey:    "error.rate_limited",
 	}
-	// 渠道 API：按 IP|渠道 Key 计数，Bot 单机高频调用给足余量
+	// 渠道 API：验签前按 IP 限流，验签后按 IP 和渠道客户端 ID 计数
 	channelAPIRule := middleware.RateLimitRule{
 		Prefix:        fmt.Sprintf("%s:rate:channel_api", redisPrefix),
 		WindowSeconds: 60,

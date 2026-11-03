@@ -28,8 +28,9 @@ func registerChannelRoutes(
 ) {
 	// 渠道 API（Telegram Bot 等外部服务调用）
 	channelAPI := apiV1.Group("/channel")
-	channelAPI.Use(middleware.RateLimitMiddleware(redisClient, channelAPIRule, middleware.KeyByIPAndHeader("Dujiao-Next-Channel-Key")))
+	channelAPI.Use(middleware.RateLimitMiddleware(redisClient, channelAPIRule.SourceIPCeiling(), middleware.KeyByIP))
 	channelAPI.Use(middleware.ChannelAPIAuthMiddleware(c))
+	channelAPI.Use(middleware.RateLimitMiddleware(redisClient, channelAPIRule, middleware.KeyByChannelClientAndIP))
 	{
 		telegramtransport.RegisterChannelBotRoutes(channelAPI, channelTelegramBotHandler)
 		channeltransport.RegisterRoutes(channelAPI, channelHandler)

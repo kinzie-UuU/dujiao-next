@@ -9,6 +9,7 @@ import (
 	cardsecretdomain "github.com/dujiao-next/internal/modules/cardsecret/domain"
 	cardsecretstore "github.com/dujiao-next/internal/modules/cardsecret/infrastructure/gormstore"
 	fulfillmentdomain "github.com/dujiao-next/internal/modules/fulfillment/domain"
+	procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
 	"github.com/dujiao-next/internal/securestore"
 	"github.com/dujiao-next/internal/shared/jsonmap"
 	"github.com/glebarez/sqlite"
@@ -25,7 +26,7 @@ func TestSensitiveValuesAreEncryptedAndRemainUsable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := db.AutoMigrate(&cardsecretdomain.Secret{}, &fulfillmentdomain.Fulfillment{}); err != nil {
+	if err := db.AutoMigrate(&cardsecretdomain.Secret{}, &fulfillmentdomain.Fulfillment{}, &procurementdomain.Order{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 
@@ -73,11 +74,14 @@ func TestSensitiveValuesAreEncryptedAndRemainUsable(t *testing.T) {
 	).Error; err != nil {
 		t.Fatalf("insert legacy fulfillment: %v", err)
 	}
+	if err := db.Exec("INSERT INTO procurement_orders (id, connection_id,local_order_id, local_order_no, upstream_payload, trace_id,currency) VALUES (1,1,1,'TEST','LEGACY-UPSTREAM','TEST','CNY')").Error; err != nil {
+		t.Fatal(err)
+	}
 	result, err := securestore.Backfill(db)
 	if err != nil {
 		t.Fatalf("backfill: %v", err)
 	}
-	if result.CardSecrets != 1 || result.Fulfillments != 1 {
+	if result.CardSecrets != 1 || result.Fulfillments != 1 || result.ProcurementPayloads != 1 {
 		t.Fatalf("unexpected backfill result: %+v", result)
 	}
 
@@ -90,11 +94,16 @@ func TestSensitiveValuesAreEncryptedAndRemainUsable(t *testing.T) {
 	}
 	assertRawEncrypted(t, db, "card_secrets", legacySecret.ID, "secret", "LEGACY-CARD-004")
 
+	assertRawEncrypted(t, db, "procurement_orders", 1, "upstream_payload", "LEGACY-UPSTREAM")
+	var proc procurementdomain.Order
+	if err := db.First(&proc, 1).Error; err != nil || proc.UpstreamPayload != "LEGACY-UPSTREAM" {
+		t.Fatal("legacy procurement no longer readable")
+	}
 	second, err := securestore.Backfill(db)
 	if err != nil {
 		t.Fatalf("second backfill: %v", err)
 	}
-	if second.CardSecrets != 0 || second.Fulfillments != 0 {
+	if second.CardSecrets != 0 || second.Fulfillments != 0 || second.ProcurementPayloads != 0 {
 		t.Fatalf("backfill is not idempotent: %+v", second)
 	}
 }
