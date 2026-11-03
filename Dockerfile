@@ -29,7 +29,7 @@ RUN cd user  && pnpm run build
 
 # ---- 阶段 2：构建内嵌前端的 Go 二进制 ----
 # 版本必须 >= go.mod 的 go 指令，官方镜像默认 GOTOOLCHAIN=local 不会自动拉取更高工具链。
-FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
