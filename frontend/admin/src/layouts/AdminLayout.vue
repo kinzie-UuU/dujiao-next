@@ -995,7 +995,7 @@ onBeforeUnmount(() => {
                 <Home class="h-4 w-4" />
               </Button>
             </a>
-            <Button variant="outline" size="sm" class="gap-2" :disabled="logoutPending" @click="handleLogout">
+            <Button variant="outline" size="sm" class="gap-2" :disabled="logoutPending" :aria-label="t('admin.common.logout')" @click="handleLogout">
               <LogOut class="h-4 w-4" />
               <span class="hidden sm:inline">{{ t('admin.common.logout') }}</span>
             </Button>
