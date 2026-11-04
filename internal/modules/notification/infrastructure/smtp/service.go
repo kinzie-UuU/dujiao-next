@@ -315,19 +315,6 @@ func (s *Service) sendTextEmail(toEmail, subject, body string, brands ...mailbra
 	return s.sendSMTPMessage(addr, toEmail, []byte(msg))
 }
 
-func (s *Service) sendEmailWithAttachment(toEmail, subject, body, attachName, attachContent string, brands ...mailbrand.Brand) error {
-	if telegramidentity.IsPlaceholderEmail(toEmail) {
-		return nil
-	}
-	brand := firstMailBrand(brands)
-	from, addr, err := s.prepareSMTPEnvelope(toEmail, brand.FromName)
-	if err != nil {
-		return err
-	}
-	msg := buildEmailMessageWithAttachment(from, toEmail, subject, body, attachName, attachContent, brand.ReplyTo)
-	return s.sendSMTPMessage(addr, toEmail, []byte(msg))
-}
-
 // prepareSMTPEnvelope 校验配置与收件人，并返回发件地址与 SMTP 服务器地址。
 func (s *Service) prepareSMTPEnvelope(toEmail, fromNameOverride string) (string, string, error) {
 	if s.cfg == nil || !s.cfg.Enabled {
@@ -358,37 +345,6 @@ func (s *Service) sendSMTPMessage(addr, toEmail string, msg []byte) error {
 		return normalizeEmailSendError(sendMailWithStartTLS(addr, s.cfg.Host, s.cfg.From, recipients, msg, s.cfg.Username, s.cfg.Password))
 	}
 	return normalizeEmailSendError(sendMailPlain(addr, s.cfg.Host, s.cfg.From, recipients, msg, s.cfg.Username, s.cfg.Password))
-}
-
-func buildEmailMessageWithAttachment(from, to, subject, body, attachName, attachContent, replyTo string) string {
-	boundary := "----=_DujiaoNextBoundary_" + fmt.Sprintf("%d", len(body)+len(attachContent))
-
-	var buf bytes.Buffer
-	writeStandardHeaders(&buf, from, to, subject, replyTo)
-	buf.WriteString(fmt.Sprintf("Content-Type: multipart/mixed; boundary=\"%s\"\r\n", boundary))
-	buf.WriteString("\r\n")
-
-	// 正文部分
-	buf.WriteString(fmt.Sprintf("--%s\r\n", boundary))
-	buf.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
-	buf.WriteString("Content-Transfer-Encoding: base64\r\n")
-	buf.WriteString("\r\n")
-	buf.WriteString(base64.StdEncoding.EncodeToString([]byte(body)))
-	buf.WriteString("\r\n")
-
-	// 附件部分
-	buf.WriteString(fmt.Sprintf("--%s\r\n", boundary))
-	buf.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
-	buf.WriteString(fmt.Sprintf("Content-Disposition: attachment; filename=\"%s\"\r\n", mime.QEncoding.Encode("UTF-8", attachName)))
-	buf.WriteString("Content-Transfer-Encoding: base64\r\n")
-	buf.WriteString("\r\n")
-	buf.WriteString(base64.StdEncoding.EncodeToString([]byte(attachContent)))
-	buf.WriteString("\r\n")
-
-	// 结束边界
-	buf.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
-
-	return buf.String()
 }
 
 func buildVerifyCodeContent(code, purpose, locale string, brands ...mailbrand.Brand) (string, string) {
