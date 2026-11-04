@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
-	"strings"
 
 	downstreamcontract "github.com/dujiao-next/internal/modules/downstreamcallback/contract"
 	"github.com/dujiao-next/internal/upstream"
@@ -36,12 +37,12 @@ func NewWithHTTPClient(client *http.Client) *Client {
 func (c *Client) Send(ctx context.Context, request downstreamcontract.DeliveryRequest) error {
 	body, err := json.Marshal(request.Payload)
 	if err != nil {
-		return err
+		return errors.New("callback payload encoding failed")
 	}
 	signature := upstream.Sign(request.APISecret, http.MethodPost, signaturePath, request.Payload.Timestamp, body)
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, request.URL, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return errors.New("callback request construction failed")
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
 	httpRequest.Header.Set(upstream.HeaderApiKey, request.APIKey)
@@ -50,12 +51,16 @@ func (c *Client) Send(ctx context.Context, request downstreamcontract.DeliveryRe
 
 	response, err := c.httpClient.Do(httpRequest)
 	if err != nil {
-		return err
+		var transportError net.Error
+		if errors.As(err, &transportError) && transportError.Timeout() {
+			return errors.New("callback request timed out")
+		}
+		return errors.New("callback transport failed")
 	}
 	defer response.Body.Close()
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, 4096))
 	if readErr != nil {
-		return readErr
+		return errors.New("callback response read failed")
 	}
 	if response.StatusCode == http.StatusOK {
 		var result struct {
@@ -65,5 +70,6 @@ func (c *Client) Send(ctx context.Context, request downstreamcontract.DeliveryRe
 			return nil
 		}
 	}
-	return fmt.Errorf("callback returned %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+	// The receiver may echo delivery credentials in its response. Errors are logged.
+	return fmt.Errorf("callback returned HTTP %d without a success acknowledgement", response.StatusCode)
 }

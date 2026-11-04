@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	downstreamcontract "github.com/dujiao-next/internal/modules/downstreamcallback/contract"
 	"github.com/dujiao-next/internal/upstream"
@@ -114,5 +116,28 @@ func TestDefaultTransportDisablesProxyAndRedirects(t *testing.T) {
 	}
 	if err := client.CheckRedirect(&http.Request{}, nil); err != http.ErrUseLastResponse {
 		t.Fatalf("redirects must be rejected: %v", err)
+	}
+}
+
+func TestCallbackErrorDoesNotExposeResponseBody(t *testing.T) {
+	const secret = "customer-delivery-password-should-not-enter-logs"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(secret))
+	}))
+	defer server.Close()
+	err := NewWithHTTPClient(server.Client()).Send(context.Background(), downstreamcontract.DeliveryRequest{URL: server.URL})
+	if err == nil || strings.Contains(err.Error(), secret) {
+		t.Fatalf("unsafe callback error: %v", err)
+	}
+}
+
+func TestCallbackErrorsDoNotExposeURLCredentials(t *testing.T) {
+	for _, address := range []string{"http://127.0.0.1:1/callback?token=private-token", "http://invalid%host/callback?token=private-token"} {
+		client := NewWithHTTPClient(&http.Client{Timeout: time.Second})
+		err := client.Send(context.Background(), downstreamcontract.DeliveryRequest{URL: address})
+		if err == nil || strings.Contains(err.Error(), "private-token") || strings.Contains(err.Error(), address) {
+			t.Fatalf("callback URL leaked or failure missing: %v", err)
+		}
 	}
 }
