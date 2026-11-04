@@ -479,3 +479,9 @@ func NormalizeObject(object string) string {
 func NormalizeAction(action string) string {
 	return strings.ToUpper(strings.TrimSpace(action))
 }
+
+// IsAdminSelfSessionOperation identifies the JWT-authenticated, self-only logout route.
+// It is authorized independently of role assignment and never changes another account.
+func IsAdminSelfSessionOperation(path, method string) bool {
+	return NormalizeObject(path) == "/admin/logout" && method == "POST"
+}

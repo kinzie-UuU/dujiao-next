@@ -270,7 +270,7 @@ func AdminRBACMiddleware(authzService *authz.Service) gin.HandlerFunc {
 		}
 
 		// A logged-in administrator must always be able to revoke their own session.
-		if c.FullPath() == "/api/v1/admin/logout" && c.Request.Method == "POST" {
+		if authz.IsAdminSelfSessionOperation(c.FullPath(), c.Request.Method) {
 			c.Next()
 			return
 		}
