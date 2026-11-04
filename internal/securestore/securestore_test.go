@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -14,6 +15,7 @@ import (
 	cardsecretstore "github.com/dujiao-next/internal/modules/cardsecret/infrastructure/gormstore"
 	fulfillmentdomain "github.com/dujiao-next/internal/modules/fulfillment/domain"
 	procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
+	settingsstore "github.com/dujiao-next/internal/modules/settings/infrastructure/gormstore"
 	"github.com/dujiao-next/internal/securestore"
 	"github.com/dujiao-next/internal/shared/jsonmap"
 	"github.com/glebarez/sqlite"
@@ -30,7 +32,7 @@ func TestSensitiveValuesAreEncryptedAndRemainUsable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := db.AutoMigrate(&cardsecretdomain.Secret{}, &fulfillmentdomain.Fulfillment{}, &procurementdomain.Order{}, &apicredentialdomain.ApiCredential{}); err != nil {
+	if err := db.AutoMigrate(&cardsecretdomain.Secret{}, &fulfillmentdomain.Fulfillment{}, &procurementdomain.Order{}, &apicredentialdomain.ApiCredential{}, &settingsstore.SettingRecord{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 
@@ -98,11 +100,17 @@ func TestSensitiveValuesAreEncryptedAndRemainUsable(t *testing.T) {
 	if err := db.First(&legacyBefore, 99).Error; err != nil || legacyBefore.ApiSecret != "legacy-api-secret" {
 		t.Fatal("legacy credential unreadable before migration")
 	}
+	settingKeys := []string{"smtp_config", "telegram_auth_config", "captcha_config", "site_config", "callback_routes_config", "migration_marker", "affiliate_config", "telegram_bot_config"}
+	for _, key := range settingKeys {
+		if err := db.Exec("INSERT INTO settings (key,value_json) VALUES (?, ?)", key, `{"password":"legacy-setting-password","done":true}`).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
 	result, err := securestore.Backfill(db)
 	if err != nil {
 		t.Fatalf("backfill: %v", err)
 	}
-	if result.CardSecrets != 1 || result.Fulfillments != 1 || result.ProcurementPayloads != 1 || result.APICredentials != 1 {
+	if result.CardSecrets != 1 || result.Fulfillments != 1 || result.ProcurementPayloads != 1 || result.APICredentials != 1 || result.SensitiveSettings != 3 {
 		t.Fatalf("unexpected backfill result: %+v", result)
 	}
 
@@ -138,11 +146,53 @@ func TestSensitiveValuesAreEncryptedAndRemainUsable(t *testing.T) {
 			t.Fatal("API credential leaks secret in JSON")
 		}
 	}
+	storeSettings := settingsstore.New(db)
+	for i, key := range settingKeys {
+		got, ok, err := storeSettings.GetByKey(key)
+		if err != nil || !ok || got["password"] != "legacy-setting-password" || got["done"] != true {
+			t.Fatal("legacy setting unreadable")
+		}
+		var raw string
+		if err := db.Table("settings").Select("value_json").Where("key = ?", key).Scan(&raw).Error; err != nil {
+			t.Fatal(err)
+		}
+		if (i < 3) != strings.Contains(raw, "enc:v1:") {
+			t.Fatalf("unexpected encryption state for %s", key)
+		}
+		if i < 3 && strings.Contains(raw, "legacy-setting-password") {
+			t.Fatal("plaintext setting leak")
+		}
+		want := jsonmap.JSON{"password": "rotated-setting-password", "enabled": true}
+		if _, err := storeSettings.Upsert(key, want); err != nil {
+			t.Fatal(err)
+		}
+		got, ok, err = storeSettings.GetByKey(key)
+		if err != nil || !ok || !reflect.DeepEqual(got, want) {
+			t.Fatal("setting upsert roundtrip failed")
+		}
+		if err := db.Table("settings").Select("value_json").Where("key = ?", key).Scan(&raw).Error; err != nil {
+			t.Fatal(err)
+		}
+		if (i < 3) != strings.Contains(raw, "enc:v1:") {
+			t.Fatalf("upsert encryption state wrong for %s", key)
+		}
+	}
+	// Exercise the create path separately from legacy/update paths.
+	if err := db.Delete(&settingsstore.SettingRecord{}, "key = ?", "smtp_config").Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := storeSettings.Upsert("smtp_config", jsonmap.JSON{"password": "fresh-password"}); err != nil {
+		t.Fatal(err)
+	}
+	var freshRaw string
+	if err := db.Table("settings").Select("value_json").Where("key = ?", "smtp_config").Scan(&freshRaw).Error; err != nil || !strings.Contains(freshRaw, "enc:v1:") || strings.Contains(freshRaw, "fresh-password") {
+		t.Fatal("new setting not encrypted")
+	}
 	second, err := securestore.Backfill(db)
 	if err != nil {
 		t.Fatalf("second backfill: %v", err)
 	}
-	if second.CardSecrets != 0 || second.Fulfillments != 0 || second.ProcurementPayloads != 0 || second.APICredentials != 0 {
+	if second.CardSecrets != 0 || second.Fulfillments != 0 || second.ProcurementPayloads != 0 || second.APICredentials != 0 || second.SensitiveSettings != 0 {
 		t.Fatalf("backfill is not idempotent: %+v", second)
 	}
 }
@@ -156,10 +206,14 @@ func TestWrongKeyFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&cardsecretdomain.Secret{}); err != nil {
+	if err := db.AutoMigrate(&cardsecretdomain.Secret{}, &settingsstore.SettingRecord{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&cardsecretdomain.Secret{ProductID: 1, SKUID: 1, Secret: "MUST-NOT-LEAK", Status: cardsecretdomain.StatusAvailable}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.Create(&settingsstore.SettingRecord{Key: "smtp_config", ValueJSON: jsonmap.JSON{"password": "MUST-NOT-LEAK"}}).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -169,6 +223,9 @@ func TestWrongKeyFailsClosed(t *testing.T) {
 	wrongDB, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if _, _, err := settingsstore.New(wrongDB).GetByKey("smtp_config"); err == nil {
+		t.Fatal("wrong key accepted encrypted SMTP settings")
 	}
 	var item cardsecretdomain.Secret
 	if err := wrongDB.First(&item).Error; err == nil {
