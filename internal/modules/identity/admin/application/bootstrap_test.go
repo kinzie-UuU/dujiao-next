@@ -125,3 +125,5 @@ func (s *bootstrapStoreStub) CompareAndSwapRecoveryCodes(uint, string, string) (
 	return true, nil
 }
 func (s *bootstrapStoreStub) UpdateLastLogin(uint, uint64, time.Time) (bool, error) { return true, nil }
+
+func (s *bootstrapStoreStub) RevokeSessions(id uint, version uint64) (bool, error) { return false, nil }

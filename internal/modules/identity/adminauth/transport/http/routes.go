@@ -24,6 +24,7 @@ func RegisterAdminPasswordRoutes(authorized gin.IRoutes, handler *AdminLoginHand
 		panic("admin password routes: required dependency is nil")
 	}
 	authorized.PUT("/password", handler.UpdateAdminPassword)
+	authorized.POST("/logout", handler.Logout)
 }
 
 // RegisterAdmin2FARoutes 注册登录态管理员 2FA 管理端点。

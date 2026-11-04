@@ -58,6 +58,7 @@ import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import { applySiteIcon } from '@/utils/favicon'
 import { adminUrl } from '@/utils/adminBase'
+import { confirmAction } from '@/utils/confirm'
 
 interface NavGroupItem {
   label: string
@@ -688,7 +689,21 @@ const handleResize = () => {
   sidebarCollapsed.value = window.innerWidth < SIDEBAR_AUTO_COLLAPSE_WIDTH
 }
 
-const handleLogout = () => {
+const logoutPending = ref(false)
+const handleLogout = async () => {
+  if (logoutPending.value) return
+  logoutPending.value = true
+  const confirmed = await confirmAction({ description: t('admin.common.logoutAllConfirm'), confirmText: t('admin.common.logout') })
+  if (!confirmed) {
+    logoutPending.value = false
+    return
+  }
+  try {
+    await adminAPI.logout()
+  } catch {
+    logoutPending.value = false
+    return
+  }
   authStore.logout()
   // 必须走 adminUrl()：后台可被挂到运行时任意 web.admin_path 前缀下，
   // 硬编码 '/login' 会跳出后台落到用户前台 SPA 的兜底路由上。
@@ -980,7 +995,7 @@ onBeforeUnmount(() => {
                 <Home class="h-4 w-4" />
               </Button>
             </a>
-            <Button variant="outline" size="sm" class="gap-2" @click="handleLogout">
+            <Button variant="outline" size="sm" class="gap-2" :disabled="logoutPending" @click="handleLogout">
               <LogOut class="h-4 w-4" />
               <span class="hidden sm:inline">{{ t('admin.common.logout') }}</span>
             </Button>

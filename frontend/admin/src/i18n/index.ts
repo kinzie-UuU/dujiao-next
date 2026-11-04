@@ -589,6 +589,7 @@ const messages = {
           fixed: '固定金额',
         },
         logout: '退出登录',
+        logoutAllConfirm: '退出将使此账号在其他设备上的登录也失效，是否继续？',
         lang: {
           zhCN: '简体中文',
           zhTW: '繁体中文',
@@ -4975,6 +4976,7 @@ const messages = {
           fixed: '固定金額',
         },
         logout: '登出',
+        logoutAllConfirm: '登出也會使此帳號在其他裝置的登入失效，是否繼續？',
         lang: {
           zhCN: '簡體中文',
           zhTW: '繁體中文',
@@ -9361,6 +9363,7 @@ const messages = {
           fixed: 'Fixed amount',
         },
         logout: 'Sign out',
+        logoutAllConfirm: 'Signing out will also end this account’s sessions on other devices. Continue?',
         lang: {
           zhCN: 'Simplified Chinese',
           zhTW: 'Traditional Chinese',

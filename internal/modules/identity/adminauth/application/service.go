@@ -311,3 +311,13 @@ func (s *Service) ChangePassword(adminID uint, oldPassword, newPassword string) 
 	_ = cache.DelAdminAuthState(context.Background(), admin.ID)
 	return nil
 }
+
+// Logout revokes all sessions issued with the caller's version.
+func (s *Service) Logout(adminID uint, version uint64) error {
+	_, err := s.adminRepo.RevokeSessions(adminID, version)
+	if err != nil {
+		return err
+	}
+	_ = cache.DelAdminAuthState(context.Background(), adminID)
+	return nil
+}

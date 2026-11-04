@@ -203,3 +203,12 @@ func (r *Store) UpdateLastLogin(id uint, version uint64, at time.Time) (bool, er
 	result := r.db.Model(&admindomain.Admin{}).Where("id = ? AND deleted_at IS NULL AND token_version = ?", id, version).Update("last_login_at", at)
 	return result.RowsAffected == 1, result.Error
 }
+
+// RevokeSessions invalidates only the version presented by the current request.
+func (r *Store) RevokeSessions(id uint, expectedVersion uint64) (bool, error) {
+	if id == 0 {
+		return false, errors.New("invalid admin id")
+	}
+	result := r.db.Model(&admindomain.Admin{}).Where("id = ? AND deleted_at IS NULL AND token_version = ?", id, expectedVersion).Update("token_version", gorm.Expr("token_version + 1"))
+	return result.RowsAffected == 1, result.Error
+}
