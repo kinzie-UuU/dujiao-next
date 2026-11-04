@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	apicredentialdomain "github.com/dujiao-next/internal/modules/apicredential/domain"
 	cardsecretdomain "github.com/dujiao-next/internal/modules/cardsecret/domain"
 	fulfillmentdomain "github.com/dujiao-next/internal/modules/fulfillment/domain"
 	procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
@@ -12,6 +13,7 @@ import (
 )
 
 type BackfillResult struct {
+	APICredentials      int
 	CardSecrets         int
 	Fulfillments        int
 	ProcurementPayloads int
@@ -91,6 +93,23 @@ func Backfill(db *gorm.DB) (BackfillResult, error) {
 				return err
 			}
 			result.ProcurementPayloads++
+		}
+		var rawCredentials []struct {
+			ID        uint
+			ApiSecret string
+		}
+		if err := tx.Table("api_credentials").Select("id, api_secret").Where("api_secret <> ''").Find(&rawCredentials).Error; err != nil {
+			return err
+		}
+		for _, raw := range rawCredentials {
+			if securestoreserializer.IsEncryptedString(raw.ApiSecret) {
+				continue
+			}
+			item := apicredentialdomain.ApiCredential{ID: raw.ID, ApiSecret: raw.ApiSecret}
+			if err := tx.Model(&item).Select("ApiSecret").UpdateColumns(&item).Error; err != nil {
+				return err
+			}
+			result.APICredentials++
 		}
 		return nil
 	})
