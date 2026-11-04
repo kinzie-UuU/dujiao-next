@@ -138,7 +138,7 @@ func registerStorefrontRoutes(
 			middleware.RateLimitMiddleware(redisClient, loginRule, middleware.KeyByUserIDAndIP),
 		)
 		userauthtransport.RegisterUserEmailRoutes(user, userEmailHandler)
-		userauthtransport.RegisterUser2FARoutes(user, user2FAHandler)
+		userauthtransport.RegisterUser2FARoutes(user, user2FAHandler, middleware.MFAManagementRateLimit(redisClient, "user_id"))
 		carttransport.RegisterUserRoutes(user, userCartHandler)
 		ordertransport.RegisterUserCreateRoute(user, orderCreateHandler)
 		ordertransport.RegisterUserCreateAndPayRoute(user, orderCreateHandler)

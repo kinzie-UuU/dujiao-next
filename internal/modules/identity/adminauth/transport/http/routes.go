@@ -27,16 +27,16 @@ func RegisterAdminPasswordRoutes(authorized gin.IRoutes, handler *AdminLoginHand
 }
 
 // RegisterAdmin2FARoutes 注册登录态管理员 2FA 管理端点。
-func RegisterAdmin2FARoutes(authorized gin.IRoutes, handler *Admin2FAHandler) {
-	if authorized == nil || handler == nil {
+func RegisterAdmin2FARoutes(authorized gin.IRoutes, handler *Admin2FAHandler, rateLimit gin.HandlerFunc) {
+	if authorized == nil || handler == nil || rateLimit == nil {
 		panic("admin 2fa routes: required dependency is nil")
 	}
 	authorized.GET("/2fa/status", handler.Get2FAStatus)
-	authorized.POST("/2fa/setup", handler.Setup2FA)
-	authorized.POST("/2fa/enable", handler.Enable2FA)
-	authorized.POST("/2fa/disable", handler.Disable2FA)
-	authorized.POST("/2fa/recovery-codes/regenerate", handler.RegenerateRecoveryCodes)
-	authorized.POST("/authz/admins/:id/2fa/reset", handler.ResetTargetAdmin2FA)
+	authorized.POST("/2fa/setup", rateLimit, handler.Setup2FA)
+	authorized.POST("/2fa/enable", rateLimit, handler.Enable2FA)
+	authorized.POST("/2fa/disable", rateLimit, handler.Disable2FA)
+	authorized.POST("/2fa/recovery-codes/regenerate", rateLimit, handler.RegenerateRecoveryCodes)
+	authorized.POST("/authz/admins/:id/2fa/reset", rateLimit, handler.ResetTargetAdmin2FA)
 }
 
 // RegisterAdminUser2FARoutes 注册管理员重置用户 2FA 端点。
