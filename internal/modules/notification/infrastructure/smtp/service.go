@@ -7,9 +7,14 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"html"
+	"io"
 	"mime"
+	"mime/multipart"
 	"net/mail"
 	"net/smtp"
+	"net/textproto"
+	"regexp"
 	"strings"
 	"time"
 
@@ -77,9 +82,9 @@ func (s *Service) SendVerifyCode(toEmail, code, purpose, locale string, brand ma
 func (s *Service) SendOrderStatusEmail(toEmail string, input notificationcontract.OrderStatusEmailInput, locale string) error {
 	subject, body := buildOrderStatusContent(input, locale)
 	if input.AttachmentName != "" && input.AttachmentContent != "" {
-		return s.sendEmailWithAttachment(toEmail, subject, body, input.AttachmentName, input.AttachmentContent, input.MailBrand)
+		return s.sendOrderEmail(toEmail, subject, body, input.AttachmentName, input.AttachmentContent, input.MailBrand)
 	}
-	return s.sendTextEmail(toEmail, subject, body, input.MailBrand)
+	return s.sendOrderEmail(toEmail, subject, body, "", "", input.MailBrand)
 }
 
 // SendOrderStatusEmailWithTemplate 使用可配置模板发送订单状态通知
@@ -89,9 +94,9 @@ func (s *Service) SendOrderStatusEmailWithTemplate(toEmail string, input notific
 	}
 	subject, body := buildOrderStatusContentFromTemplate(input, locale, *tmplSetting)
 	if input.AttachmentName != "" && input.AttachmentContent != "" {
-		return s.sendEmailWithAttachment(toEmail, subject, body, input.AttachmentName, input.AttachmentContent, input.MailBrand)
+		return s.sendOrderEmail(toEmail, subject, body, input.AttachmentName, input.AttachmentContent, input.MailBrand)
 	}
-	return s.sendTextEmail(toEmail, subject, body, input.MailBrand)
+	return s.sendOrderEmail(toEmail, subject, body, "", "", input.MailBrand)
 }
 
 func buildOrderStatusContentFromTemplate(input notificationcontract.OrderStatusEmailInput, locale string, tmplSetting settingsmessaging.OrderEmailTemplateSetting) (string, string) {
@@ -184,6 +189,117 @@ func (s *Service) SendCustomEmail(toEmail, subject, body string) error {
 		body = "这是一封来自 Dujiao-Next 的 SMTP 测试邮件，说明当前配置可正常发送。"
 	}
 	return s.sendTextEmail(toEmail, subject, body)
+}
+
+// sendOrderEmail keeps the original plain text and attachment while providing an
+// HTML alternative for mail clients that support it.
+func (s *Service) sendOrderEmail(toEmail, subject, body, attachName, attachContent string, brand mailbrand.Brand) error {
+	if telegramidentity.IsPlaceholderEmail(toEmail) {
+		return nil
+	}
+	from, addr, err := s.prepareSMTPEnvelope(toEmail, brand.FromName)
+	if err != nil {
+		return err
+	}
+	msg, err := buildOrderEmailMessage(from, toEmail, subject, body, attachName, attachContent, brand.ReplyTo)
+	if err != nil {
+		return err
+	}
+	return s.sendSMTPMessage(addr, toEmail, msg)
+}
+
+func buildOrderEmailMessage(from, to, subject, body, attachName, attachContent, replyTo string) ([]byte, error) {
+	var buf bytes.Buffer
+	writeStandardHeaders(&buf, from, to, subject, replyTo)
+	mixed := multipart.NewWriter(&buf)
+	buf.WriteString(fmt.Sprintf("Content-Type: multipart/mixed; boundary=%q\r\n\r\n", mixed.Boundary()))
+	altHeader := textproto.MIMEHeader{}
+	boundary := multipart.NewWriter(io.Discard).Boundary()
+	altHeader.Set("Content-Type", fmt.Sprintf("multipart/alternative; boundary=%q", boundary))
+	part, err := mixed.CreatePart(altHeader)
+	if err != nil {
+		return nil, err
+	}
+	alt := multipart.NewWriter(part)
+	if err = alt.SetBoundary(boundary); err != nil {
+		return nil, err
+	}
+	add := func(contentType, value string) error {
+		h := textproto.MIMEHeader{}
+		h.Set("Content-Type", contentType)
+		h.Set("Content-Transfer-Encoding", "base64")
+		w, e := alt.CreatePart(h)
+		if e != nil {
+			return e
+		}
+		encoded := base64.StdEncoding.EncodeToString([]byte(value))
+		for len(encoded) > 76 {
+			if _, e = fmt.Fprint(w, encoded[:76]+"\r\n"); e != nil {
+				return e
+			}
+			encoded = encoded[76:]
+		}
+		_, e = fmt.Fprint(w, encoded)
+		return e
+	}
+	if err = add("text/plain; charset=UTF-8", body); err != nil {
+		return nil, err
+	}
+	safeBody := strings.ReplaceAll(strings.ReplaceAll(linkOrderEmailURLs(body), "\r\n", "\n"), "\n", "<br>")
+	safeTitle := html.EscapeString(subject)
+	card := `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body style="margin:0;padding:24px 12px;background:#f3f4f6;font-family:Arial,'Microsoft YaHei',sans-serif;color:#17202a"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background:#ffffff;border:1px solid #e5e7eb;border-radius:8px"><tr><td style="padding:28px 24px;border-top:5px solid #e6ff57"><h1 style="font-size:22px;line-height:1.4;margin:18px 0 24px;color:#080e17">` + safeTitle + `</h1><div style="font-size:15px;line-height:1.8;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word">` + safeBody + `</div></td></tr></table></td></tr></table></body></html>`
+	if err = add("text/html; charset=UTF-8", card); err != nil {
+		return nil, err
+	}
+	if err = alt.Close(); err != nil {
+		return nil, err
+	}
+	if attachName != "" && attachContent != "" {
+		h := textproto.MIMEHeader{}
+		h.Set("Content-Type", "text/plain; charset=UTF-8")
+		h.Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": attachName}))
+		h.Set("Content-Transfer-Encoding", "base64")
+		w, e := mixed.CreatePart(h)
+		if e != nil {
+			return nil, e
+		}
+		encoded := base64.StdEncoding.EncodeToString([]byte(attachContent))
+		for len(encoded) > 76 {
+			if _, e = fmt.Fprint(w, encoded[:76]+"\r\n"); e != nil {
+				return nil, e
+			}
+			encoded = encoded[76:]
+		}
+		if _, e = fmt.Fprint(w, encoded); e != nil {
+			return nil, e
+		}
+	}
+	if err = mixed.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+var orderEmailURL = regexp.MustCompile(`https?://[^\s<>"']+`)
+
+// Escape all content, and link only explicit HTTP(S) URLs from the original text.
+func linkOrderEmailURLs(body string) string {
+	var result strings.Builder
+	last := 0
+	for _, span := range orderEmailURL.FindAllStringIndex(body, -1) {
+		result.WriteString(html.EscapeString(body[last:span[0]]))
+		url := body[span[0]:span[1]]
+		trailing := ""
+		for len(url) > 0 && strings.ContainsRune(".,;:!?)]", rune(url[len(url)-1])) {
+			trailing = url[len(url)-1:] + trailing
+			url = url[:len(url)-1]
+		}
+		escaped := html.EscapeString(url)
+		result.WriteString(`<a href="` + escaped + `" style="color:#245bb2;word-break:break-all">` + escaped + `</a>` + html.EscapeString(trailing))
+		last = span[1]
+	}
+	result.WriteString(html.EscapeString(body[last:]))
+	return result.String()
 }
 
 func (s *Service) sendTextEmail(toEmail, subject, body string, brands ...mailbrand.Brand) error {
