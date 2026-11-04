@@ -3,19 +3,25 @@ package upstreamhttp
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/dujiao-next/internal/constants"
+	productdomain "github.com/dujiao-next/internal/modules/catalog/product/domain"
+	downstreamcontract "github.com/dujiao-next/internal/modules/downstreamcallback/contract"
+	downstreamdomain "github.com/dujiao-next/internal/modules/downstreamcallback/domain"
+	orderdomain "github.com/dujiao-next/internal/modules/order/domain"
+	procurementcontract "github.com/dujiao-next/internal/modules/procurement/contract"
+	procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
+	siteconnectiondomain "github.com/dujiao-next/internal/modules/siteconnection/domain"
+	"github.com/dujiao-next/internal/shared/money"
+	upstreamadapter "github.com/dujiao-next/internal/upstream"
+	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
-
-	procurementcontract "github.com/dujiao-next/internal/modules/procurement/contract"
-	procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
-	siteconnectiondomain "github.com/dujiao-next/internal/modules/siteconnection/domain"
-	upstreamadapter "github.com/dujiao-next/internal/upstream"
-
-	"github.com/gin-gonic/gin"
 )
 
 func TestMapCallbackStatus(t *testing.T) {
@@ -158,5 +164,87 @@ func TestHandleCallbackRejectsOversizedBodyAndUndecryptableSecret(t *testing.T) 
 		if proc.handled || !strings.Contains(rec.Body.String(), want) {
 			t.Fatalf("oversized=%v body=%s handled=%v", oversized, rec.Body.String(), proc.handled)
 		}
+	}
+}
+
+type reservationOrders struct {
+	Orders
+	created, canceled int
+}
+
+func (s *reservationOrders) CreateOrder(CreateOrderInput) (*orderdomain.Order, error) {
+	s.created++
+	return &orderdomain.Order{ID: 50, OrderNo: "LOCAL-50", Status: constants.OrderStatusPendingPayment}, nil
+}
+func (s *reservationOrders) CancelOrder(id, user uint) (*orderdomain.Order, error) {
+	s.canceled++
+	return &orderdomain.Order{ID: id, Status: constants.OrderStatusCanceled}, nil
+}
+func (s *reservationOrders) GetOrderByUser(id, user uint) (*orderdomain.Order, error) {
+	return &orderdomain.Order{ID: id, OrderNo: "LOCAL-EXISTING", Status: constants.OrderStatusPaid, TotalAmount: money.FromDecimal(decimal.NewFromInt(16))}, nil
+}
+
+type reservationPayments struct {
+	Payments
+	calls int
+}
+
+func (s *reservationPayments) CreatePayment(CreatePaymentInput) (*CreatePaymentResult, error) {
+	s.calls++
+	return &CreatePaymentResult{OrderPaid: true}, nil
+}
+
+type reservationProducts struct{ ProductRepository }
+
+func (reservationProducts) GetByID(string) (*productdomain.Product, error) {
+	return &productdomain.Product{ID: 1, IsActive: true, FulfillmentType: constants.FulfillmentTypeUpstream}, nil
+}
+
+type reservationSKUs struct{ SKURepository }
+
+func (reservationSKUs) GetByID(uint) (*productdomain.ProductSKU, error) {
+	return &productdomain.ProductSKU{ID: 1, ProductID: 1, IsActive: true}, nil
+}
+
+type reservationSettings struct{ Settings }
+
+func (reservationSettings) GetSiteCurrency(string) (string, error) { return "CNY", nil }
+
+type reservationRefs struct {
+	DownstreamOrderReferences
+	createErr, lookupErr error
+	existing             *downstreamdomain.OrderRef
+}
+
+func (s reservationRefs) Create(*downstreamdomain.OrderRef) error { return s.createErr }
+func (s reservationRefs) GetByCredentialAndDownstreamNo(uint, string) (*downstreamdomain.OrderRef, error) {
+	return s.existing, s.lookupErr
+}
+
+func TestUpstreamOrderNeverDebitsWithoutDurableReference(t *testing.T) {
+	for _, tc := range []struct {
+		name                         string
+		refs                         reservationRefs
+		wantStatus, creates, cancels int
+	}{
+		{"reference write failure", reservationRefs{createErr: errors.New("database unavailable")}, 503, 1, 1},
+		{"concurrent duplicate", reservationRefs{createErr: downstreamcontract.ErrDuplicateRef}, 409, 1, 1},
+		{"reference lookup failure", reservationRefs{lookupErr: errors.New("database unavailable")}, 503, 0, 0},
+		{"business retry returns original", reservationRefs{existing: &downstreamdomain.OrderRef{OrderID: 7}}, 200, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			orders := &reservationOrders{}
+			payments := &reservationPayments{}
+			handler := &Handler{Dependencies: Dependencies{Orders: orders, Payments: payments, SKUs: reservationSKUs{}, ProductRepository: reservationProducts{}, DownstreamRefs: tc.refs, Settings: reservationSettings{}}}
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Set(upstreamUserIDKey, uint(3))
+			c.Set(upstreamCredentialIDKey, uint(5))
+			c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/upstream/orders", strings.NewReader(`{"sku_id":1,"quantity":1,"downstream_order_no":"remote-1"}`))
+			handler.CreateOrder(c)
+			if w.Code != tc.wantStatus || payments.calls != 0 || orders.created != tc.creates || orders.canceled != tc.cancels {
+				t.Fatalf("status=%d payments=%d creates=%d cancels=%d body=%s", w.Code, payments.calls, orders.created, orders.canceled, w.Body)
+			}
+		})
 	}
 }

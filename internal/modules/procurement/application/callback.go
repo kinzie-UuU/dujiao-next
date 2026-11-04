@@ -142,6 +142,10 @@ func (s *Service) HandleUpstreamCallback(procurementOrderID uint, upstreamStatus
 // 已交付、已全额退款、已取消的采购单不再接受 delivered / canceled；
 // 退款类回调不受限（部分退款可能先于交付到达）。
 func isUpstreamTransitionAllowed(current, upstreamStatus string) bool {
+	// A delayed partial-refund notification must not reopen a fully refunded procurement.
+	if current == constants.ProcurementStatusRefunded {
+		return false
+	}
 	switch upstreamStatus {
 	case "delivered", "completed", "fulfilled", "canceled":
 		switch current {

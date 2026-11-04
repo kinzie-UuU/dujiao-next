@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/dujiao-next/internal/upstream"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 )
 
 const upstreamUserIDKey = "upstream_user_id"
@@ -24,7 +27,7 @@ type UpstreamCredentialStore interface {
 }
 
 // UpstreamAPIAuthMiddleware 上游 API 签名鉴权中间件
-func UpstreamAPIAuthMiddleware(credRepo UpstreamCredentialStore) gin.HandlerFunc {
+func UpstreamAPIAuthMiddleware(credRepo UpstreamCredentialStore, replayStore *redis.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		apiKey := c.GetHeader(upstream.HeaderApiKey)
 		timestampStr := c.GetHeader(upstream.HeaderTimestamp)
@@ -82,6 +85,27 @@ func UpstreamAPIAuthMiddleware(credRepo UpstreamCredentialStore) gin.HandlerFunc
 		if !upstream.Verify(cred.ApiSecret, method, path, signature, timestamp, body) {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"ok": false, "error_code": "invalid_signature", "error_message": "signature verification failed"})
 			return
+		}
+
+		// Read-only endpoints can be retried verbatim. A signed mutation is
+		// single-use across workers for its entire permitted timestamp window.
+		// Business retries re-sign and retain their downstream_order_no.
+		if method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions && path != "/api/v1/upstream/ping" {
+			if replayStore == nil {
+				c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error_code": "replay_guard_unavailable"})
+				return
+			}
+			fingerprint := sha256.Sum256([]byte(signature))
+			key := fmt.Sprintf("upstream:request:%d:%x", cred.ID, fingerprint)
+			accepted, err := replayStore.SetNX(c.Request.Context(), key, "1", time.Duration(2*upstream.MaxTimestampSkew+1)*time.Second).Result()
+			if err != nil {
+				c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error_code": "replay_guard_unavailable"})
+				return
+			}
+			if !accepted {
+				c.AbortWithStatusJSON(http.StatusConflict, gin.H{"ok": false, "error_code": "request_replayed", "error_message": "re-sign the retry and retain the downstream order number"})
+				return
+			}
 		}
 
 		// 更新最后使用时间（异步、只写单列、60s 节流）

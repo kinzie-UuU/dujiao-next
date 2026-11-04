@@ -8,6 +8,7 @@ import (
 
 	"github.com/dujiao-next/internal/constants"
 	"github.com/dujiao-next/internal/logger"
+	downstreamcontract "github.com/dujiao-next/internal/modules/downstreamcallback/contract"
 	downstreamcallbackdomain "github.com/dujiao-next/internal/modules/downstreamcallback/domain"
 	"github.com/dujiao-next/internal/platform/http/ginutil"
 	"github.com/dujiao-next/internal/shared/jsonmap"
@@ -39,6 +40,7 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 		return
 	}
 
+	req.DownstreamOrderNo = strings.TrimSpace(req.DownstreamOrderNo)
 	// 验证 callback URL（防止 SSRF）
 	if req.CallbackURL != "" {
 		if err := validateCallbackURL(req.CallbackURL); err != nil {
@@ -49,7 +51,11 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 
 	// 幂等性检查：同一 credential 的相同 downstream_order_no 不允许重复创建
 	if strings.TrimSpace(req.DownstreamOrderNo) != "" {
-		existingRef, _ := h.DownstreamRefs.GetByCredentialAndDownstreamNo(credentialID, req.DownstreamOrderNo)
+		existingRef, lookupErr := h.DownstreamRefs.GetByCredentialAndDownstreamNo(credentialID, req.DownstreamOrderNo)
+		if lookupErr != nil {
+			errorResponse(c, http.StatusServiceUnavailable, "internal_error", "order reference lookup unavailable")
+			return
+		}
 		if existingRef != nil {
 			// 已有相同下游订单号的记录，返回已有订单信息
 			existingOrder, orderErr := h.Orders.GetOrderByUser(existingRef.OrderID, userID)
@@ -126,19 +132,22 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 		CallbackStatus:    downstreamcallbackdomain.StatusPending,
 	}
 	if createErr := h.DownstreamRefs.Create(ref); createErr != nil {
-		logger.Errorw("upstream_create_downstream_ref_failed",
-			"order_id", order.ID,
-			"credential_id", credentialID,
-			"downstream_order_no", req.DownstreamOrderNo,
-			"callback_url", req.CallbackURL,
-			"trace_id", req.TraceID,
-			"error", createErr,
-		)
+		// Never debit a wallet unless this order owns the durable reference.
+		// A concurrent request may already have reserved the same downstream ID.
+		if _, cancelErr := h.Orders.CancelOrder(order.ID, userID); cancelErr != nil {
+			logger.Warnw("upstream_cancel_unreferenced_order_failed", "order_id", order.ID, "error", cancelErr)
+		}
+		logger.Errorw("upstream_create_downstream_ref_failed", "order_id", order.ID, "credential_id", credentialID, "error", createErr)
+		if errors.Is(createErr, downstreamcontract.ErrDuplicateRef) {
+			errorResponse(c, http.StatusConflict, "order_in_progress", "retry with the same downstream order number")
+		} else {
+			errorResponse(c, http.StatusServiceUnavailable, "internal_error", "order reference could not be reserved")
+		}
+		return
 	} else {
 		logger.Infow("upstream_downstream_ref_created",
 			"ref_id", ref.ID,
 			"order_id", order.ID,
-			"callback_url", req.CallbackURL,
 		)
 	}
 

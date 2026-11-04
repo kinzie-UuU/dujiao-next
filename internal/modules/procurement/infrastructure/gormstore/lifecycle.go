@@ -145,17 +145,27 @@ func (l *Lifecycle) SyncParentStatus(parentID uint, now time.Time) (string, erro
 	if parent.ParentID != nil {
 		return "", nil
 	}
-	if parent.Status == constants.OrderStatusCanceled {
+	if parent.Status == constants.OrderStatusCanceled || parent.Status == constants.OrderStatusRefunded {
 		return parent.Status, nil
 	}
 	newStatus := calculateParentStatus(parent.Children, parent.Status)
 	if newStatus == "" || newStatus == parent.Status {
 		return parent.Status, nil
 	}
-	if err := l.db.Table(parent.TableName()).Where("id = ? AND deleted_at IS NULL", parent.ID).Updates(map[string]interface{}{
+	// A refund can commit after the child snapshot was loaded. Keep that newer
+	// parent state instead of replacing it with this stale fulfillment summary.
+	updated := l.db.Table(parent.TableName()).Where("id = ? AND deleted_at IS NULL AND status = ?", parent.ID, parent.Status).Updates(map[string]interface{}{
 		"status": newStatus, "updated_at": now,
-	}).Error; err != nil {
-		return "", err
+	})
+	if updated.Error != nil {
+		return "", updated.Error
+	}
+	if updated.RowsAffected == 0 {
+		var current lifecycleOrderRecord
+		if err := l.db.Select("status").First(&current, parent.ID).Error; err != nil {
+			return "", err
+		}
+		return current.Status, nil
 	}
 	return newStatus, nil
 }
