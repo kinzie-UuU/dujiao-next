@@ -14,7 +14,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/dujiao-next/internal/authz"
-	"github.com/dujiao-next/internal/cache"
 	"github.com/dujiao-next/internal/config"
 	"github.com/dujiao-next/internal/constants"
 	"github.com/dujiao-next/internal/i18n"
@@ -83,10 +82,9 @@ func resolveAllowedOrigin(origin string, allowedOrigins []string, allowCredentia
 		return ""
 	}
 	for _, allowed := range allowedOrigins {
-		if allowed == "*" {
-			if allowCredentials && origin != "" {
-				return origin
-			}
+		// Credentialed CORS requires an explicit origin. Never turn a wildcard
+		// configuration into unrestricted reflection of the caller's Origin.
+		if allowed == "*" && !allowCredentials {
 			return "*"
 		}
 	}
@@ -94,7 +92,7 @@ func resolveAllowedOrigin(origin string, allowedOrigins []string, allowCredentia
 		return ""
 	}
 	for _, allowed := range allowedOrigins {
-		if strings.EqualFold(allowed, origin) {
+		if allowed != "*" && strings.EqualFold(allowed, origin) {
 			return origin
 		}
 	}
@@ -201,20 +199,8 @@ func JWTAuthMiddleware(secretKey string, adminRepo admincontract.Store) gin.Hand
 			return
 		}
 
-		if cached, hit, cacheErr := cache.GetAdminAuthState(c.Request.Context(), claims.AdminID); cacheErr == nil && hit && cached != nil {
-			if claims.TokenVersion != cached.TokenVersion || !isIssuedAfterInvalidBeforeUnix(claims.IssuedAt, cached.TokenInvalidBefore) {
-				msg := i18n.T(i18n.ResolveLocale(c), "error.token_revoked")
-				response.Unauthorized(c, msg)
-				c.Abort()
-				return
-			}
-			c.Set("admin_id", claims.AdminID)
-			c.Set("username", claims.Username)
-			c.Set(adminIsSuperContextKey, cached.IsSuper)
-			c.Next()
-			return
-		}
-
+		// Revocation and role changes must take effect on the next request. A cached
+		// snapshot can be repopulated by a read racing with password/MFA changes.
 		admin, err := adminRepo.GetByID(claims.AdminID)
 		if err != nil || admin == nil {
 			msg := i18n.T(i18n.ResolveLocale(c), "error.token_invalid")
@@ -228,7 +214,6 @@ func JWTAuthMiddleware(secretKey string, adminRepo admincontract.Store) gin.Hand
 			c.Abort()
 			return
 		}
-		_ = cache.SetAdminAuthState(c.Request.Context(), cache.BuildAdminAuthState(admin))
 
 		c.Set("admin_id", claims.AdminID)
 		c.Set("username", claims.Username)
@@ -375,25 +360,8 @@ func UserJWTAuthMiddleware(secretKey string, userRepo usercontract.Store) gin.Ha
 			return
 		}
 
-		if cached, hit, cacheErr := cache.GetUserAuthState(c.Request.Context(), claims.UserID); cacheErr == nil && hit && cached != nil {
-			if !isActiveUserStatus(cached.Status) {
-				msg := i18n.T(i18n.ResolveLocale(c), "error.user_disabled")
-				response.Unauthorized(c, msg)
-				c.Abort()
-				return
-			}
-			if claims.TokenVersion != cached.TokenVersion || !isIssuedAfterInvalidBeforeUnix(claims.IssuedAt, cached.TokenInvalidBefore) {
-				msg := i18n.T(i18n.ResolveLocale(c), "error.token_revoked")
-				response.Unauthorized(c, msg)
-				c.Abort()
-				return
-			}
-			c.Set("user_id", claims.UserID)
-			c.Set("user_email", claims.Email)
-			c.Next()
-			return
-		}
-
+		// Revocation and role changes must take effect on the next request. A cached
+		// snapshot can be repopulated by a read racing with password/MFA changes.
 		user, err := userRepo.GetByID(claims.UserID)
 		if err != nil || user == nil {
 			msg := i18n.T(i18n.ResolveLocale(c), "error.token_invalid")
@@ -413,7 +381,6 @@ func UserJWTAuthMiddleware(secretKey string, userRepo usercontract.Store) gin.Ha
 			c.Abort()
 			return
 		}
-		_ = cache.SetUserAuthState(c.Request.Context(), cache.BuildUserAuthState(user))
 
 		c.Set("user_id", claims.UserID)
 		c.Set("user_email", claims.Email)
@@ -429,16 +396,6 @@ func isIssuedAfterInvalidBefore(issuedAt *jwt.NumericDate, invalidBefore *time.T
 		return false
 	}
 	return issuedAt.Time.Unix() >= invalidBefore.Unix()
-}
-
-func isIssuedAfterInvalidBeforeUnix(issuedAt *jwt.NumericDate, invalidBeforeUnix int64) bool {
-	if invalidBeforeUnix <= 0 {
-		return true
-	}
-	if issuedAt == nil {
-		return false
-	}
-	return issuedAt.Time.Unix() >= invalidBeforeUnix
 }
 
 func newHS256JWTParser() *jwt.Parser {

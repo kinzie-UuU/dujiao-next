@@ -1,10 +1,14 @@
 package securestore_test
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	apicredentialdomain "github.com/dujiao-next/internal/modules/apicredential/domain"
 	cardsecretcontract "github.com/dujiao-next/internal/modules/cardsecret/contract"
 	cardsecretdomain "github.com/dujiao-next/internal/modules/cardsecret/domain"
 	cardsecretstore "github.com/dujiao-next/internal/modules/cardsecret/infrastructure/gormstore"
@@ -26,7 +30,7 @@ func TestSensitiveValuesAreEncryptedAndRemainUsable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := db.AutoMigrate(&cardsecretdomain.Secret{}, &fulfillmentdomain.Fulfillment{}, &procurementdomain.Order{}); err != nil {
+	if err := db.AutoMigrate(&cardsecretdomain.Secret{}, &fulfillmentdomain.Fulfillment{}, &procurementdomain.Order{}, &apicredentialdomain.ApiCredential{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 
@@ -77,11 +81,28 @@ func TestSensitiveValuesAreEncryptedAndRemainUsable(t *testing.T) {
 	if err := db.Exec("INSERT INTO procurement_orders (id, connection_id,local_order_id, local_order_no, upstream_payload, trace_id,currency) VALUES (1,1,1,'TEST','LEGACY-UPSTREAM','TEST','CNY')").Error; err != nil {
 		t.Fatal(err)
 	}
+	credential := apicredentialdomain.ApiCredential{UserID: 1, ApiKey: "test-key", ApiSecret: "new-api-secret"}
+	if err := db.Create(&credential).Error; err != nil {
+		t.Fatal(err)
+	}
+	assertRawEncrypted(t, db, "api_credentials", credential.ID, "api_secret", "new-api-secret")
+	credential.ApiSecret = "rotated-api-secret"
+	if err := db.Save(&credential).Error; err != nil {
+		t.Fatal(err)
+	}
+	assertRawEncrypted(t, db, "api_credentials", credential.ID, "api_secret", "rotated-api-secret")
+	if err := db.Exec("INSERT INTO api_credentials (id,user_id,api_key,api_secret) VALUES (99,99,'legacy-key','legacy-api-secret')").Error; err != nil {
+		t.Fatal(err)
+	}
+	var legacyBefore apicredentialdomain.ApiCredential
+	if err := db.First(&legacyBefore, 99).Error; err != nil || legacyBefore.ApiSecret != "legacy-api-secret" {
+		t.Fatal("legacy credential unreadable before migration")
+	}
 	result, err := securestore.Backfill(db)
 	if err != nil {
 		t.Fatalf("backfill: %v", err)
 	}
-	if result.CardSecrets != 1 || result.Fulfillments != 1 || result.ProcurementPayloads != 1 {
+	if result.CardSecrets != 1 || result.Fulfillments != 1 || result.ProcurementPayloads != 1 || result.APICredentials != 1 {
 		t.Fatalf("unexpected backfill result: %+v", result)
 	}
 
@@ -99,11 +120,29 @@ func TestSensitiveValuesAreEncryptedAndRemainUsable(t *testing.T) {
 	if err := db.First(&proc, 1).Error; err != nil || proc.UpstreamPayload != "LEGACY-UPSTREAM" {
 		t.Fatal("legacy procurement no longer readable")
 	}
+	assertRawEncrypted(t, db, "api_credentials", 99, "api_secret", "legacy-api-secret")
+	for id, expected := range map[uint]string{credential.ID: "rotated-api-secret", 99: "legacy-api-secret"} {
+		var loaded apicredentialdomain.ApiCredential
+		if err := db.First(&loaded, id).Error; err != nil {
+			t.Fatal(err)
+		}
+		actualMAC := hmac.New(sha256.New, []byte(loaded.ApiSecret))
+		actualMAC.Write([]byte("signed-request"))
+		expectedMAC := hmac.New(sha256.New, []byte(expected))
+		expectedMAC.Write([]byte("signed-request"))
+		if !hmac.Equal(actualMAC.Sum(nil), expectedMAC.Sum(nil)) {
+			t.Fatal("API signing secret changed")
+		}
+		encoded, err := json.Marshal(loaded)
+		if err != nil || strings.Contains(string(encoded), expected) || strings.Contains(string(encoded), "api_secret") {
+			t.Fatal("API credential leaks secret in JSON")
+		}
+	}
 	second, err := securestore.Backfill(db)
 	if err != nil {
 		t.Fatalf("second backfill: %v", err)
 	}
-	if second.CardSecrets != 0 || second.Fulfillments != 0 || second.ProcurementPayloads != 0 {
+	if second.CardSecrets != 0 || second.Fulfillments != 0 || second.ProcurementPayloads != 0 || second.APICredentials != 0 {
 		t.Fatalf("backfill is not idempotent: %+v", second)
 	}
 }

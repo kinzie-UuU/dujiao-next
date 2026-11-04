@@ -53,15 +53,15 @@ func RegisterUser2FAAuthRoutes(auth gin.IRoutes, handler *User2FAHandler, rateLi
 }
 
 // RegisterUser2FARoutes 注册登录态 2FA 管理端点。
-func RegisterUser2FARoutes(user gin.IRoutes, handler *User2FAHandler) {
-	if user == nil || handler == nil {
+func RegisterUser2FARoutes(user gin.IRoutes, handler *User2FAHandler, rateLimit gin.HandlerFunc) {
+	if user == nil || handler == nil || rateLimit == nil {
 		panic("user 2fa routes: required dependency is nil")
 	}
 	user.GET("/me/2fa/status", handler.GetUser2FAStatus)
-	user.POST("/me/2fa/setup", handler.SetupUser2FA)
-	user.POST("/me/2fa/enable", handler.EnableUser2FA)
-	user.POST("/me/2fa/disable", handler.DisableUser2FA)
-	user.POST("/me/2fa/recovery-codes/regenerate", handler.RegenerateUser2FARecoveryCodes)
+	user.POST("/me/2fa/setup", rateLimit, handler.SetupUser2FA)
+	user.POST("/me/2fa/enable", rateLimit, handler.EnableUser2FA)
+	user.POST("/me/2fa/disable", rateLimit, handler.DisableUser2FA)
+	user.POST("/me/2fa/recovery-codes/regenerate", rateLimit, handler.RegenerateUser2FARecoveryCodes)
 }
 
 // RegisterUserPasswordAuthRoutes 注册公开的忘记密码端点（需附带限流中间件）。

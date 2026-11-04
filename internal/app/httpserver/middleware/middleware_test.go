@@ -18,8 +18,8 @@ func TestResolveAllowedOrigin(t *testing.T) {
 	}
 
 	got = resolveAllowedOrigin("https://example.com", []string{"*"}, true)
-	if got != "https://example.com" {
-		t.Fatalf("wildcard with credentials should echo origin, got %s", got)
+	if got != "" {
+		t.Fatalf("wildcard with credentials must not echo origin, got %s", got)
 	}
 
 	got = resolveAllowedOrigin("https://a.example.com", []string{"https://a.example.com", "https://b.example.com"}, false)
@@ -112,5 +112,49 @@ func TestPaymentTOTPHeaderAllowedByDefaultCORS(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNoContent || !strings.Contains(w.Header().Get("Access-Control-Allow-Headers"), "X-Admin-TOTP") {
 		t.Fatalf("TOTP preflight blocked: %d %v", w.Code, w.Header())
+	}
+}
+
+func TestCredentialedCORSRequiresExplicitOrigin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name, origin string
+		allowed      []string
+		credentials  bool
+		want         string
+	}{
+		{"wildcard attacker", "https://attacker.example", []string{"*"}, true, ""},
+		{"wildcard opaque", "null", []string{"*"}, true, ""},
+		{"wildcard absent", "", []string{"*"}, true, ""},
+		{"mixed attacker", "https://attacker.example", []string{"*", "https://shop.example"}, true, ""},
+		{"mixed opaque", "null", []string{"*", "https://shop.example"}, true, ""},
+		{"mixed allowed", "https://shop.example", []string{"*", "https://shop.example"}, true, "https://shop.example"},
+		{"exact allowed", "https://shop.example", []string{"https://shop.example"}, true, "https://shop.example"},
+		{"public wildcard", "https://attacker.example", []string{"*"}, false, "*"},
+		{"public opaque", "null", []string{"*"}, false, "*"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, method := range []string{http.MethodOptions, http.MethodGet} {
+				r := gin.New()
+				r.Use(CORSMiddleware(config.CORSConfig{AllowedOrigins: tc.allowed, AllowCredentials: tc.credentials}))
+				r.GET("/api/test", func(c *gin.Context) { c.Status(http.StatusOK) })
+				req := httptest.NewRequest(method, "/api/test", nil)
+				req.Header.Set("Origin", tc.origin)
+				w := httptest.NewRecorder()
+				r.ServeHTTP(w, req)
+				if got := w.Header().Get("Access-Control-Allow-Origin"); got != tc.want {
+					t.Fatalf("%s origin header = %q, want %q", method, got, tc.want)
+				}
+				if tc.want != "" && tc.want != "*" && w.Header().Get("Vary") != "Origin" {
+					t.Fatal("explicit origin must vary by Origin")
+				}
+				if tc.credentials && w.Header().Get("Access-Control-Allow-Credentials") != "true" {
+					t.Fatal("credentials behavior changed")
+				}
+				if !tc.credentials && w.Header().Get("Access-Control-Allow-Credentials") != "" {
+					t.Fatal("public request permits credentials")
+				}
+			}
+		})
 	}
 }

@@ -125,7 +125,7 @@ func registerAdminRoutes(
 	// 系统信息与版本检测
 	systemtransport.RegisterAdminRoutes(authorized, systemtransport.NewAdminHandler(nil))
 
-	adminauthtransport.RegisterAdmin2FARoutes(authorized, admin2FAHandler)
+	adminauthtransport.RegisterAdmin2FARoutes(authorized, admin2FAHandler, middleware.MFAManagementRateLimit(redisClient, "admin_id"))
 
 	// 推广返利
 	adminAffiliateHandler := affiliatebootstrap.NewAdminHandler(c)
