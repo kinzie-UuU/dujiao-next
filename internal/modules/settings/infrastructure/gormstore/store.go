@@ -3,6 +3,7 @@ package settingsstore
 import (
 	"errors"
 
+	_ "github.com/dujiao-next/internal/securestore/serializer"
 	"github.com/dujiao-next/internal/shared/jsonmap"
 	"gorm.io/gorm"
 )
@@ -10,7 +11,7 @@ import (
 // SettingRecord is the persistence representation of a settings row.
 type SettingRecord struct {
 	Key       string       `gorm:"primarykey" json:"key"`
-	ValueJSON jsonmap.JSON `gorm:"type:json" json:"value"`
+	ValueJSON jsonmap.JSON `gorm:"serializer:setting_json;type:json" json:"value"`
 }
 
 // TableName preserves the existing database contract.

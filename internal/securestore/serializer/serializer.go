@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	StringSerializerName = "secure_string"
-	JSONSerializerName   = "secure_json"
-	ciphertextPrefix     = "enc:v1:"
+	StringSerializerName   = "secure_string"
+	JSONSerializerName     = "secure_json"
+	SettingsSerializerName = "setting_json"
+	ciphertextPrefix       = "enc:v1:"
 )
 
 var configureMu sync.Mutex
@@ -24,6 +25,7 @@ var configureMu sync.Mutex
 func init() {
 	schema.RegisterSerializer(StringSerializerName, passthroughStringSerializer{})
 	schema.RegisterSerializer(JSONSerializerName, passthroughJSONSerializer{})
+	schema.RegisterSerializer(SettingsSerializerName, passthroughJSONSerializer{})
 }
 
 func Configure(secret string) error {
@@ -36,6 +38,7 @@ func Configure(secret string) error {
 	key := crypto.DeriveKey(secret)
 	schema.RegisterSerializer(StringSerializerName, encryptedStringSerializer{key: key})
 	schema.RegisterSerializer(JSONSerializerName, encryptedJSONSerializer{key: key})
+	schema.RegisterSerializer(SettingsSerializerName, settingsJSONSerializer{encryptedJSONSerializer{key: key}})
 	return nil
 }
 
@@ -191,4 +194,32 @@ func setJSONField(ctx context.Context, field *schema.Field, dst reflect.Value, r
 	}
 	field.ReflectValueOf(ctx, dst).Set(value.Elem())
 	return nil
+}
+
+// IsSensitiveSettingKey is an explicit schema-backed list. Public settings and
+// migration markers remain readable by existing read-only operational consumers.
+func IsSensitiveSettingKey(key string) bool {
+	switch key {
+	case "smtp_config", "telegram_auth_config", "captcha_config":
+		return true
+	default:
+		return false
+	}
+}
+
+type settingsJSONSerializer struct{ encryptedJSONSerializer }
+
+func (s settingsJSONSerializer) Value(ctx context.Context, field *schema.Field, dst reflect.Value, fieldValue interface{}) (interface{}, error) {
+	record := reflect.Indirect(dst)
+	if record.Kind() != reflect.Struct {
+		return nil, errors.New("settings serializer requires a record")
+	}
+	key := record.FieldByName("Key")
+	if !key.IsValid() || key.Kind() != reflect.String || key.String() == "" {
+		return nil, errors.New("settings serializer requires a setting key")
+	}
+	if IsSensitiveSettingKey(key.String()) {
+		return s.encryptedJSONSerializer.Value(ctx, field, dst, fieldValue)
+	}
+	return (passthroughJSONSerializer{}).Value(ctx, field, dst, fieldValue)
 }

@@ -152,8 +152,8 @@ func main() {
 	if err != nil {
 		stdLog.Fatalf("敏感数据加密迁移失败: %v", err)
 	}
-	if secureResult.CardSecrets > 0 || secureResult.Fulfillments > 0 || secureResult.ProcurementPayloads > 0 || secureResult.APICredentials > 0 {
-		stdLog.Printf("敏感数据加密迁移完成: card_secrets=%d fulfillments=%d procurement_payloads=%d api_credentials=%d", secureResult.CardSecrets, secureResult.Fulfillments, secureResult.ProcurementPayloads, secureResult.APICredentials)
+	if secureResult.CardSecrets > 0 || secureResult.Fulfillments > 0 || secureResult.ProcurementPayloads > 0 || secureResult.APICredentials > 0 || secureResult.SensitiveSettings > 0 {
+		stdLog.Printf("敏感数据加密迁移完成: card_secrets=%d fulfillments=%d procurement_payloads=%d api_credentials=%d sensitive_settings=%d", secureResult.CardSecrets, secureResult.Fulfillments, secureResult.ProcurementPayloads, secureResult.APICredentials, secureResult.SensitiveSettings)
 	}
 
 	// 初始化默认管理员账号

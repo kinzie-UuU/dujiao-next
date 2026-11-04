@@ -8,12 +8,14 @@ import (
 	cardsecretdomain "github.com/dujiao-next/internal/modules/cardsecret/domain"
 	fulfillmentdomain "github.com/dujiao-next/internal/modules/fulfillment/domain"
 	procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
+	settingsstore "github.com/dujiao-next/internal/modules/settings/infrastructure/gormstore"
 	securestoreserializer "github.com/dujiao-next/internal/securestore/serializer"
 	"gorm.io/gorm"
 )
 
 type BackfillResult struct {
 	APICredentials      int
+	SensitiveSettings   int
 	CardSecrets         int
 	Fulfillments        int
 	ProcurementPayloads int
@@ -110,6 +112,26 @@ func Backfill(db *gorm.DB) (BackfillResult, error) {
 				return err
 			}
 			result.APICredentials++
+		}
+		var rawSettings []struct {
+			Key       string
+			ValueJSON string
+		}
+		if err := tx.Table("settings").Select("key, value_json").Find(&rawSettings).Error; err != nil {
+			return err
+		}
+		for _, raw := range rawSettings {
+			if !securestoreserializer.IsSensitiveSettingKey(raw.Key) || !hasPlainJSON(raw.ValueJSON) {
+				continue
+			}
+			var item settingsstore.SettingRecord
+			if err := tx.First(&item, "key = ?", raw.Key).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&item).Select("ValueJSON").UpdateColumns(&item).Error; err != nil {
+				return err
+			}
+			result.SensitiveSettings++
 		}
 		return nil
 	})
