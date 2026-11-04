@@ -82,10 +82,9 @@ func resolveAllowedOrigin(origin string, allowedOrigins []string, allowCredentia
 		return ""
 	}
 	for _, allowed := range allowedOrigins {
-		if allowed == "*" {
-			if allowCredentials && origin != "" {
-				return origin
-			}
+		// Credentialed CORS requires an explicit origin. Never turn a wildcard
+		// configuration into unrestricted reflection of the caller's Origin.
+		if allowed == "*" && !allowCredentials {
 			return "*"
 		}
 	}
@@ -93,7 +92,7 @@ func resolveAllowedOrigin(origin string, allowedOrigins []string, allowCredentia
 		return ""
 	}
 	for _, allowed := range allowedOrigins {
-		if strings.EqualFold(allowed, origin) {
+		if allowed != "*" && strings.EqualFold(allowed, origin) {
 			return origin
 		}
 	}
