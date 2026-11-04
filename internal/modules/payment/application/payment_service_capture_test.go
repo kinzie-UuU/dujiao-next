@@ -11,6 +11,8 @@ import (
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"context"
 	"errors"
@@ -184,7 +186,7 @@ func TestManualReceiptRequiredAndAmountChecked(t *testing.T) {
 	for _, mutate := range []func(*paymentdomain.ManualPaymentEvidence){
 		func(e *paymentdomain.ManualPaymentEvidence) { e.PayerVerified = false },
 		func(e *paymentdomain.ManualPaymentEvidence) { e.TransactionID = "bad" },
-		func(e *paymentdomain.ManualPaymentEvidence) { e.Amount = "100.01" },
+		func(e *paymentdomain.ManualPaymentEvidence) { e.Amount = "99.99" },
 		func(e *paymentdomain.ManualPaymentEvidence) { e.Amount = "100.001" },
 		func(e *paymentdomain.ManualPaymentEvidence) { e.Currency = "USD" },
 	} {
@@ -609,5 +611,254 @@ func TestManualAdminAttestationPreservesLegacyReceipt(t *testing.T) {
 		if got.ProviderRef != originalRef || got.ManualReceiptKey == nil || *got.ManualReceiptKey != "wechat:"+originalRef {
 			t.Fatal("retry lost original platform receipt")
 		}
+	}
+}
+
+type receiptQueue struct {
+	paymentcontract.Queue
+	fulfilled atomic.Int32
+}
+
+func (q *receiptQueue) Enabled() bool                                  { return true }
+func (q *receiptQueue) EnqueueOrderAutoFulfill(uint) error             { q.fulfilled.Add(1); return nil }
+func (q *receiptQueue) EnqueueStatusEmail(uint, string) error          { return nil }
+func (q *receiptQueue) EnqueueTimeoutCancel(uint, time.Duration) error { return nil }
+
+type receiptProcurement struct{ calls atomic.Int32 }
+
+func (p *receiptProcurement) CreateForOrder(uint) error { p.calls.Add(1); return nil }
+
+func TestManualOverpaymentPreservesQuotedAccounting(t *testing.T) {
+	for _, tt := range []struct{ name, channel, quote, fee, wallet, received, surplus string }{
+		{"invoice8percent", "wechat", "143.64", "10.64", "0", "146", "2.36"},
+		{"standard2percent", "alipay", "135.66", "2.66", "0", "136", "0.34"},
+		{"walletMixedInvoice", "wechat", "108", "8", "33", "109", "1.00"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, db := setupPaymentServiceWalletTest(t)
+			sqlDB, _ := db.DB()
+			sqlDB.SetMaxOpenConns(1)
+			order := createUnderpaidOrder(t, db, "OVER-"+tt.name, 0, 133)
+			wallet := decimal.RequireFromString(tt.wallet)
+			if err := db.Model(order).Updates(map[string]interface{}{"wallet_paid_amount": tt.wallet, "online_paid_amount": decimal.NewFromInt(133).Sub(wallet).String()}).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Create(&orderdomain.OrderItem{OrderID: order.ID, ProductID: 1, TitleJSON: jsonmap.JSON{"en": "test"}, Quantity: 1, FulfillmentType: constants.FulfillmentTypeAuto}).Error; err != nil {
+				t.Fatal(err)
+			}
+			payment := &paymentdomain.Payment{OrderID: order.ID, ChannelID: 1, ProviderType: manualQRProviderType, ChannelType: tt.channel, Amount: money.FromDecimal(decimal.RequireFromString(tt.quote)), FeeAmount: money.FromDecimal(decimal.RequireFromString(tt.fee)), Currency: "CNY", Status: constants.PaymentStatusPending}
+			if err := db.Create(payment).Error; err != nil {
+				t.Fatal(err)
+			}
+			proof := receiptEvidence(t, db, payment.ID)
+			proof.Amount = tt.received
+			queue := &receiptQueue{}
+			svc.queue = queue
+			procurement := &receiptProcurement{}
+			svc.procurementSvc = procurement
+			var wg sync.WaitGroup
+			results := make(chan error, 8)
+			for i := 0; i < 8; i++ {
+				wg.Add(1)
+				go func() { defer wg.Done(); _, err := svc.ConfirmManualPayment(payment.ID, proof); results <- err }()
+			}
+			wg.Wait()
+			close(results)
+			for err := range results {
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if procurement.calls.Load() != 1 {
+				t.Fatalf("procurement count=%d", procurement.calls.Load())
+			}
+			if queue.fulfilled.Load() != 1 {
+				t.Fatalf("fulfillment count=%d", queue.fulfilled.Load())
+			}
+			if err := db.First(payment, payment.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if !payment.Amount.Decimal.Equal(decimal.RequireFromString(tt.quote)) || !payment.FeeAmount.Decimal.Equal(decimal.RequireFromString(tt.fee)) {
+				t.Fatal("quote or fee changed")
+			}
+			for key, want := range map[string]string{manualReceivedAmountKey: decimal.RequireFromString(tt.received).StringFixed(2), manualReceivedCurrencyKey: "CNY", manualExpectedAmountKey: decimal.RequireFromString(tt.quote).StringFixed(2), manualOverpaymentAmountKey: tt.surplus} {
+				if payment.ProviderPayload[key] != want {
+					t.Fatalf("audit %s=%v want %s", key, payment.ProviderPayload[key], want)
+				}
+			}
+			if err := db.First(order, order.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if !order.TotalAmount.Decimal.Equal(decimal.NewFromInt(133)) || !order.WalletPaidAmount.Decimal.Equal(wallet) || !order.OnlinePaidAmount.Decimal.Equal(decimal.NewFromInt(133).Sub(wallet)) {
+				t.Fatal("order accounting changed")
+			}
+			proof.Amount = decimal.RequireFromString(tt.received).Add(decimal.NewFromInt(1)).String()
+			if _, err := svc.ConfirmManualPayment(payment.ID, proof); !errors.Is(err, ErrPaymentInvalid) {
+				t.Fatalf("changed receipt accepted: %v", err)
+			}
+			proof.Amount = tt.received
+			proof.Currency = "USD"
+			if _, err := svc.ConfirmManualPayment(payment.ID, proof); !errors.Is(err, ErrPaymentCurrencyMismatch) {
+				t.Fatalf("changed currency accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestManualOverpaymentRejectsUnderpaymentAndInvalidCents(t *testing.T) {
+	for _, amount := range []string{"143.63", "146.001", "146.000", "1e3", "+146", " 146", "-146", "0"} {
+		t.Run(amount, func(t *testing.T) {
+			svc, db := setupPaymentServiceWalletTest(t)
+			order := createUnderpaidOrder(t, db, "INVALID-AMOUNT", 0, 133)
+			p := &paymentdomain.Payment{OrderID: order.ID, ChannelID: 1, ProviderType: manualQRProviderType, ChannelType: "wechat", Amount: money.FromDecimal(decimal.RequireFromString("143.64")), FeeAmount: money.FromDecimal(decimal.RequireFromString("10.64")), Currency: "CNY", Status: constants.PaymentStatusPending}
+			if err := db.Create(p).Error; err != nil {
+				t.Fatal(err)
+			}
+			proof := receiptEvidence(t, db, p.ID)
+			proof.Amount = amount
+			if _, err := svc.ConfirmManualPayment(p.ID, proof); !errors.Is(err, ErrPaymentAmountMismatch) {
+				t.Fatalf("amount accepted: %v", err)
+			}
+			db.First(p, p.ID)
+			if p.ManualReceiptKey != nil || p.Status != constants.PaymentStatusPending {
+				t.Fatal("rejected amount claimed or paid")
+			}
+		})
+	}
+}
+
+func TestManualOverpaymentClaimSurvivesFailedCapture(t *testing.T) {
+	svc, db := setupPaymentServiceWalletTest(t)
+	order := createUnderpaidOrder(t, db, "OVER-FAILED-CAPTURE", 0, 133)
+	p := &paymentdomain.Payment{OrderID: order.ID, ChannelID: 1, ProviderType: manualQRProviderType, ChannelType: "wechat", Amount: money.FromDecimal(decimal.RequireFromString("143.64")), FeeAmount: money.FromDecimal(decimal.RequireFromString("10.64")), Currency: "CNY", Status: constants.PaymentStatusPending}
+	if err := db.Create(p).Error; err != nil {
+		t.Fatal(err)
+	}
+	proof := receiptEvidence(t, db, p.ID)
+	proof.Amount = "146"
+	svc.paymentRepo = &expireManualRiskAfterClaimStore{Store: svc.paymentRepo, afterClaim: func() {
+		db.Exec("UPDATE payment_risk_reservations SET created_at=?", time.Now().Add(-25*time.Hour).Unix())
+	}}
+	if _, err := svc.ConfirmManualPayment(p.ID, proof); !errors.Is(err, ErrPaymentStatusInvalid) {
+		t.Fatalf("expected second-stage failure: %v", err)
+	}
+	db.Exec("UPDATE payment_risk_reservations SET created_at=?", time.Now().Unix())
+	proof.Amount = "147"
+	if _, err := svc.ConfirmManualPayment(p.ID, proof); !errors.Is(err, ErrPaymentInvalid) {
+		t.Fatalf("changed pending receipt accepted: %v", err)
+	}
+	db.First(p, p.ID)
+	for _, key := range []string{manualReceivedAmountKey, manualExpectedAmountKey, manualOverpaymentAmountKey, manualReceivedCurrencyKey} {
+		payload := jsonmap.JSON{"payer_verified_by_admin": true}
+		for k, v := range p.ProviderPayload {
+			payload[k] = v
+		}
+		payload[key] = "999"
+		_, err := svc.HandleCallback(PaymentCallbackInput{PaymentID: p.ID, ChannelID: 1, Status: constants.PaymentStatusSuccess, ProviderRef: p.ProviderRef, Amount: p.Amount, Currency: "CNY", Payload: payload})
+		if err == nil {
+			t.Fatalf("changed callback %s accepted", key)
+		}
+	}
+	proof.Amount = "146"
+	if _, err := svc.ConfirmManualPayment(p.ID, proof); err != nil {
+		t.Fatalf("original proof retry failed: %v", err)
+	}
+}
+
+func TestManualForeignSettlementStillRejectsOverpayment(t *testing.T) {
+	for _, tt := range []struct{ channel, key, currency, ledger, rateKey, rate, amount string }{
+		{"twqr", "twqr_quote", "TWD", "cnyAmount", "exchangeRate", "4.5", "450"},
+		{"binance_usdt", "crypto_quote", "USDT", "orderAmount", "rate", "7", "14.29"},
+	} {
+		t.Run(tt.channel, func(t *testing.T) {
+			svc, db := setupPaymentServiceWalletTest(t)
+			order := createUnderpaidOrder(t, db, "FOREIGN-"+tt.channel, 0, 100)
+			p := &paymentdomain.Payment{OrderID: order.ID, ChannelID: 1, ProviderType: manualQRProviderType, ChannelType: tt.channel, Amount: money.FromDecimal(decimal.NewFromInt(100)), Currency: "CNY", Status: constants.PaymentStatusPending, ProviderPayload: jsonmap.JSON{tt.key: map[string]interface{}{"currency": tt.currency, tt.ledger: "100", tt.rateKey: tt.rate, "amount": tt.amount}}}
+			if err := db.Create(p).Error; err != nil {
+				t.Fatal(err)
+			}
+			proof := receiptEvidence(t, db, p.ID)
+			proof.Amount = decimal.RequireFromString(tt.amount).Add(decimal.NewFromInt(1)).String()
+			if _, err := svc.ConfirmManualPayment(p.ID, proof); !errors.Is(err, ErrPaymentAmountMismatch) {
+				t.Fatalf("foreign overpayment accepted: %v", err)
+			}
+			proof.Amount = tt.amount
+			if _, err := svc.ConfirmManualPayment(p.ID, proof); err != nil {
+				t.Fatalf("exact foreign receipt rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestManualOverpaymentCompetingAmountsBindOneReceipt(t *testing.T) {
+	svc, db := setupPaymentServiceWalletTest(t)
+	sqlDB, _ := db.DB()
+	sqlDB.SetMaxOpenConns(1)
+	order := createUnderpaidOrder(t, db, "OVER-RACE", 0, 133)
+	p := &paymentdomain.Payment{OrderID: order.ID, ChannelID: 1, ProviderType: manualQRProviderType, ChannelType: "wechat", Amount: money.FromDecimal(decimal.RequireFromString("143.64")), FeeAmount: money.FromDecimal(decimal.RequireFromString("10.64")), Currency: "CNY", Status: constants.PaymentStatusPending}
+	if err := db.Create(p).Error; err != nil {
+		t.Fatal(err)
+	}
+	proof := receiptEvidence(t, db, p.ID)
+	var wg sync.WaitGroup
+	results := make(chan error, 2)
+	for _, amount := range []string{"146", "147"} {
+		wg.Add(1)
+		go func(amount string) {
+			defer wg.Done()
+			copy := proof
+			copy.Amount = amount
+			_, err := svc.ConfirmManualPayment(p.ID, copy)
+			results <- err
+		}(amount)
+	}
+	wg.Wait()
+	close(results)
+	success, rejected := 0, 0
+	for err := range results {
+		if err == nil {
+			success++
+		} else if errors.Is(err, ErrPaymentInvalid) {
+			rejected++
+		} else {
+			t.Fatal(err)
+		}
+	}
+	if success != 1 || rejected != 1 {
+		t.Fatalf("success=%d rejected=%d", success, rejected)
+	}
+	db.First(p, p.ID)
+	other := createUnderpaidOrder(t, db, "OVER-DUPLICATE-RECEIPT", 0, 133)
+	duplicate := &paymentdomain.Payment{OrderID: other.ID, ChannelID: 1, ProviderType: manualQRProviderType, ChannelType: "wechat", Amount: p.Amount, FeeAmount: p.FeeAmount, Currency: "CNY", Status: constants.PaymentStatusPending}
+	if err := db.Create(duplicate).Error; err != nil {
+		t.Fatal(err)
+	}
+	reused := receiptEvidence(t, db, duplicate.ID)
+	reused.TransactionID = proof.TransactionID
+	reused.Amount = p.ProviderPayload[manualReceivedAmountKey].(string)
+	if _, err := svc.ConfirmManualPayment(duplicate.ID, reused); err == nil {
+		t.Fatal("same receipt paid another order")
+	}
+	db.First(duplicate, duplicate.ID)
+	if duplicate.Status != constants.PaymentStatusPending {
+		t.Fatal("duplicate paid")
+	}
+}
+
+func TestManualOverpaidRechargeDoesNotCreditSurplus(t *testing.T) {
+	svc, db := setupPaymentServiceWalletTest(t)
+	p, recharge := createWalletRechargeFixture(t, db, constants.PaymentStatusPending, constants.WalletRechargeStatusPending)
+	if err := db.Model(p).Update("provider_type", manualQRProviderType).Error; err != nil {
+		t.Fatal(err)
+	}
+	proof := receiptEvidence(t, db, p.ID)
+	proof.Amount = decimal.RequireFromString(proof.Amount).Add(decimal.NewFromInt(1)).String()
+	for i := 0; i < 2; i++ {
+		if _, err := svc.ConfirmManualPayment(p.ID, proof); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := walletBalance(t, db, recharge.UserID); got != "88.00" {
+		t.Fatalf("surplus credited or duplicate credit: %s", got)
 	}
 }
