@@ -1,18 +1,18 @@
 package procurement_test
 
 import (
-	ordergormstore "github.com/dujiao-next/internal/modules/order/infrastructure/gormstore"
-	procurementorderreader "github.com/dujiao-next/internal/modules/procurement/infrastructure/orderreader"
-	"testing"
-	"time"
-
+	"github.com/dujiao-next/internal/config"
+	"github.com/dujiao-next/internal/constants"
 	fulfillmentdomain "github.com/dujiao-next/internal/modules/fulfillment/domain"
 	orderdomain "github.com/dujiao-next/internal/modules/order/domain"
-
-	"github.com/dujiao-next/internal/constants"
+	ordergormstore "github.com/dujiao-next/internal/modules/order/infrastructure/gormstore"
 	procurementcontract "github.com/dujiao-next/internal/modules/procurement/contract"
 	procurementgormstore "github.com/dujiao-next/internal/modules/procurement/infrastructure/gormstore"
+	procurementorderreader "github.com/dujiao-next/internal/modules/procurement/infrastructure/orderreader"
 	securestoreserializer "github.com/dujiao-next/internal/securestore/serializer"
+	"gorm.io/gorm"
+	"testing"
+	"time"
 )
 
 type procurementCallbackStatusFixture struct {
@@ -309,5 +309,46 @@ func TestUpstreamCredentialsEncryptedInBothOrderRecords(t *testing.T) {
 	saved, err := svc.GetByLocalOrderNo(order.OrderNo)
 	if err != nil || saved.UpstreamPayload != f.Payload || db.Where("order_id=?", order.ID).First(&record).Error != nil || record.Payload != f.Payload {
 		t.Fatal("authorized reads did not round trip")
+	}
+}
+
+func TestRefundedProcurementCannotBeReopenedByPartialRefundReplay(t *testing.T) {
+	assertProcurementCallbackStatus(t, procurementCallbackStatusFixture{
+		orderNo: "REFUND-REPLAY-FINAL", initialOrderStatus: constants.OrderStatusDelivered,
+		initialProcurementStatus: constants.ProcurementStatusRefunded, callbackStatus: "partially_refunded",
+		expectedProcurementStatus: constants.ProcurementStatusRefunded, expectedOrderStatus: constants.OrderStatusDelivered,
+	})
+}
+
+func TestSyncParentStatusPreservesInterveningRefund(t *testing.T) {
+	db := setupProcurementTestDB(t)
+	parent := createProcTestOrder(t, db, "PARENT-REFUND-RACE", constants.OrderStatusFulfilling, constants.FulfillmentTypeUpstream)
+	child := createProcTestOrder(t, db, "CHILD-REFUND-RACE", constants.OrderStatusDelivered, constants.FulfillmentTypeUpstream)
+	if err := db.Model(&child).Update("parent_id", parent.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	injected := false
+	// Insert a refund immediately before the stale synchronization update. Exec
+	// bypasses the update callback and models the state visible at the write boundary.
+	db.Callback().Update().Before("gorm:update").Register("test:refund-before-sync", func(tx *gorm.DB) {
+		if injected {
+			return
+		}
+		injected = true
+		if err := tx.Exec("UPDATE orders SET status=? WHERE id IN (?, ?)", constants.OrderStatusRefunded, parent.ID, child.ID).Error; err != nil {
+			tx.AddError(err)
+		}
+	})
+	lifecycle := procurementgormstore.NewLifecycle(db, nil, nil, config.EmailConfig{})
+	status, err := lifecycle.SyncParentStatus(parent.ID, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted orderdomain.Order
+	if err := db.First(&persisted, parent.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Status != constants.OrderStatusRefunded || status != constants.OrderStatusRefunded {
+		t.Fatalf("refund overwritten: stored=%s returned=%s", persisted.Status, status)
 	}
 }

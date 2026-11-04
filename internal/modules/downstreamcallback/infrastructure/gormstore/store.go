@@ -2,11 +2,13 @@ package gormstore
 
 import (
 	"errors"
+	"strings"
 
 	downstreamcontract "github.com/dujiao-next/internal/modules/downstreamcallback/contract"
 	downstreamdomain "github.com/dujiao-next/internal/modules/downstreamcallback/domain"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Store 是下游回调引用的 GORM 仓储。
@@ -61,7 +63,43 @@ func (s *Store) GetByCredentialAndDownstreamNo(credentialID uint, downstreamOrde
 }
 
 func (s *Store) Create(ref *downstreamdomain.OrderRef) error {
-	return s.db.Create(ref).Error
+	if ref == nil || ref.OrderID == 0 || ref.ApiCredentialID == 0 {
+		return downstreamcontract.ErrInvalidRef
+	}
+	ref.DownstreamOrderNo = strings.TrimSpace(ref.DownstreamOrderNo)
+	if ref.DownstreamOrderNo == "" {
+		return s.db.Create(ref).Error
+	}
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		// Lock the existing credential even when its first order reference does
+		// not exist yet. PostgreSQL/MySQL serialize writers on this row; SQLite
+		// serializes writers and rejects stale snapshot upgrades.
+		if tx.Dialector.Name() == "sqlite" {
+			// SQLite ignores FOR UPDATE. Acquire its write reservation before
+			// checking references; busy/failed acquisition must fail closed.
+			locked := tx.Exec("UPDATE api_credentials SET id = id WHERE id = ? AND deleted_at IS NULL", ref.ApiCredentialID)
+			if locked.Error != nil {
+				return locked.Error
+			}
+			if locked.RowsAffected != 1 {
+				return gorm.ErrRecordNotFound
+			}
+		}
+		var credential struct{ ID uint }
+		if err := tx.Table("api_credentials").Select("id").Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND deleted_at IS NULL", ref.ApiCredentialID).Take(&credential).Error; err != nil {
+			return err
+		}
+		var existing downstreamdomain.OrderRef
+		err := tx.Where("api_credential_id = ? AND downstream_order_no = ?", ref.ApiCredentialID, ref.DownstreamOrderNo).First(&existing).Error
+		if err == nil {
+			return downstreamcontract.ErrDuplicateRef
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		return tx.Create(ref).Error
+	})
 }
 
 func (s *Store) Update(ref *downstreamdomain.OrderRef) error {

@@ -456,9 +456,6 @@ func parseAPIResult(result *core.APIResult) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("%w: read response failed", ErrResponseInvalid)
 	}
 	if result.Response.StatusCode < 200 || result.Response.StatusCode >= 300 {
-		if len(respBody) > 0 {
-			return nil, fmt.Errorf("%w: status %d body %s", ErrResponseInvalid, result.Response.StatusCode, strings.TrimSpace(string(respBody)))
-		}
 		return nil, fmt.Errorf("%w: status %d", ErrResponseInvalid, result.Response.StatusCode)
 	}
 	if len(respBody) == 0 {

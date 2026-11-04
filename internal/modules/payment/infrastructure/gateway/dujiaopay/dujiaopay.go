@@ -380,7 +380,7 @@ func CreatePayment(ctx context.Context, cfg *Config, input CreateInput, options 
 		return nil, fmt.Errorf("%w: read response failed", ErrRequestFailed)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("%w: status=%d body=%s", ErrRequestFailed, resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return nil, fmt.Errorf("%w: status=%d", ErrRequestFailed, resp.StatusCode)
 	}
 
 	var raw map[string]interface{}
