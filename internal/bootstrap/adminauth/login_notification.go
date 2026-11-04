@@ -16,9 +16,10 @@ import (
 )
 
 type adminLoginNotifierAdapter struct {
-	notifications notificationcontract.NotificationEnqueuer
-	slots         chan struct{}
-	prefix        string
+	notifications  notificationcontract.NotificationEnqueuer
+	slots          chan struct{}
+	aggregateSlots chan struct{}
+	prefix         string
 }
 
 func (a adminLoginNotifierAdapter) NotifyAdminLogin(login adminauthtransport.AdminLoginNotification) {
@@ -99,11 +100,28 @@ func (a adminLoginNotifierAdapter) NotifyAdminLoginFailure(failure adminauthtran
 	}
 	select {
 	case a.slots <- struct{}{}:
+		go func() { defer func() { <-a.slots }(); a.enqueueFailure(failure) }()
 	default:
 		logger.Warnw("admin_login_failure_notification_capacity_exceeded")
+	}
+	// Invalid challenge tokens need no password or CAPTCHA. Keep their existing
+	// per-IP warning but do not mix them into verified-credential failures.
+	if failure.Method != "password" && failure.Method != constants.AdminLoginEventLogin2FAVerify && failure.Method != constants.AdminLoginEventLoginRecoveryCode {
 		return
 	}
-	go func() { defer func() { <-a.slots }(); a.enqueueFailure(failure) }()
+	// Independent bounded workers prevent a slow per-IP notification from
+	// delaying the aggregate counter, and vice versa. Neither blocks login.
+	select {
+	case a.aggregateSlots <- struct{}{}:
+		go func() {
+			defer func() { <-a.aggregateSlots }()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			a.enqueueDistributedFailure(ctx, failure)
+		}()
+	default:
+		logger.Warnw("admin_login_distributed_notification_capacity_exceeded")
+	}
 }
 func (a adminLoginNotifierAdapter) enqueueFailure(failure adminauthtransport.AdminLoginFailureNotification) {
 	client := cache.Client()
@@ -113,9 +131,6 @@ func (a adminLoginNotifierAdapter) enqueueFailure(failure adminauthtransport.Adm
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	// Preserve the existing per-IP alert path even if the additional aggregate
-	// notification is delayed or unavailable.
-	defer a.enqueueDistributedFailure(ctx, failure)
 	keys := a.failureKeys(failure.ClientIP)
 	eventID := uuid.NewString()
 	count, err := client.Eval(ctx, failureWindowScript, keys, eventID).Int64()

@@ -72,7 +72,7 @@ func (q *blockedLoginQueue) Enqueue(notificationcontract.EnqueueInput) error {
 func TestAdminLoginNotificationNeverWaitsForQueueAndBoundsConcurrency(t *testing.T) {
 	q := &blockedLoginQueue{entered: make(chan struct{}, 1), release: make(chan struct{})}
 	defer close(q.release)
-	a := adminLoginNotifierAdapter{notifications: q, slots: make(chan struct{}, 1)}
+	a := adminLoginNotifierAdapter{notifications: q, slots: make(chan struct{}, 1), aggregateSlots: make(chan struct{}, 1)}
 	done := make(chan struct{})
 	go func() { a.NotifyAdminLogin(adminauthtransport.AdminLoginNotification{}); close(done) }()
 	select {
@@ -289,7 +289,7 @@ func TestFailureNotificationNeverBlocksWhenRedisUnavailable(t *testing.T) {
 	t.Cleanup(func() { _ = cache.Client().Close(); _ = cache.InitRedis(nil) })
 	r.Close()
 	q := &loginQueueSpy{}
-	a := adminLoginNotifierAdapter{notifications: q, slots: make(chan struct{}, 1)}
+	a := adminLoginNotifierAdapter{notifications: q, slots: make(chan struct{}, 1), aggregateSlots: make(chan struct{}, 1)}
 	done := make(chan struct{})
 	go func() {
 		a.NotifyAdminLoginFailure(adminauthtransport.AdminLoginFailureNotification{ClientIP: "203.0.113.1", Method: "password"})
@@ -301,7 +301,7 @@ func TestFailureNotificationNeverBlocksWhenRedisUnavailable(t *testing.T) {
 		t.Fatal("failure notification blocked authentication")
 	}
 	deadline := time.After(5 * time.Second)
-	for len(a.slots) != 0 {
+	for len(a.slots) != 0 || len(a.aggregateSlots) != 0 {
 		select {
 		case <-deadline:
 			t.Fatal("notification worker did not finish")
@@ -312,6 +312,154 @@ func TestFailureNotificationNeverBlocksWhenRedisUnavailable(t *testing.T) {
 	if q.calls != 0 {
 		t.Fatal("alert was enqueued without a Redis reservation")
 	}
+}
+
+type scopeAuthStub struct{ transport.AuthService }
+
+func (scopeAuthStub) ParseChallengeToken(token string) (*transport.ChallengeClaims, error) {
+	if token != "valid-challenge" {
+		return nil, errors.New("invalid challenge")
+	}
+	return &transport.ChallengeClaims{AdminID: 7, JTI: "valid-jti"}, nil
+}
+func (scopeAuthStub) GetAdminUsername(uint) (string, error) { return "test-admin", nil }
+
+type scopeTOTPStub struct{ transport.TOTPService }
+
+func (scopeTOTPStub) VerifyChallengeCode(uint, string) error { return transport.ErrTOTPCodeInvalid }
+
+type scopeChallengeStore struct{ transport.ChallengeStore }
+
+func (scopeChallengeStore) Reserve(context.Context, string) (bool, error) { return true, nil }
+
+func TestRealTwoFAHandlerSeparatesUntrustedChallenges(t *testing.T) {
+	r := miniredis.RunT(t)
+	port, _ := strconv.Atoi(r.Port())
+	if err := cache.InitRedis(&config.RedisConfig{Enabled: true, Host: r.Host(), Port: port}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cache.Client().Close(); _ = cache.InitRedis(nil) })
+	q := &loginQueueSpy{}
+	a := adminLoginNotifierAdapter{notifications: q, slots: make(chan struct{}, 64), aggregateSlots: make(chan struct{}, 64)}
+	h := transport.NewAdmin2FAHandler(scopeTOTPStub{}, scopeAuthStub{}, scopeChallengeStore{}, nil, a)
+	request := func(token string, ip int) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest("POST", "/verify", strings.NewReader(fmt.Sprintf(`{"challenge_token":%q,"code":"123456"}`, token)))
+		c.Request.Header.Set("Content-Type", "application/json")
+		c.Request.RemoteAddr = fmt.Sprintf("203.0.113.%d:1234", ip)
+		h.Verify2FA(c)
+	}
+	wait := func() {
+		deadline := time.After(5 * time.Second)
+		for len(a.slots) != 0 || len(a.aggregateSlots) != 0 {
+			select {
+			case <-deadline:
+				t.Fatal("workers did not finish")
+			default:
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	}
+	for i := 0; i < 5; i++ {
+		request("forged-challenge", 1)
+	}
+	wait()
+	q.mu.Lock()
+	perIP := q.calls
+	q.mu.Unlock()
+	if perIP != 1 || r.Exists(a.distributedFailureKeys()[0]) {
+		t.Fatal("forged challenges affected aggregate or per-IP alert was lost")
+	}
+	for i := 0; i < 15; i++ {
+		request("valid-challenge", 1+i%5)
+	}
+	wait()
+	q.mu.Lock()
+	calls, input := q.calls, q.input
+	q.mu.Unlock()
+	if calls != 2 || input.Data["client_ip"] != "5+ IPs" {
+		t.Fatalf("verified challenge failures did not aggregate: calls=%d", calls)
+	}
+}
+
+func TestAggregateCounterDoesNotWaitForBlockedPerIPEnqueue(t *testing.T) {
+	r := miniredis.RunT(t)
+	port, _ := strconv.Atoi(r.Port())
+	if err := cache.InitRedis(&config.RedisConfig{Enabled: true, Host: r.Host(), Port: port}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cache.Client().Close(); _ = cache.InitRedis(nil) })
+	q := &blockedLoginQueue{entered: make(chan struct{}, 2), release: make(chan struct{})}
+	a := adminLoginNotifierAdapter{notifications: q, slots: make(chan struct{}, 1), aggregateSlots: make(chan struct{}, 1)}
+	f := adminauthtransport.AdminLoginFailureNotification{ClientIP: "203.0.113.1", Method: "password"}
+	for i := 0; i < 4; i++ {
+		a.enqueueFailure(f)
+	}
+	for i := 0; i < 14; i++ {
+		a.enqueueDistributedFailure(context.Background(), adminauthtransport.AdminLoginFailureNotification{ClientIP: fmt.Sprintf("203.0.113.%d", 1+i%5), Method: "password"})
+	}
+	a.NotifyAdminLoginFailure(f)
+	for i := 0; i < 2; i++ {
+		select {
+		case <-q.entered:
+		case <-time.After(3 * time.Second):
+			close(q.release)
+			t.Fatal("one notification waited for the other")
+		}
+	}
+	close(q.release)
+	deadline := time.After(5 * time.Second)
+	for len(a.slots) != 0 || len(a.aggregateSlots) != 0 {
+		select {
+		case <-deadline:
+			t.Fatal("workers did not finish")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
+func TestSaturatedWorkerPoolDoesNotBlockOtherPathOrLogin(t *testing.T) {
+	r := miniredis.RunT(t)
+	port, _ := strconv.Atoi(r.Port())
+	if err := cache.InitRedis(&config.RedisConfig{Enabled: true, Host: r.Host(), Port: port}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cache.Client().Close(); _ = cache.InitRedis(nil) })
+	q := &loginQueueSpy{}
+	a := adminLoginNotifierAdapter{notifications: q, slots: make(chan struct{}, 1), aggregateSlots: make(chan struct{}, 1)}
+	f := adminauthtransport.AdminLoginFailureNotification{ClientIP: "203.0.113.22", Method: "password"}
+	a.slots <- struct{}{}
+	a.NotifyAdminLoginFailure(f)
+	deadline := time.After(5 * time.Second)
+	for len(a.aggregateSlots) != 0 {
+		select {
+		case <-deadline:
+			t.Fatal("aggregate worker stuck")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if n, err := cache.Client().Get(context.Background(), a.distributedFailureKeys()[0]).Int(); err != nil || n != 1 {
+		t.Fatalf("per-IP saturation blocked aggregate: %d %v", n, err)
+	}
+	<-a.slots
+	a.aggregateSlots <- struct{}{}
+	a.NotifyAdminLoginFailure(f)
+	deadline = time.After(5 * time.Second)
+	for len(a.slots) != 0 {
+		select {
+		case <-deadline:
+			t.Fatal("per-IP worker stuck")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if n, err := cache.Client().Get(context.Background(), a.failureKeys(f.ClientIP)[0]).Int(); err != nil || n != 1 {
+		t.Fatalf("aggregate saturation blocked per-IP counter: %d %v", n, err)
+	}
+	<-a.aggregateSlots
 }
 
 // Real password/challenge/TOTP/recovery paths with no Redis and only synthetic data.

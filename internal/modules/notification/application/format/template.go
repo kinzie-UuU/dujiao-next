@@ -23,6 +23,16 @@ func BuildTemplateVariables(payload queue.NotificationDispatchPayload) map[strin
 	data["biz_type"] = strings.TrimSpace(payload.BizType)
 	data["biz_id"] = fmt.Sprintf("%d", payload.BizID)
 	data["occurred_at"] = time.Now().Format("2006-01-02 15:04:05")
+	if constants.IsAdminSecurityNotification(payload.EventType) {
+		// These events use fixed security templates, never user-editable ones.
+		// A historical or malformed timestamp is unknown, not the dispatch time.
+		data["occurred_at"] = "—"
+		if raw, ok := payload.Data["occurred_at"].(string); ok {
+			if eventTime, err := time.Parse(time.RFC3339, strings.TrimSpace(raw)); err == nil {
+				data["occurred_at"] = eventTime.UTC().Format(time.RFC3339)
+			}
+		}
+	}
 	return data
 }
 

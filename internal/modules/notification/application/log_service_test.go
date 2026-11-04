@@ -424,3 +424,41 @@ func TestDisabledInventoryKeepsPaymentInspectionAndStopsBuilder(t *testing.T) {
 		t.Fatalf("inventory=%d payment=%d sent=%d", reader.inventoryCalls, reader.paymentCalls, len(tg.messages))
 	}
 }
+
+func TestSecurityEventTimeUsesOriginalInstantNotDelayedDispatch(t *testing.T) {
+	for _, raw := range []string{"2026-11-04T12:34:56Z", "2026-11-04T20:34:56+08:00", "2026-11-04T07:34:56-05:00"} {
+		p := queue.NotificationDispatchPayload{EventType: constants.NotificationEventAdminLoginFailed, Data: map[string]interface{}{"occurred_at": raw}}
+		got := format.BuildTemplateVariables(p)["occurred_at"]
+		if got != "2026-11-04T12:34:56Z" {
+			t.Fatalf("%q: got %v", raw, got)
+		}
+		body := format.RenderTemplate(format.AdminSecurityTemplate(p.EventType, constants.LocaleEnUS).Body, format.BuildTemplateVariables(p))
+		if !strings.Contains(body, "Time (UTC): 2026-11-04T12:34:56Z") {
+			t.Fatalf("fixed template lost event time: %q", body)
+		}
+	}
+}
+
+func TestSecurityEventTimeMissingOrAmbiguousIsUnknown(t *testing.T) {
+	for _, raw := range []interface{}{nil, "", "2026-11-04 12:34:56", "bad", 42} {
+		p := queue.NotificationDispatchPayload{EventType: constants.NotificationEventAdminPaymentConfigChanged, Data: map[string]interface{}{"occurred_at": raw}}
+		if got := format.BuildTemplateVariables(p)["occurred_at"]; got != "—" {
+			t.Fatalf("%v: got %v", raw, got)
+		}
+	}
+	p := queue.NotificationDispatchPayload{EventType: constants.NotificationEventAdminLoginFailed}
+	if got := format.BuildTemplateVariables(p)["occurred_at"]; got != "—" {
+		t.Fatalf("missing: got %v", got)
+	}
+}
+
+func TestOtherTemplatesRetainDispatchTimeSemantics(t *testing.T) {
+	p := queue.NotificationDispatchPayload{EventType: constants.NotificationEventOrderPaidSuccess, Data: map[string]interface{}{"occurred_at": "2000-01-01T00:00:00Z", "custom": "preserved"}}
+	got := format.BuildTemplateVariables(p)
+	if got["custom"] != "preserved" || strings.Contains(got["occurred_at"].(string), "2000-") {
+		t.Fatalf("ordinary template changed: %+v", got)
+	}
+	if _, err := time.ParseInLocation("2006-01-02 15:04:05", got["occurred_at"].(string), time.Local); err != nil {
+		t.Fatal(err)
+	}
+}
