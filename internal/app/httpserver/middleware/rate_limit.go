@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -12,7 +13,6 @@ import (
 	"github.com/dujiao-next/internal/i18n"
 	"github.com/dujiao-next/internal/logger"
 	"github.com/dujiao-next/internal/platform/http/response"
-
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 )
@@ -326,5 +326,27 @@ func toInt64(value interface{}) (int64, bool) {
 		return int64(v), true
 	default:
 		return 0, false
+	}
+}
+
+// MFAManagementRateLimit bounds all code-verifying mutations by authenticated
+// account, so switching IPs or management endpoints cannot reset the budget.
+// Authentication must run before this middleware. Status reads consume no budget.
+func MFAManagementRateLimit(client *redis.Client, identityKey string) gin.HandlerFunc {
+	limit := RateLimitMiddleware(client, RateLimitRule{
+		Prefix:        "mfa_management:" + identityKey,
+		WindowSeconds: 300, MaxRequests: 5, BlockSeconds: 300,
+		MessageKey: "error.rate_limited",
+	}, func(c *gin.Context) string { return fmt.Sprint(c.GetUint(identityKey)) })
+	return func(c *gin.Context) {
+		if c.Request.Method == http.MethodGet {
+			c.Next()
+			return
+		}
+		if c.GetUint(identityKey) == 0 {
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
+		limit(c)
 	}
 }
