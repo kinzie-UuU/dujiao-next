@@ -299,6 +299,7 @@ export interface ComplianceAcknowledgePayload {
 }
 
 export const adminAPI = {
+  logout: () => api.post('/admin/logout', {}),
   login: (data: AdminLoginRequest) => api.post('/admin/login', data),
   verify2FA: (data: Verify2FAPayload) => api.post('/admin/login/verify-2fa', data),
   // 合规声明

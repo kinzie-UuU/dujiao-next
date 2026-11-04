@@ -130,6 +130,11 @@ func (s *Service) ParseJWT(tokenString string) (*JWTClaims, error) {
 	return nil, errors.New("无效的 token")
 }
 
+// dummyAdminPasswordHash is a valid bcrypt cost-10 hash used to perform the
+// same expensive password check when the requested account does not exist.
+// It is not an account credential, and its comparison result is discarded.
+const dummyAdminPasswordHash = "$2a$10$OPL94w.Qjc3NS1NiQlbgJuZXosEDJRFrMaxYV/FxLZbi7.z3jnV9u"
+
 // Login 管理员登录（第一步）
 func (s *Service) Login(username, password string) (*LoginResult, error) {
 	admin, err := s.adminRepo.GetByUsername(username)
@@ -137,7 +142,7 @@ func (s *Service) Login(username, password string) (*LoginResult, error) {
 		return nil, err
 	}
 	if admin == nil {
-		_ = bcrypt.CompareHashAndPassword([]byte("$2a$10$dummyhashtopreventtimingattacksxxxxxxxxxxxxxxxxxx"), []byte(password))
+		_ = bcrypt.CompareHashAndPassword([]byte(dummyAdminPasswordHash), []byte(password))
 		return nil, ErrInvalidCredentials
 	}
 	if err := s.VerifyPassword(admin.PasswordHash, password); err != nil {
@@ -309,5 +314,15 @@ func (s *Service) ChangePassword(adminID uint, oldPassword, newPassword string) 
 		return err
 	}
 	_ = cache.DelAdminAuthState(context.Background(), admin.ID)
+	return nil
+}
+
+// Logout revokes all sessions issued with the caller's version.
+func (s *Service) Logout(adminID uint, version uint64) error {
+	_, err := s.adminRepo.RevokeSessions(adminID, version)
+	if err != nil {
+		return err
+	}
+	_ = cache.DelAdminAuthState(context.Background(), adminID)
 	return nil
 }

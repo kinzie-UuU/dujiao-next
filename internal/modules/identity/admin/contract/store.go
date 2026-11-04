@@ -21,4 +21,5 @@ type Store interface {
 	UpdateLastLogin(uint, uint64, time.Time) (bool, error)
 	ClearTOTP(uint) error
 	UpdatePassword(uint, string, ...uint64) error
+	RevokeSessions(uint, uint64) (bool, error)
 }

@@ -113,6 +113,10 @@ func (a adminLoginAuthTransportAdapter) ChangePassword(adminID uint, oldPassword
 	return mapAdminAuthTransportError(a.auth.ChangePassword(adminID, oldPassword, newPassword))
 }
 
+func (a adminLoginAuthTransportAdapter) Logout(adminID uint, version uint64) error {
+	return a.auth.Logout(adminID, version)
+}
+
 type admin2FAAuthTransportAdapter struct {
 	auth *adminauthapp.Service
 }
