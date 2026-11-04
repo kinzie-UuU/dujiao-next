@@ -104,6 +104,7 @@ func (a *newzoeAdapter) ListCategories(context.Context) (*CategoryListResult, er
 const museAccountTerms = "<p>交付内容包括 Muse 账号、密码、双重验证（2FA）信息和邮箱取件链接。请在购买后 1 小时内首次登录。上游仅保障首次登录，建议当天用完额度。</p>"
 
 var newzoeProductTerms = map[uint]string{
+	3:  "<p>用于 Codex 的美国实体手机号单次验证。付款后自动交付接码链接，需打开链接获取号码和验证码。每份仅可成功接收一次验证码；未收到验证码不扣次数。无法接收时，可在激活 1.5 分钟后取消并重新兑换号码；收到验证码后次数即被消耗。此商品不承诺其他平台、其他国家或长期号码使用。</p>",
 	21: museAccountTerms,
 	22: museAccountTerms,
 	24: "<p>在你自己的多邻国账号上使用激活码，可开通 12 个月的 Super 会员，无需绑定银行卡。上游标注的质保期为 5 天，激活后即结束。</p>",
@@ -156,7 +157,7 @@ func (a *newzoeAdapter) ListProducts(ctx context.Context, opts ListProductsOpts)
 	// Newzoe lists the complete on-sale catalog. In synchronization mode,
 	// represent missing supported products explicitly so stale stock is hidden.
 	if opts.IncludeInactive {
-		for _, id := range []uint{21, 22, 24} {
+		for _, id := range []uint{3, 21, 22, 24} {
 			if !active[id] {
 				items = append(items, UpstreamProduct{ID: id, IsActive: false})
 			}

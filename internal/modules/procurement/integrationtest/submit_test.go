@@ -246,7 +246,7 @@ type newZoeTransport func(*http.Request) (*http.Response, error)
 func (f newZoeTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestNewZoePaidProcurementLifecycle(t *testing.T) {
-	for _, sku := range []uint{21, 22, 24} {
+	for _, sku := range []uint{3, 21, 22, 24} {
 		t.Run(fmt.Sprintf("product-%d", sku), func(t *testing.T) {
 			db := setupProcurementTestDB(t)
 			order := createProcTestOrder(t, db, "LOCAL-TEST", constants.OrderStatusPaid, constants.FulfillmentTypeUpstream)
@@ -269,6 +269,10 @@ func TestNewZoePaidProcurementLifecycle(t *testing.T) {
 			var submits int
 			var firstKey string
 			status := "pending"
+			deliveryItem := "SAMPLE-CREDENTIAL"
+			if sku == 3 {
+				deliveryItem = "https://example.invalid/codex/one-use-test"
+			}
 			old := http.DefaultTransport
 			t.Cleanup(func() { http.DefaultTransport = old })
 			http.DefaultTransport = newZoeTransport(func(r *http.Request) (*http.Response, error) {
@@ -279,14 +283,15 @@ func TestNewZoePaidProcurementLifecycle(t *testing.T) {
 				switch r.Method + " " + r.URL.Path {
 				case "POST /api/v1/orders":
 					var item struct {
-						ProductID     uint   `json:"product_id"`
-						Quantity      int    `json:"quantity"`
-						PaymentMethod string `json:"payment_method"`
+						CouponCode    *string `json:"coupon_code"`
+						ProductID     uint    `json:"product_id"`
+						Quantity      int     `json:"quantity"`
+						PaymentMethod string  `json:"payment_method"`
 					}
 					if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
 						t.Fatal(err)
 					}
-					if item.ProductID != sku || item.Quantity != 1 || item.PaymentMethod != "balance" {
+					if item.ProductID != sku || item.Quantity != 1 || item.PaymentMethod != "balance" || item.CouponCode != nil {
 						t.Fatalf("unexpected purchase: %#v", item)
 					}
 					key := r.Header.Get("Idempotency-Key")
@@ -302,7 +307,7 @@ func TestNewZoePaidProcurementLifecycle(t *testing.T) {
 				case "GET /api/v1/orders/NZ-A0001":
 					body = fmt.Sprintf(`{"order":{"id":"NZ-A0001","status":%q,"payment_received":true,"amount":"5.00","currency":"CNY","quantity":1}}`, status)
 				case "GET /api/v1/orders/NZ-A0001/delivery":
-					body = `{"delivery":{"available":true,"status":"completed","type":"automatic","items":["SAMPLE-CREDENTIAL"],"content":"SAMPLE-CREDENTIAL"}}`
+					body = fmt.Sprintf(`{"delivery":{"available":true,"status":"completed","type":"automatic","items":[%q],"content":%q}}`, deliveryItem, deliveryItem)
 				default:
 					t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 				}
@@ -343,7 +348,7 @@ func TestNewZoePaidProcurementLifecycle(t *testing.T) {
 			if err := db.Where("order_id = ?", order.ID).Find(&results).Error; err != nil {
 				t.Fatal(err)
 			}
-			if len(results) != 1 || results[0].Payload != "SAMPLE-CREDENTIAL" {
+			if len(results) != 1 || results[0].Payload != deliveryItem {
 				t.Fatalf("unexpected fulfillment: %#v", results)
 			}
 			var delivered orderdomain.Order

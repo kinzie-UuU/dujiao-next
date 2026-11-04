@@ -144,7 +144,7 @@ func TestNewzoeSyncHidesMissingProducts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !list.IncludesInactive || list.Total != 3 {
+	if !list.IncludesInactive || list.Total != 4 {
 		t.Fatalf("incomplete sync: %+v", list)
 	}
 	for _, p := range list.Items {
@@ -153,12 +153,46 @@ func TestNewzoeSyncHidesMissingProducts(t *testing.T) {
 			if !p.IsActive || p.SKUs[0].StockQuantity != 9 || p.MaxPurchaseQuantity != 2 || !strings.Contains(p.Content["zh-CN"].(string), "1 小时") {
 				t.Fatal("wrong active product")
 			}
-		case 22, 24:
+		case 3, 22, 24:
 			if p.IsActive {
 				t.Fatal("stale product still active")
 			}
 		default:
 			t.Fatal("unexpected product")
 		}
+	}
+}
+
+func TestNewzoeCodexCatalogAndSavedCouponPurchase(t *testing.T) {
+	calls := 0
+	a := testNewzoeClient(t, func(r *http.Request) (*http.Response, error) {
+		calls++
+		if r.Method == "GET" && r.URL.Path == "/api/v1/products" {
+			return newzoeTestResponse(200, `{"ok":true,"data":{"products":[{"id":3,"name":"Codex SMS","price":"5.00","type":"automatic","stock":45,"max_quantity":1}]}}`), nil
+		}
+		if r.Method != "POST" || r.URL.Path != "/api/v1/orders" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Omitting coupon_code is required for NewZoe to apply this account's saved best coupon.
+		if string(body) != `{"product_id":3,"quantity":1,"payment_method":"balance"}` {
+			t.Fatalf("unexpected purchase body %s", body)
+		}
+		return newzoeTestResponse(201, `{"ok":true,"data":{"order":{"id":"SMS-ORDER","amount":"1.00","currency":"CNY","quantity":1,"status":"completed"}}}`), nil
+	})
+	product, err := a.GetProduct(context.Background(), 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terms := product.Content["zh-CN"].(string)
+	if product.ID != 3 || product.SKUs[0].ID != 3 || product.SKUs[0].StockQuantity != 45 || product.MaxPurchaseQuantity != 1 || !strings.Contains(terms, "接码链接") || !strings.Contains(terms, "Codex") || !strings.Contains(terms, "1.5 分钟") {
+		t.Fatalf("wrong Codex product: %+v", product)
+	}
+	result, err := a.CreateOrder(context.Background(), CreateUpstreamOrderReq{SKUID: 3, Quantity: 1, DownstreamOrderNo: "LOCAL-SMS"})
+	if err != nil || !result.OK || result.Amount != "1.00" || calls != 2 {
+		t.Fatalf("purchase lost discounted amount: %+v %v", result, err)
 	}
 }
