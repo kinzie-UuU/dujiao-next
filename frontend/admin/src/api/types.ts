@@ -579,6 +579,9 @@ export interface AdminProductMapping {
 
 // --- ProcurementOrder ---
 export interface AdminProcurementOrder {
+  submission_version?: number
+  submitted_at?: string
+  submission_request_sha256?: string
   id: number
   connection_id: number
   local_order_id: number
