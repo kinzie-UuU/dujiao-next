@@ -97,3 +97,25 @@ func TestQueueOutageAllowsRetryOfSameProcurement(t *testing.T) {
 		t.Fatalf("expected pending, got %q, %v", row.Status, err)
 	}
 }
+
+func TestSoftDeletedLegacyProcurementCannotBeRecreated(t *testing.T) {
+	db := setupProcurementTestDB(t)
+	order := createProcTestOrder(t, db, "DELETED-LEGACY", constants.OrderStatusPaid, constants.FulfillmentTypeUpstream)
+	old := createTestProcurementOrder(t, db, 1, order.ID, order.OrderNo, "pending")
+	if err := db.Model(old).Updates(map[string]interface{}{"submission_version": 0, "deleted_at": time.Now()}).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc := newTestProcurementService(db, newTestSiteConnectionService(db, "key", t.TempDir()))
+	if err := svc.CreateForOrder(order.ID); !errors.Is(err, ErrExists) {
+		t.Fatalf("recreated hidden legacy: %v", err)
+	}
+	duplicate := &ProcurementOrder{LocalOrderID: order.ID, ConnectionID: 1, Currency: "CNY", SubmissionVersion: 1}
+	if err := db.Create(duplicate).Error; err == nil {
+		t.Fatal("database allowed soft-delete uniqueness bypass")
+	}
+	var count int64
+	db.Table("procurement_orders").Where("local_order_id = ?", order.ID).Count(&count)
+	if count != 1 {
+		t.Fatalf("changed history: %d", count)
+	}
+}

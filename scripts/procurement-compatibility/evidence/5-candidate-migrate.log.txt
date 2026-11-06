@@ -1,0 +1,4 @@
+=== RUN   TestExactVersionCompatibility
+COMPAT migration complete
+--- PASS: TestExactVersionCompatibility (0.24s)
+PASS
