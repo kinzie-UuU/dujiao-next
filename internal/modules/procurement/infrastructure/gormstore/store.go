@@ -43,7 +43,15 @@ func (s *Store) GetByID(id uint) (*procurementdomain.Order, error) {
 }
 
 func (s *Store) GetByLocalOrderID(localOrderID uint) (*procurementdomain.Order, error) {
-	return s.first("local_order_id = ?", localOrderID)
+	// Include soft-deleted history: deleting visibility never licenses a new purchase.
+	var order procurementdomain.Order
+	if err := s.db.Unscoped().Where("local_order_id = ?", localOrderID).First(&order).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &order, nil
 }
 
 func (s *Store) GetByLocalOrderNo(localOrderNo string) (*procurementdomain.Order, error) {
