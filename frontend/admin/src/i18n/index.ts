@@ -35,6 +35,7 @@ const messages = {
       status: {
         pending: '待处理',
         submitted: '已提交',
+        uncertain: '受理结果待核实',
         accepted: '已接受',
         rejected: '已拒绝',
         failed: '失败',
@@ -4422,6 +4423,7 @@ const messages = {
       status: {
         pending: '待處理',
         submitted: '已提交',
+        uncertain: '受理結果待核實',
         accepted: '已接受',
         rejected: '已拒絕',
         failed: '失敗',
@@ -8809,6 +8811,7 @@ const messages = {
       status: {
         pending: 'Pending',
         submitted: 'Submitted',
+        uncertain: 'Supplier receipt needs review',
         accepted: 'Accepted',
         rejected: 'Rejected',
         failed: 'Failed',

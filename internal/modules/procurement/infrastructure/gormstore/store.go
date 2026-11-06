@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/dujiao-next/internal/constants"
+
 	orderdomain "github.com/dujiao-next/internal/modules/order/domain"
 
 	procurementcontract "github.com/dujiao-next/internal/modules/procurement/contract"
@@ -67,6 +69,41 @@ func (s *Store) Create(order *procurementdomain.Order) error {
 }
 
 func (s *Store) UpdateStatus(id uint, fromStatus, toStatus string, updates map[string]interface{}) (bool, error) {
+	if _, receipt := updates["upstream_order_no"]; receipt {
+		var changed bool
+		err := s.db.Transaction(func(tx *gorm.DB) error {
+			var proc procurementdomain.Order
+			if err := tx.First(&proc, id).Error; err != nil {
+				return err
+			}
+			// Serialize every receipt binding by supplier connection, including normal
+			// responses and administrator reconciliation, before checking uniqueness.
+			if err := tx.Table("site_connections").Where("id = ?", proc.ConnectionID).UpdateColumn("updated_at", gorm.Expr("updated_at")).Error; err != nil {
+				return err
+			}
+			var connection struct{ ID uint }
+			if err := tx.Table("site_connections").Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("id = ?", proc.ConnectionID).Take(&connection).Error; err != nil {
+				return err
+			}
+			var count int64
+			number, _ := updates["upstream_order_no"].(string)
+			upstreamID, _ := updates["upstream_order_id"].(uint)
+			if err := tx.Model(&procurementdomain.Order{}).Where("connection_id = ? AND id <> ? AND ((upstream_order_no <> '' AND upstream_order_no = ?) OR (upstream_order_id > 0 AND upstream_order_id = ?))", proc.ConnectionID, id, number, upstreamID).Count(&count).Error; err != nil {
+				return err
+			}
+			if count != 0 {
+				return errors.New("supplier receipt already belongs to another procurement")
+			}
+			var err error
+			changed, err = (&Store{db: tx}).updateStatus(id, fromStatus, toStatus, updates)
+			return err
+		})
+		return changed, err
+	}
+	return s.updateStatus(id, fromStatus, toStatus, updates)
+}
+
+func (s *Store) updateStatus(id uint, fromStatus, toStatus string, updates map[string]interface{}) (bool, error) {
 	if updates == nil {
 		updates = map[string]interface{}{}
 	}
@@ -224,4 +261,44 @@ func (s *Store) attachLocalOrders(orders []procurementdomain.Order) error {
 		}
 	}
 	return nil
+}
+
+// BeginSubmission durably claims the only permitted outbound attempt while holding
+// the same parent/order fence as refunds. No network I/O occurs in this transaction.
+func (s *Store) BeginSubmission(id uint, fromStatus, requestSHA256, connectionSHA256 string, at time.Time) (bool, error) {
+	claimed := false
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var proc procurementdomain.Order
+		if err := tx.First(&proc, id).Error; err != nil {
+			return err
+		}
+		var snapshot orderdomain.Order
+		if err := tx.First(&snapshot, proc.LocalOrderID).Error; err != nil {
+			return err
+		}
+		rootID := snapshot.ID
+		if snapshot.ParentID != nil {
+			rootID = *snapshot.ParentID
+		}
+		if tx.Dialector.Name() == "sqlite" {
+			if err := tx.Model(&orderdomain.Order{}).Where("id = ?", rootID).UpdateColumn("updated_at", gorm.Expr("updated_at")).Error; err != nil {
+				return err
+			}
+		}
+		var parent orderdomain.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&parent, rootID).Error; err != nil {
+			return err
+		}
+		var order orderdomain.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&order, proc.LocalOrderID).Error; err != nil {
+			return err
+		}
+		if order.DeletedAt != nil || parent.DeletedAt != nil || (order.Status != constants.OrderStatusPaid && order.Status != constants.OrderStatusFulfilling) || (parent.Status != constants.OrderStatusPaid && parent.Status != constants.OrderStatusFulfilling && parent.Status != constants.OrderStatusPartiallyDelivered && parent.Status != constants.OrderStatusPartiallyRefunded) || order.RefundedAmount.IsPositive() {
+			return procurementcontract.ErrStatusInvalid
+		}
+		result := tx.Model(&procurementdomain.Order{}).Where("id = ? AND deleted_at IS NULL AND status = ? AND submission_version = 1 AND submission_request_sha256 = '' AND submitted_at IS NULL", id, fromStatus).Updates(map[string]interface{}{"status": constants.ProcurementStatusSubmitted, "submission_request_sha256": requestSHA256, "submission_connection_sha256": connectionSHA256, "submitted_at": at, "next_retry_at": nil, "error_message": "Upstream submission in progress; reconcile if receipt is unavailable", "updated_at": at})
+		claimed = result.RowsAffected == 1
+		return result.Error
+	})
+	return claimed, err
 }

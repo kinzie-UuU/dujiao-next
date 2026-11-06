@@ -817,3 +817,22 @@ func (r *Store) UpdateStatusIfCurrent(id uint, fromStatuses []string, status str
 	result := r.db.Model(&orderdomain.Order{}).Where("orders.deleted_at IS NULL AND id = ? AND status IN ?", id, fromStatuses).Updates(values)
 	return result.RowsAffected == 1, result.Error
 }
+
+// Called inside the refund transaction after locking the root order. The
+// procurement writer takes this same lock before persisting an outbound intent.
+func (r *Store) AssertNoUncertainProcurement(rootID uint) error {
+	if r.db.Dialector.Name() == "sqlite" {
+		if err := r.db.Model(&orderdomain.Order{}).Where("id = ?", rootID).UpdateColumn("updated_at", gorm.Expr("updated_at")).Error; err != nil {
+			return err
+		}
+	}
+	var count int64
+	err := r.db.Table("procurement_orders").Where("deleted_at IS NULL AND (status IN ? OR (submission_version = 0 AND status IN ('pending','failed','rejected'))) AND (local_order_id = ? OR local_order_id IN (SELECT id FROM orders WHERE parent_id = ? AND deleted_at IS NULL))", []string{"submitted", "uncertain"}, rootID, rootID).Count(&count).Error
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		return errors.New("upstream purchase receipt is uncertain; reconcile before refund")
+	}
+	return nil
+}

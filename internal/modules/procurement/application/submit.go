@@ -2,8 +2,10 @@ package application
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +28,12 @@ func (s *Service) SubmitToUpstream(procurementOrderID uint) error {
 	// 校验状态
 	if procOrder.Status != "pending" && procOrder.Status != "failed" {
 		return procurementcontract.ErrStatusInvalid
+	}
+
+	// Legacy rows may already have reached a supplier. Do not infer "never sent"
+	// from a missing receipt or retry counter after upgrading.
+	if procOrder.SubmissionVersion != 1 || procOrder.SubmittedAt != nil || procOrder.SubmissionRequestSHA256 != "" {
+		return s.markSubmissionUncertain(procOrder, "Legacy or previously attempted purchase requires reconciliation")
 	}
 
 	// 获取连接和适配器
@@ -85,21 +93,33 @@ func (s *Service) SubmitToUpstream(procurementOrderID uint) error {
 		req.ManualFormData = item.ManualFormSubmissionJSON
 	}
 
+	requestBytes, err := json.Marshal(struct {
+		ConnectionID uint
+		Request      procurementcontract.CreateOrderRequest
+	}{procOrder.ConnectionID, req})
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(requestBytes)
+	claimed, err := s.procRepo.BeginSubmission(procOrder.ID, procOrder.Status, hex.EncodeToString(sum[:]), connection.IdentitySHA256(), time.Now())
+	if err != nil {
+		return err
+	}
+	if !claimed {
+		return procurementcontract.ErrStatusInvalid
+	}
+	procOrder.Status = constants.ProcurementStatusSubmitted
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	resp, err := connection.CreateOrder(ctx, req)
 	if err != nil {
-		return s.handleSubmitFailure(procOrder, connection, fmt.Sprintf("upstream request error: %v", err), true)
+		return s.markSubmissionUncertain(procOrder, "Supplier response unavailable; reconcile before retry, cancellation or refund")
 	}
 
-	if !resp.OK {
-		retryable := isRetryableErrorCode(resp.ErrorCode)
-		errMsg := resp.ErrorMessage
-		if errMsg == "" {
-			errMsg = resp.ErrorCode
-		}
-		return s.handleSubmitFailure(procOrder, connection, errMsg, retryable)
+	if resp == nil || !resp.OK || (resp.OrderID == 0 && strings.TrimSpace(resp.OrderNo) == "") {
+		return s.markSubmissionUncertain(procOrder, "Supplier did not return a conclusive receipt; reconcile before retry, cancellation or refund")
 	}
 
 	// 成功：更新状态，重置 retry_count 用于轮询阶段
@@ -214,115 +234,15 @@ func (s *Service) notifyProcurementFailure(procOrder *procurementdomain.Order, e
 	_ = s.notifications.NotifyFailure(procOrder, errMsg)
 }
 
-// handleSubmitFailure 处理提交失败
-func (s *Service) handleSubmitFailure(procOrder *procurementdomain.Order, connection procurementcontract.UpstreamConnection, errMsg string, retryable bool) error {
-	now := time.Now()
-
-	if retryable && procOrder.RetryCount < connection.RetryMax() {
-		intervals := parseRetryIntervals(connection.RetryIntervals())
-		idx := procOrder.RetryCount
-		if idx >= len(intervals) {
-			idx = len(intervals) - 1
-		}
-		delay := intervals[idx]
-		nextRetry := now.Add(delay)
-
-		updates := map[string]interface{}{
-			"retry_count":   procOrder.RetryCount + 1,
-			"next_retry_at": &nextRetry,
-			"error_message": errMsg,
-			"updated_at":    now,
-		}
-		failed, err := s.procRepo.UpdateStatus(procOrder.ID, procOrder.Status, constants.ProcurementStatusFailed, updates)
-		if err != nil {
-			return fmt.Errorf("update procurement status (failed): %w", err)
-		}
-		if !failed {
-			return nil
-		}
-
-		logger.Warnw("procurement_submit_failed_retryable",
-			"procurement_order_id", procOrder.ID,
-			"retry_count", procOrder.RetryCount+1,
-			"next_retry_at", nextRetry,
-			"error", errMsg,
-		)
-
-		// 入队重试
-		if s.queue != nil {
-			_ = s.queue.EnqueueSubmit(procOrder.ID)
-		}
-
-		return nil
-	}
-
-	// 不可重试或已达上限：拒绝
-	updates := map[string]interface{}{
-		"error_message": errMsg,
-		"updated_at":    now,
-	}
-	rejected, err := s.procRepo.UpdateStatus(procOrder.ID, procOrder.Status, constants.ProcurementStatusRejected, updates)
+// Uncertain is not a failed purchase: no enqueue, automatic rejection, local
+// status rollback, or payment refund is justified by a missing response.
+func (s *Service) markSubmissionUncertain(procOrder *procurementdomain.Order, message string) error {
+	changed, err := s.procRepo.UpdateStatus(procOrder.ID, procOrder.Status, constants.ProcurementStatusUncertain, map[string]interface{}{"error_message": message, "next_retry_at": nil, "updated_at": time.Now()})
 	if err != nil {
-		return fmt.Errorf("update procurement status (rejected): %w", err)
+		return fmt.Errorf("persist uncertain procurement: %w", err)
 	}
-	if !rejected {
-		return nil
+	if changed {
+		s.notifyProcurementFailure(procOrder, message)
 	}
-
-	logger.Warnw("procurement_submit_rejected",
-		"procurement_order_id", procOrder.ID,
-		"error", errMsg,
-	)
-
-	// 回退本地订单状态并通知管理员
-	s.rollbackLocalOrderOnProcurementFailure(procOrder, errMsg)
-
-	return fmt.Errorf("procurement rejected: %s", errMsg)
-}
-
-// isRetryableErrorCode 判断上游错误码是否可重试
-func isRetryableErrorCode(code string) bool {
-	nonRetryable := map[string]bool{
-		"insufficient_balance": true,
-		"payment_failed":       true,
-		"product_unavailable":  true,
-		"sku_unavailable":      true,
-		"invalid_request":      true,
-		"unauthorized":         true,
-		"forbidden":            true,
-		"duplicate_order":      true,
-		"product_out_of_stock": true,
-	}
-	return !nonRetryable[strings.ToLower(strings.TrimSpace(code))]
-}
-
-// parseRetryIntervals 解析重试间隔配置（JSON 数组格式如 "[30,60,300]"）
-func parseRetryIntervals(raw string) []time.Duration {
-	raw = strings.TrimSpace(raw)
-	// 移除方括号
-	raw = strings.TrimPrefix(raw, "[")
-	raw = strings.TrimSuffix(raw, "]")
-
-	if raw == "" {
-		return []time.Duration{30 * time.Second, 60 * time.Second, 300 * time.Second}
-	}
-
-	parts := strings.Split(raw, ",")
-	intervals := make([]time.Duration, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		seconds, err := strconv.Atoi(part)
-		if err != nil || seconds <= 0 {
-			continue
-		}
-		intervals = append(intervals, time.Duration(seconds)*time.Second)
-	}
-
-	if len(intervals) == 0 {
-		return []time.Duration{30 * time.Second, 60 * time.Second, 300 * time.Second}
-	}
-	return intervals
+	return nil
 }

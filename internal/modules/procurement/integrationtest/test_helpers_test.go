@@ -105,13 +105,14 @@ func createProcTestOrder(t *testing.T, db *gorm.DB, orderNo, status, fulfillment
 func createTestProcurementOrder(t *testing.T, db *gorm.DB, connID, localOrderID uint, localOrderNo, status string) *ProcurementOrder {
 	t.Helper()
 	order := &ProcurementOrder{
-		ConnectionID:    connID,
-		LocalOrderID:    localOrderID,
-		LocalOrderNo:    localOrderNo,
-		Status:          status,
-		LocalSellAmount: money.FromDecimal(decimal.NewFromInt(100)),
-		Currency:        "CNY",
-		TraceID:         "test-trace-id",
+		SubmissionVersion: 1,
+		ConnectionID:      connID,
+		LocalOrderID:      localOrderID,
+		LocalOrderNo:      localOrderNo,
+		Status:            status,
+		LocalSellAmount:   money.FromDecimal(decimal.NewFromInt(100)),
+		Currency:          "CNY",
+		TraceID:           "test-trace-id",
 	}
 	if err := db.Create(order).Error; err != nil {
 		t.Fatalf("create procurement order failed: %v", err)

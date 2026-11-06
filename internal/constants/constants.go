@@ -391,6 +391,7 @@ const (
 const (
 	ProcurementStatusPending           = "pending"
 	ProcurementStatusSubmitted         = "submitted"
+	ProcurementStatusUncertain         = "uncertain"
 	ProcurementStatusAccepted          = "accepted"
 	ProcurementStatusRejected          = "rejected"
 	ProcurementStatusFailed            = "failed"

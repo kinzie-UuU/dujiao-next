@@ -2,6 +2,9 @@ package upstreamgateway
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"time"
 
 	"github.com/dujiao-next/internal/constants"
@@ -53,8 +56,8 @@ func (s *session) RetryMax() int          { return s.connection.RetryMax }
 func (s *session) RetryIntervals() string { return s.connection.RetryIntervals }
 
 func (s *session) CreateOrder(ctx context.Context, request procurementcontract.CreateOrderRequest) (*procurementcontract.CreateOrderResult, error) {
-	// NewZoe documents a default 24-hour idempotency window. Stop early
-	// even on manual retries if a previous request could have been charged.
+	// Legacy conservative age guard only; the public protocol does not establish
+	// a 24-hour guarantee. It never licenses replay of an uncertain request.
 	if s.connection.Protocol == constants.ConnectionProtocolNewzoe && time.Since(request.ProcurementCreatedAt) >= 23*time.Hour {
 		return &procurementcontract.CreateOrderResult{ErrorCode: "invalid_request", ErrorMessage: "NewZoe retry window expired; reconcile the upstream account before proceeding"}, nil
 	}
@@ -100,4 +103,11 @@ func fromUpstreamFulfillment(value *upstream.UpstreamFulfillment) *procurementco
 		Type: value.Type, Status: value.Status, Payload: value.Payload,
 		DeliveryData: value.DeliveryData, DeliveredAt: value.DeliveredAt,
 	}
+}
+
+// Bind reconciliation to the original supplier endpoint and credential identity.
+func (s *session) IdentitySHA256() string {
+	raw, _ := json.Marshal([]string{s.connection.Protocol, s.connection.BaseURL, s.connection.ApiKey, s.connection.ApiSecret})
+	digest := sha256.Sum256(raw)
+	return hex.EncodeToString(digest[:])
 }
