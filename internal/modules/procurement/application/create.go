@@ -79,13 +79,14 @@ func (s *Service) createProcurementForSingleOrder(order *procurementdomain.Local
 	}
 
 	procOrder := &procurementdomain.Order{
-		ConnectionID:    connectionID,
-		LocalOrderID:    order.ID,
-		LocalOrderNo:    order.OrderNo,
-		Status:          "pending",
-		LocalSellAmount: order.TotalAmount,
-		Currency:        order.Currency,
-		TraceID:         uuid.NewString(),
+		SubmissionVersion: 1,
+		ConnectionID:      connectionID,
+		LocalOrderID:      order.ID,
+		LocalOrderNo:      order.OrderNo,
+		Status:            "pending",
+		LocalSellAmount:   order.TotalAmount,
+		Currency:          order.Currency,
+		TraceID:           uuid.NewString(),
 	}
 
 	if err := s.procRepo.Create(procOrder); err != nil {

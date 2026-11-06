@@ -3,6 +3,8 @@ package refund_test
 import (
 	"errors"
 	"fmt"
+	procurementstore "github.com/dujiao-next/internal/modules/procurement/infrastructure/gormstore"
+	"sync"
 	"testing"
 	"time"
 
@@ -672,4 +674,58 @@ func TestWalletServiceAdminRefundToWalletParentFullMixedChildrenStatus(t *testin
 		expectedParentStatus: constants.OrderStatusRefunded,
 		expectedChildStatus:  constants.OrderStatusRefunded,
 	})
+}
+
+func TestRefundAndProcurementSubmissionShareDurableFence(t *testing.T) {
+	for attempt := 0; attempt < 12; attempt++ {
+		t.Run(fmt.Sprint(attempt), func(t *testing.T) {
+			svc, db := setupOrderRefundWalletTest(t)
+			createTestUser(t, db, 104)
+			order := createTestWalletOrder(t, db, 104, fmt.Sprintf("FENCE-%d", attempt), decimal.NewFromInt(40))
+			if err := db.Model(order).Updates(map[string]interface{}{"status": constants.OrderStatusPaid, "paid_at": time.Now()}).Error; err != nil {
+				t.Fatal(err)
+			}
+			conn := createTestSiteConnection(t, db, 1)
+			proc := &procurementdomain.Order{ConnectionID: conn.ID, LocalOrderID: order.ID, LocalOrderNo: order.OrderNo, Status: "pending", SubmissionVersion: 1, Currency: "CNY"}
+			if err := db.Create(proc).Error; err != nil {
+				t.Fatal(err)
+			}
+			start := make(chan struct{})
+			var wg sync.WaitGroup
+			wg.Add(2)
+			var claimed bool
+			var refundErr error
+			go func() {
+				defer wg.Done()
+				<-start
+				claimed, _ = procurementstore.New(db).BeginSubmission(proc.ID, "pending", "request-sha", "connection-sha", time.Now())
+			}()
+			go func() {
+				defer wg.Done()
+				<-start
+				_, _, _, refundErr = svc.AdminRefundToWallet(AdminRefundToWalletInput{OrderID: order.ID, Amount: money.FromDecimal(decimal.NewFromInt(40)), Remark: "synthetic race"})
+			}()
+			close(start)
+			wg.Wait()
+			if claimed && refundErr == nil {
+				t.Fatal("supplier submission and refund both admitted")
+			}
+			var latest orderdomain.Order
+			if err := db.First(&latest, order.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if claimed {
+				if latest.RefundedAmount.IsPositive() {
+					t.Fatal("refund committed across submission fence")
+				}
+				if _, _, _, err := svc.AdminRefundToWallet(AdminRefundToWalletInput{OrderID: order.ID, Amount: money.FromDecimal(decimal.NewFromInt(40)), Remark: "after intent"}); err == nil {
+					t.Fatal("refund ignored durable intent")
+				}
+			} else if refundErr == nil {
+				if ok, err := procurementstore.New(db).BeginSubmission(proc.ID, "pending", "request-sha", "connection-sha", time.Now()); err == nil && ok {
+					t.Fatal("submission ignored committed refund")
+				}
+			}
+		})
+	}
 }

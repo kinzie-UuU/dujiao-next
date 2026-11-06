@@ -94,6 +94,8 @@ const handleDownloadUpstreamPayload = async (orderId: number) => {
 const statusOptions = [
   { value: '__all__', key: 'procurement.filters.allStatus' },
   { value: 'pending', key: 'procurement.status.pending' },
+  { value: 'submitted', key: 'procurement.status.submitted' },
+  { value: 'uncertain', key: 'procurement.status.uncertain' },
   { value: 'accepted', key: 'procurement.status.accepted' },
   { value: 'rejected', key: 'procurement.status.rejected' },
   { value: 'failed', key: 'procurement.status.failed' },
@@ -281,6 +283,7 @@ const statusBadgeClass = (status: string) => {
     case 'pending': return 'text-amber-700 border-amber-200 bg-amber-50'
     case 'submitted': return 'text-blue-700 border-blue-200 bg-blue-50'
     case 'accepted': return 'text-sky-700 border-sky-200 bg-sky-50'
+    case 'uncertain':
     case 'rejected': return 'text-red-700 border-red-200 bg-red-50'
     case 'failed': return 'text-red-700 border-red-200 bg-red-50'
     case 'partially_refunded': return 'text-orange-700 border-orange-200 bg-orange-50'
@@ -410,8 +413,9 @@ const profitClass = (order: ProcurementOrderWithRelations) => {
   return parseFloat(p) >= 0 ? 'text-emerald-600' : 'text-red-600'
 }
 
-const canRetry = (status: string) => ['failed', 'rejected'].includes(status)
-const canCancel = (status: string) => ['pending', 'submitted', 'accepted', 'failed'].includes(status)
+const neverSubmitted = (order: AdminProcurementOrder) => order.submission_version === 1 && !order.submitted_at && !order.submission_request_sha256
+const canRetry = (order: AdminProcurementOrder) => neverSubmitted(order) && ['failed', 'rejected'].includes(order.status)
+const canCancel = (order: AdminProcurementOrder) => order.status === 'accepted' || (neverSubmitted(order) && ['pending', 'failed'].includes(order.status))
 
 onMounted(() => {
   fetchConnections()
@@ -585,7 +589,7 @@ onMounted(() => {
             </div>
             <div class="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end" @click.stop>
               <Button
-                v-if="canRetry(order.status)"
+                v-if="canRetry(order)"
                 size="sm"
                 variant="outline"
                 class="h-7 text-xs"
@@ -595,7 +599,7 @@ onMounted(() => {
                 {{ t('procurement.actions.retry') }}
               </Button>
               <Button
-                v-if="canCancel(order.status)"
+                v-if="canCancel(order)"
                 size="sm"
                 variant="ghost"
                 class="h-7 text-xs text-muted-foreground hover:text-red-600"
@@ -883,7 +887,7 @@ onMounted(() => {
           <!-- Actions -->
           <div class="flex flex-col-reverse gap-3 border-t border-border pt-4 sm:flex-row sm:justify-end">
             <Button
-              v-if="canRetry(detailOrder.status)"
+              v-if="canRetry(detailOrder)"
               variant="outline"
               class="w-full sm:w-auto"
               :disabled="retryingId === detailOrder.id"
@@ -892,7 +896,7 @@ onMounted(() => {
               {{ t('procurement.actions.retry') }}
             </Button>
             <Button
-              v-if="canCancel(detailOrder.status)"
+              v-if="canCancel(detailOrder)"
               variant="destructive"
               class="w-full sm:w-auto"
               :disabled="cancelingId === detailOrder.id"

@@ -14,26 +14,30 @@ const PayloadPreviewMaxLines = 100
 
 // Order 是采购上下文的聚合根。
 type Order struct {
-	ID                       uint         `gorm:"primarykey" json:"id"`
-	ConnectionID             uint         `gorm:"index;not null" json:"connection_id"`
-	LocalOrderID             uint         `gorm:"index;not null" json:"local_order_id"`
-	LocalOrderNo             string       `gorm:"type:varchar(64);index" json:"local_order_no"`
-	UpstreamOrderID          uint         `json:"-"`
-	UpstreamOrderNo          string       `gorm:"type:varchar(64);index" json:"upstream_order_no,omitempty"`
-	Status                   string       `gorm:"type:varchar(20);not null;default:'pending';index" json:"status"`
-	UpstreamAmount           money.Amount `gorm:"type:decimal(20,2);not null;default:0" json:"upstream_amount"`
-	UpstreamCurrency         string       `gorm:"type:varchar(10);not null;default:''" json:"upstream_currency"`
-	LocalSellAmount          money.Amount `gorm:"type:decimal(20,2);not null;default:0" json:"local_sell_amount"`
-	Currency                 string       `gorm:"type:varchar(10);not null" json:"currency"`
-	ErrorMessage             string       `gorm:"type:text" json:"error_message,omitempty"`
-	RetryCount               int          `gorm:"not null;default:0" json:"retry_count"`
-	NextRetryAt              *time.Time   `gorm:"index" json:"next_retry_at,omitempty"`
-	UpstreamPayload          string       `gorm:"serializer:secure_string;type:text" json:"upstream_payload,omitempty"`
-	UpstreamPayloadLineCount int          `gorm:"-" json:"upstream_payload_line_count"`
-	TraceID                  string       `gorm:"type:varchar(64);index" json:"trace_id"`
-	CreatedAt                time.Time    `gorm:"index" json:"created_at"`
-	UpdatedAt                time.Time    `gorm:"index" json:"updated_at"`
-	DeletedAt                *time.Time   `gorm:"index" json:"-"`
+	SubmissionConnectionSHA256 string       `gorm:"type:varchar(64);not null;default:''" json:"submission_connection_sha256"`
+	SubmissionVersion          uint         `gorm:"not null;default:0" json:"submission_version"`
+	SubmissionRequestSHA256    string       `gorm:"type:varchar(64);not null;default:''" json:"submission_request_sha256"`
+	SubmittedAt                *time.Time   `json:"submitted_at,omitempty"`
+	ID                         uint         `gorm:"primarykey" json:"id"`
+	ConnectionID               uint         `gorm:"index;not null" json:"connection_id"`
+	LocalOrderID               uint         `gorm:"index;uniqueIndex:idx_procurement_local_order_unique;not null" json:"local_order_id"`
+	LocalOrderNo               string       `gorm:"type:varchar(64);index" json:"local_order_no"`
+	UpstreamOrderID            uint         `json:"-"`
+	UpstreamOrderNo            string       `gorm:"type:varchar(64);index" json:"upstream_order_no,omitempty"`
+	Status                     string       `gorm:"type:varchar(20);not null;default:'pending';index" json:"status"`
+	UpstreamAmount             money.Amount `gorm:"type:decimal(20,2);not null;default:0" json:"upstream_amount"`
+	UpstreamCurrency           string       `gorm:"type:varchar(10);not null;default:''" json:"upstream_currency"`
+	LocalSellAmount            money.Amount `gorm:"type:decimal(20,2);not null;default:0" json:"local_sell_amount"`
+	Currency                   string       `gorm:"type:varchar(10);not null" json:"currency"`
+	ErrorMessage               string       `gorm:"type:text" json:"error_message,omitempty"`
+	RetryCount                 int          `gorm:"not null;default:0" json:"retry_count"`
+	NextRetryAt                *time.Time   `gorm:"index" json:"next_retry_at,omitempty"`
+	UpstreamPayload            string       `gorm:"serializer:secure_string;type:text" json:"upstream_payload,omitempty"`
+	UpstreamPayloadLineCount   int          `gorm:"-" json:"upstream_payload_line_count"`
+	TraceID                    string       `gorm:"type:varchar(64);index" json:"trace_id"`
+	CreatedAt                  time.Time    `gorm:"index" json:"created_at"`
+	UpdatedAt                  time.Time    `gorm:"index" json:"updated_at"`
+	DeletedAt                  *time.Time   `gorm:"index" json:"-"`
 
 	Connection             *siteconnectiondomain.Connection `gorm:"foreignKey:ConnectionID" json:"connection,omitempty"`
 	LocalOrder             *LocalOrder                      `gorm:"-" json:"local_order,omitempty"`

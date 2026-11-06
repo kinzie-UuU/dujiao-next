@@ -62,6 +62,9 @@ func lockRefundOrder(store ordercontract.Store, id uint) (*orderdomain.Order, er
 	if parent == nil {
 		return nil, ErrOrderNotFound
 	}
+	if err := store.AssertNoUncertainProcurement(rootID); err != nil {
+		return nil, err
+	}
 	// Older releases recorded child refunds without adding them to the parent.
 	// Sum actual refund records (not parent+child counters, which double-count
 	// new refunds) and never reduce an existing total.

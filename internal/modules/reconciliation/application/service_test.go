@@ -147,3 +147,22 @@ func TestExecuteOpensUpstreamOnceAndPersistsMismatch(t *testing.T) {
 		t.Fatalf("expected one mismatch notification, got %d", notifier.calls)
 	}
 }
+
+func TestUnknownSupplierReceiptBecomesVisibleManualMismatch(t *testing.T) {
+	jobs := &jobRepositoryStub{job: &reconciliationdomain.Job{ID: 1, ConnectionID: 7, Type: constants.ReconciliationTypeFull, Status: constants.ReconciliationJobStatusPending}}
+	items := &itemRepositoryStub{}
+	reader := &upstreamReaderStub{}
+	notifier := &notifierStub{}
+	svc := NewService(Options{Jobs: jobs, Items: items, Procurements: procurementReaderStub{orders: []reconciliationcontract.ProcurementOrder{{ID: 1, LocalOrderNo: "SYNTHETIC-1", Status: constants.ProcurementStatusUncertain}, {ID: 2, LocalOrderNo: "SYNTHETIC-2", Status: constants.ProcurementStatusSubmitted}}}, Upstream: &upstreamProviderStub{reader: reader}, Notifications: notifier})
+	if err := svc.Execute(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if reader.calls != 0 || len(items.created) != 2 || jobs.job.MatchedCount != 0 || jobs.job.MismatchedCount != 2 || jobs.job.TotalCount != 2 || notifier.calls != 1 {
+		t.Fatal("uncertain purchase was hidden or queried without a receipt")
+	}
+	for _, item := range items.created {
+		if item.Resolved || item.UpstreamStatus != "unconfirmed" || item.Remark == "" {
+			t.Fatal("manual review item is not explicit")
+		}
+	}
+}

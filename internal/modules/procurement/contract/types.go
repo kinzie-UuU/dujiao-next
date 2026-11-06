@@ -60,6 +60,7 @@ type UpstreamOrder struct {
 }
 
 type UpstreamConnection interface {
+	IdentitySHA256() string
 	CallbackURL() string
 	RetryMax() int
 	RetryIntervals() string
