@@ -1,0 +1,43 @@
+{
+  "baseline": "95829b96672bf20611cf2ca2c264df3062518bc0",
+  "candidate": "f833b9496d20112cf442593a2e8e706473553f57",
+  "checks": {
+    "admin_typecheck_build": {
+      "local_log": "/private/tmp/kw-alert-unique-admin-build.log",
+      "result": "passed",
+      "sha256": "65e07465905f8e93839f24b3c59a7f60a4b89a65e44dc983daefc6bc0c32b4a2"
+    },
+    "baseline_go_test_all": {
+      "local_log": "/private/tmp/kw-intent-unique-all-final.log",
+      "result": "passed",
+      "sha256": "e2a6c6bd02520f62afb88c3d6d0af826e66a9ebdc57b034daf0f5e6769cad0e0"
+    },
+    "baseline_related_race": {
+      "local_log": "/private/tmp/kw-intent-unique-race.log",
+      "result": "passed",
+      "sha256": "2d39283e52dd29cb85c1f60b88f3a4c223e15122f0d1e5c171a8e5e971a10bdc"
+    },
+    "baseline_related_vet": {
+      "local_log": "/private/tmp/kw-intent-unique-vet.log",
+      "result": "passed",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "go_build_all": {
+      "local_log": "/private/tmp/kw-alert-unique-build.log",
+      "result": "passed",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "go_test_all": {
+      "local_log": "/private/tmp/kw-alert-unique-all.log",
+      "result": "passed",
+      "sha256": "cf8cff5106562faf19dc319cc931db23ff8d80e143f4d03214abd9cddd81d5f3"
+    },
+    "related_race": {
+      "local_log": "/private/tmp/kw-alert-unique-race.log",
+      "result": "passed",
+      "sha256": "7ec70b07bb11683b8ece256167e9f9d07496850b7a846f26713dd2fce8064863"
+    }
+  },
+  "production_admission": false,
+  "production_deployed": false
+}

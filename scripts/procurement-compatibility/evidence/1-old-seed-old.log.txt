@@ -1,0 +1,7 @@
+=== RUN   TestExactVersionCompatibility
+
+2026/11/06 13:55:14 [32m/private/var/folders/0k/v1cqcyn921b0jldmr68glgmh0000gn/T/kw-procurement-compatibility-hx9ajsjp/old/internal/modules/procurement/integrationtest/exact_version_compatibility_test.go:51 [33mSLOW SQL >= 200ms
+[0m[31;1m[383.876ms] [33m[rows:1][35m VACUUM INTO "/private/var/folders/0k/v1cqcyn921b0jldmr68glgmh0000gn/T/kw-procurement-compatibility-hx9ajsjp/synthetic.db"[0m
+COMPAT seed-old complete
+--- PASS: TestExactVersionCompatibility (1.15s)
+PASS

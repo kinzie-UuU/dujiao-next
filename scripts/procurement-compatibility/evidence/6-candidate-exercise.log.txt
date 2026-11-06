@@ -1,0 +1,7 @@
+=== RUN   TestExactVersionCompatibility
+2026-11-06T13:55:28.187+0800	info	application/callback.go:86	procurement_order_fulfilled	{"procurement_order_id": 4, "local_order_id": 4}
+2026-11-06T13:55:28.282+0800	info	application/callback.go:86	procurement_order_fulfilled	{"procurement_order_id": 6, "local_order_id": 6}
+2026-11-06T13:55:28.301+0800	warn	application/callback.go:28	procurement_callback_transition_rejected	{"procurement_order_id": 6, "current_status": "fulfilled", "upstream_status": "delivered"}
+COMPAT candidate protected intents, legacy reads and one-time fulfillment passed; supplier_reads=8
+--- PASS: TestExactVersionCompatibility (0.73s)
+PASS

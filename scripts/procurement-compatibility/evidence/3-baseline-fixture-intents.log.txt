@@ -1,0 +1,4 @@
+=== RUN   TestExactVersionCompatibility
+COMPAT synthetic unresolved intents installed
+--- PASS: TestExactVersionCompatibility (0.06s)
+PASS

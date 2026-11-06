@@ -1,0 +1,107 @@
+package procurement_test
+
+import (
+ "encoding/json"
+ "fmt"
+ "net/http"
+ "net/http/httptest"
+ "os"
+ "strings"
+ "sync/atomic"
+ "testing"
+ "time"
+
+ "github.com/dujiao-next/internal/constants"
+ fulfillmentdomain "github.com/dujiao-next/internal/modules/fulfillment/domain"
+ orderdomain "github.com/dujiao-next/internal/modules/order/domain"
+ orderstore "github.com/dujiao-next/internal/modules/order/infrastructure/gormstore"
+ refundapp "github.com/dujiao-next/internal/modules/order/application/refund"
+ procurementcontract "github.com/dujiao-next/internal/modules/procurement/contract"
+ procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
+ procurementhttp "github.com/dujiao-next/internal/modules/procurement/transport/http"
+ siteapp "github.com/dujiao-next/internal/modules/siteconnection/application"
+ sitedomain "github.com/dujiao-next/internal/modules/siteconnection/domain"
+ walletapp "github.com/dujiao-next/internal/modules/wallet/application"
+ walletstore "github.com/dujiao-next/internal/modules/wallet/infrastructure/gormstore"
+ "github.com/dujiao-next/internal/platform/database/gormdb"
+ "github.com/dujiao-next/internal/shared/money"
+ "github.com/glebarez/sqlite"
+ "github.com/gin-gonic/gin"
+ "github.com/shopspring/decimal"
+ "gorm.io/gorm"
+)
+
+func TestExactVersionCompatibility(t *testing.T) {
+ path, phase, role := os.Getenv("KW_COMPAT_DB"),os.Getenv("KW_COMPAT_PHASE"),os.Getenv("KW_COMPAT_ROLE")
+ if !strings.HasSuffix(path,"/synthetic.db") {t.Fatal("synthetic database path required")}
+ if phase=="seed-old" {
+  db:=setupProcurementTestDB(t)
+  connection,err:=newTestSiteConnectionService(db,"test-key",t.TempDir()).Create(siteapp.CreateInput{Name:"synthetic-only",BaseURL:"http://127.0.0.1:1",ApiKey:"fixture-key",ApiSecret:"fixture-secret",Protocol:constants.ConnectionProtocolDujiaoNext})
+  if err!=nil{t.Fatal(err)}
+  for index,name:=range []string{"BLOCK-submitted","BLOCK-uncertain","ACCEPT-baseline","ACCEPT-candidate","CALLBACK-baseline","CALLBACK-candidate","LEGACY-fulfilled"}{
+   state:="accepted";localState:=constants.OrderStatusFulfilling
+   if index<2 {state="pending";localState=constants.OrderStatusPaid}
+   if index==6 {state="fulfilled";localState=constants.OrderStatusDelivered}
+   order:=createProcTestOrder(t,db,name,localState,constants.FulfillmentTypeUpstream)
+   proc:=createTestProcurementOrder(t,db,connection.ID,order.ID,order.OrderNo,state)
+   if index>=2 {if err:=db.Model(proc).Updates(map[string]interface{}{"upstream_order_id":900+index,"upstream_order_no":fmt.Sprintf("UP-%d",900+index)}).Error;err!=nil{t.Fatal(err)}}
+   if index==6 {when:=time.Now();if err:=db.Create(&fulfillmentdomain.Fulfillment{OrderID:order.ID,Type:constants.FulfillmentTypeUpstream,Status:constants.FulfillmentStatusDelivered,Payload:"SYNTHETIC-LEGACY-DELIVERY",DeliveredAt:&when}).Error;err!=nil{t.Fatal(err)}}
+  }
+  createProcTestOrder(t,db,"NORMAL-READ",constants.OrderStatusPaid,constants.FulfillmentTypeManual)
+  if err:=db.Exec("VACUUM INTO ?",path).Error;err!=nil{t.Fatal(err)}
+  fmt.Println("COMPAT seed-old complete")
+  return
+ }
+ db,err:=gorm.Open(sqlite.Open(path),&gorm.Config{DisableForeignKeyConstraintWhenMigrating:true});if err!=nil{t.Fatal(err)}
+ gormdb.DB=db
+ if phase=="migrate" {
+  if err:=db.AutoMigrate(&procurementdomain.Order{});err!=nil{t.Fatal(err)}
+  fmt.Println("COMPAT migration complete")
+  return
+ }
+ if phase=="fixture-intents" {
+  for _,state:=range []string{"submitted","uncertain"}{
+   if err:=db.Model(&procurementdomain.Order{}).Where("local_order_no = ?","BLOCK-"+state).Updates(map[string]interface{}{"status":state,"submission_version":1,"submitted_at":time.Date(2026,11,6,0,0,0,0,time.UTC),"submission_request_sha256":strings.Repeat("a",64),"submission_connection_sha256":strings.Repeat("b",64),"error_message":"synthetic unresolved submission"}).Error;err!=nil{t.Fatal(err)}
+  }
+  fmt.Println("COMPAT synthetic unresolved intents installed")
+  return
+ }
+ if phase!="exercise" || (role!="baseline"&&role!="candidate"){t.Fatal("unsupported phase")}
+ var supplierReads atomic.Int32
+ server:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
+  if r.Method!=http.MethodGet {t.Error("unexpected supplier mutation");http.Error(w,"no writes",405);return}
+  supplierReads.Add(1)
+  var id uint;if _,err:=fmt.Sscanf(r.URL.Path,"/api/v1/upstream/orders/%d",&id);err!=nil{t.Error(err);return}
+  json.NewEncoder(w).Encode(map[string]interface{}{"order_id":id,"order_no":fmt.Sprintf("UP-%d",id),"status":"delivered","amount":"50.00","currency":"CNY","fulfillment":map[string]interface{}{"type":"auto","status":"delivered","payload":"SYNTHETIC-POLL-DELIVERY","delivered_at":time.Now().Format(time.RFC3339)}})
+ }));defer server.Close()
+ if err:=db.Model(&sitedomain.Connection{}).Where("id = ?",1).Update("base_url",server.URL).Error;err!=nil{t.Fatal(err)}
+ svc:=newTestProcurementService(db,newTestSiteConnectionService(db,"test-key",t.TempDir()))
+ wallet:=walletstore.New(db)
+ refunds:=refundapp.New(orderstore.New(db,"test-guest-credential-secret-with-32-bytes"),nil,nil,nil,walletapp.NewService(walletapp.Options{Repository:wallet,Transactions:wallet}))
+ for _,state:=range []string{"submitted","uncertain"}{
+  proc,err:=svc.GetByLocalOrderNo("BLOCK-"+state);if err!=nil||proc==nil{t.Fatal("missing persistent intent")}
+  if err:=svc.SubmitToUpstream(proc.ID);err==nil{t.Fatal("uncertain purchase resubmitted")}
+  if err:=svc.RetryManual(proc.ID);err==nil{t.Fatal("uncertain purchase manually retried")}
+  if err:=svc.CancelManual(proc.ID);err==nil{t.Fatal("uncertain purchase canceled")}
+  _,_,_,err=refunds.AdminRefundToWallet(refundapp.AdminRefundToWalletInput{OrderID:proc.LocalOrderID,Amount:money.FromDecimal(decimal.NewFromInt(10)),Remark:"synthetic compatibility check"})
+  if err==nil||!strings.Contains(err.Error(),"upstream purchase receipt is uncertain"){t.Fatalf("refund did not hit uncertainty fence: %v",err)}
+ }
+ if supplierReads.Load()!=0{t.Fatal("blocked intent contacted supplier")}
+ accepted,err:=svc.GetByLocalOrderNo("ACCEPT-"+role);if err!=nil{t.Fatal(err)}
+ if err:=svc.PollUpstreamStatus(accepted.ID);err!=nil{t.Fatal(err)}
+ if err:=svc.PollUpstreamStatus(accepted.ID);err!=nil{t.Fatal(err)}
+ callback,err:=svc.GetByLocalOrderNo("CALLBACK-"+role);if err!=nil{t.Fatal(err)}
+ now:=time.Now();payload:=&procurementcontract.Fulfillment{Type:constants.FulfillmentTypeUpstream,Status:constants.FulfillmentStatusDelivered,Payload:"SYNTHETIC-CALLBACK-DELIVERY",DeliveredAt:&now}
+ for count:=0;count<2;count++{if err:=svc.HandleUpstreamCallback(callback.ID,"delivered",payload);err!=nil{t.Fatal(err)}}
+ for _,proc:=range []*procurementdomain.Order{accepted,callback}{
+  var count int64;if err:=db.Model(&fulfillmentdomain.Fulfillment{}).Where("order_id = ?",proc.LocalOrderID).Count(&count).Error;err!=nil||count!=1{t.Fatalf("duplicate or absent fulfillment: %d %v",count,err)}
+  current,err:=svc.GetByID(proc.ID);if err!=nil||current.Status!="fulfilled"{t.Fatal("receipt lifecycle not preserved")}
+ }
+ legacy,err:=svc.GetByLocalOrderNo("LEGACY-fulfilled");if err!=nil||legacy.Status!="fulfilled"||legacy.UpstreamOrderNo!="UP-906"{t.Fatal("legacy fulfilled receipt changed")}
+ var normal orderdomain.Order;if err:=db.Where("order_no = ?","NORMAL-READ").First(&normal).Error;err!=nil{t.Fatal(err)}
+ read,err:=orderstore.New(db,"test-guest-credential-secret-with-32-bytes").GetByID(normal.ID);if err!=nil||read==nil||read.Status!=constants.OrderStatusPaid{t.Fatal("normal backend order read failed")}
+ gin.SetMode(gin.TestMode);router:=gin.New();procurementhttp.RegisterAdminRoutes(router.Group("/admin"),procurementhttp.NewAdminHandler(svc))
+ response:=httptest.NewRecorder();router.ServeHTTP(response,httptest.NewRequest("GET","/admin/procurement-orders?page=1&page_size=20",nil))
+ if response.Code!=200||!strings.Contains(response.Body.String(),"BLOCK-uncertain"){t.Fatal("backend procurement listing failed")}
+ fmt.Printf("COMPAT %s protected intents, legacy reads and one-time fulfillment passed; supplier_reads=%d\n",role,supplierReads.Load())
+}

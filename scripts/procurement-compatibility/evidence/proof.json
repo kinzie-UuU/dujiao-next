@@ -1,0 +1,388 @@
+{
+  "candidate_migration_preserved": true,
+  "completed_utc": "2026-11-06T05:55:31Z",
+  "execution_boundary": "Separate exact-revision race-enabled test executables, same persistent synthetic SQLite; not production server binaries or production admission.",
+  "fixture_sha256": "e2870922ca99d09125a4eaeb5f4fbd7b8e2b763a50ffccc35d9d35a71f32f05b",
+  "global_local_order_unique_index": true,
+  "go_version": "go version go1.26.10 darwin/amd64",
+  "migration": {
+    "old_columns": {
+      "categories": [
+        "id",
+        "parent_id",
+        "slug",
+        "name_json",
+        "icon",
+        "sort_order",
+        "is_active",
+        "created_at",
+        "deleted_at"
+      ],
+      "fulfillments": [
+        "id",
+        "order_id",
+        "type",
+        "status",
+        "payload",
+        "logistics_json",
+        "delivered_by",
+        "delivered_at",
+        "created_at",
+        "updated_at",
+        "deleted_at"
+      ],
+      "order_items": [
+        "id",
+        "order_id",
+        "product_id",
+        "sku_id",
+        "title_json",
+        "sku_snapshot_json",
+        "tags",
+        "original_unit_price",
+        "unit_price",
+        "cost_price",
+        "quantity",
+        "original_total_price",
+        "total_price",
+        "coupon_discount",
+        "member_discount",
+        "promotion_discount",
+        "wholesale_discount",
+        "promotion_id",
+        "fulfillment_type",
+        "manual_form_schema_snapshot_json",
+        "manual_form_submission_json",
+        "instructions_json",
+        "created_at",
+        "updated_at",
+        "deleted_at"
+      ],
+      "order_refund_records": [
+        "id",
+        "user_id",
+        "guest_email",
+        "order_id",
+        "type",
+        "amount",
+        "currency",
+        "remark",
+        "created_at",
+        "updated_at",
+        "deleted_at"
+      ],
+      "orders": [
+        "id",
+        "order_no",
+        "parent_id",
+        "user_id",
+        "guest_email",
+        "guest_password",
+        "guest_locale",
+        "status",
+        "currency",
+        "original_amount",
+        "discount_amount",
+        "member_discount_amount",
+        "promotion_discount_amount",
+        "wholesale_discount_amount",
+        "total_amount",
+        "wallet_paid_amount",
+        "online_paid_amount",
+        "refunded_amount",
+        "member_level_id",
+        "coupon_id",
+        "promotion_id",
+        "affiliate_profile_id",
+        "affiliate_code",
+        "reseller_id",
+        "reseller_domain",
+        "reseller_profit_amount",
+        "client_ip",
+        "expires_at",
+        "paid_at",
+        "canceled_at",
+        "created_at",
+        "updated_at",
+        "deleted_at"
+      ],
+      "procurement_orders": [
+        "id",
+        "connection_id",
+        "local_order_id",
+        "local_order_no",
+        "upstream_order_id",
+        "upstream_order_no",
+        "status",
+        "upstream_amount",
+        "upstream_currency",
+        "local_sell_amount",
+        "currency",
+        "error_message",
+        "retry_count",
+        "next_retry_at",
+        "upstream_payload",
+        "trace_id",
+        "created_at",
+        "updated_at",
+        "deleted_at"
+      ],
+      "product_mappings": [
+        "id",
+        "connection_id",
+        "local_product_id",
+        "upstream_product_id",
+        "upstream_fulfillment_type",
+        "upstream_status",
+        "is_active",
+        "last_synced_at",
+        "created_at",
+        "updated_at",
+        "deleted_at"
+      ],
+      "products": [
+        "id",
+        "category_id",
+        "slug",
+        "seo_meta_json",
+        "title_json",
+        "description_json",
+        "content_json",
+        "instructions_json",
+        "price_amount",
+        "cost_price_amount",
+        "wholesale_prices",
+        "images",
+        "tags",
+        "purchase_type",
+        "min_purchase_quantity",
+        "max_purchase_quantity",
+        "stock_display_mode",
+        "fulfillment_type",
+        "manual_form_schema_json",
+        "manual_stock_total",
+        "manual_stock_locked",
+        "manual_stock_sold",
+        "payment_channel_ids",
+        "is_affiliate_enabled",
+        "is_mapped",
+        "is_active",
+        "sort_order",
+        "created_at",
+        "updated_at",
+        "deleted_at"
+      ],
+      "site_connections": [
+        "id",
+        "name",
+        "base_url",
+        "api_key",
+        "api_secret",
+        "protocol",
+        "callback_url",
+        "status",
+        "last_ping_at",
+        "last_ping_ok",
+        "retry_max",
+        "retry_intervals",
+        "exchange_rate",
+        "price_markup_percent",
+        "price_rounding_mode",
+        "auto_sync_price",
+        "created_at",
+        "updated_at",
+        "deleted_at"
+      ],
+      "sku_mappings": [
+        "id",
+        "product_mapping_id",
+        "local_sku_id",
+        "upstream_sku_id",
+        "upstream_price",
+        "upstream_stock",
+        "upstream_is_active",
+        "stock_synced_at",
+        "created_at",
+        "updated_at",
+        "deleted_at"
+      ]
+    },
+    "old_rows_after": {
+      "categories": {
+        "count": 0,
+        "typed_rows_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "fulfillments": {
+        "count": 1,
+        "typed_rows_sha256": "00dafa1f3d7ae3ed27435faf1c4e4a40bad90696c866a8f728225850fe74e9a1"
+      },
+      "order_items": {
+        "count": 8,
+        "typed_rows_sha256": "fe9aa0a71469ee37602cd596ea10bace4a27a5d166075cb43f67121d075f6a46"
+      },
+      "order_refund_records": {
+        "count": 0,
+        "typed_rows_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "orders": {
+        "count": 8,
+        "typed_rows_sha256": "132c8fa23d6c212eaad843f525ec7403bf149cd19b735c7a21f7389b5dabf376"
+      },
+      "procurement_orders": {
+        "count": 7,
+        "typed_rows_sha256": "24f9b0cb954d354864033e7180fc4b59869ce199adf53a1ac22f3e3824bb2d4c"
+      },
+      "product_mappings": {
+        "count": 0,
+        "typed_rows_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "products": {
+        "count": 0,
+        "typed_rows_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "site_connections": {
+        "count": 1,
+        "typed_rows_sha256": "d639049f24fbf06d2350f26a1783be0e064db78702adf14da7df5993b8cb0678"
+      },
+      "sku_mappings": {
+        "count": 0,
+        "typed_rows_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      }
+    },
+    "old_rows_before": {
+      "categories": {
+        "count": 0,
+        "typed_rows_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "fulfillments": {
+        "count": 1,
+        "typed_rows_sha256": "00dafa1f3d7ae3ed27435faf1c4e4a40bad90696c866a8f728225850fe74e9a1"
+      },
+      "order_items": {
+        "count": 8,
+        "typed_rows_sha256": "fe9aa0a71469ee37602cd596ea10bace4a27a5d166075cb43f67121d075f6a46"
+      },
+      "order_refund_records": {
+        "count": 0,
+        "typed_rows_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "orders": {
+        "count": 8,
+        "typed_rows_sha256": "132c8fa23d6c212eaad843f525ec7403bf149cd19b735c7a21f7389b5dabf376"
+      },
+      "procurement_orders": {
+        "count": 7,
+        "typed_rows_sha256": "24f9b0cb954d354864033e7180fc4b59869ce199adf53a1ac22f3e3824bb2d4c"
+      },
+      "product_mappings": {
+        "count": 0,
+        "typed_rows_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "products": {
+        "count": 0,
+        "typed_rows_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "site_connections": {
+        "count": 1,
+        "typed_rows_sha256": "d639049f24fbf06d2350f26a1783be0e064db78702adf14da7df5993b8cb0678"
+      },
+      "sku_mappings": {
+        "count": 0,
+        "typed_rows_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      }
+    },
+    "preserved": true
+  },
+  "result": {
+    "baseline_candidate_baseline": true,
+    "legacy_fulfillments_preserved": 1,
+    "new_exactly_once_fulfillments": 4,
+    "normal_order_and_admin_reads": true,
+    "old_binary_never_runs_after_migration": true,
+    "unresolved_intents_preserved": true
+  },
+  "revisions": {
+    "baseline": {
+      "archive_sha256": "8f172be888a03bb67bb98c81d6bdf782543be31107095e770b044fe69966939f",
+      "binary_sha256": "369784947dc2616cb13fa2ffdb3fca4b420ca9e08e53a0792899a2d430ec1f6f",
+      "build_log": "baseline-build.log.txt",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "commit": "95829b96672bf20611cf2ca2c264df3062518bc0"
+    },
+    "candidate": {
+      "archive_sha256": "ec96e320643b38b3d47baf5f22b37788bbe53e4ce005bfdd57b27eab617b0d76",
+      "binary_sha256": "002d041ef132a813a70c9a58cdda038d6d0d7d804eb02f184d7a5b9ae0d42f51",
+      "build_log": "candidate-build.log.txt",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "commit": "f833b9496d20112cf442593a2e8e706473553f57"
+    },
+    "old": {
+      "archive_sha256": "4ab38fb191fe4d84c3e8445ec46c0faeb9ff7308ee00af516dbb25145e5c8ccf",
+      "binary_sha256": "81de1a3deaedba2f6e581b6a24e0e7e435968ed24379955f0f238920c9f91114",
+      "build_log": "old-build.log.txt",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "commit": "b0b08aec6853b0d48a508af90ac852fc628e6982"
+    }
+  },
+  "schema": 1,
+  "scope": "synthetic SQLite; local supplier HTTP fixtures only; application callback boundary; no old binary after upgrade",
+  "started_utc": "2026-11-06T05:53:22Z",
+  "steps": [
+    {
+      "log": "1-old-seed-old.log.txt",
+      "log_sha256": "50b522f7871c0036acc71c8e6411599a2dc05a566d493c439ec71e27fcc6cc10",
+      "passed": true,
+      "phase": "seed-old",
+      "revision": "old",
+      "role": ""
+    },
+    {
+      "log": "2-baseline-migrate.log.txt",
+      "log_sha256": "c66f277631a2e811199728515b60024b64646e710d6be12a5913ccbf98b5790a",
+      "passed": true,
+      "phase": "migrate",
+      "revision": "baseline",
+      "role": ""
+    },
+    {
+      "log": "3-baseline-fixture-intents.log.txt",
+      "log_sha256": "3ada52cf7ebb5aa81b2ced0c376f135753adbb54bfb5a26ec6b7ac84acc47c6c",
+      "passed": true,
+      "phase": "fixture-intents",
+      "revision": "baseline",
+      "role": ""
+    },
+    {
+      "log": "4-baseline-exercise.log.txt",
+      "log_sha256": "2e90a0761fa96f01644814b11e310498388c90081ac59290ab850a54af16fbe4",
+      "passed": true,
+      "phase": "exercise",
+      "revision": "baseline",
+      "role": "baseline"
+    },
+    {
+      "log": "5-candidate-migrate.log.txt",
+      "log_sha256": "1238396247850134b12eabe27e15cfd6093ace669df756b7a201503ca2978d17",
+      "passed": true,
+      "phase": "migrate",
+      "revision": "candidate",
+      "role": ""
+    },
+    {
+      "log": "6-candidate-exercise.log.txt",
+      "log_sha256": "544e38ecfcf51a2a620873327e4976dcf0a24dd26dd4a82a4b90eff8a85b3fe7",
+      "passed": true,
+      "phase": "exercise",
+      "revision": "candidate",
+      "role": "candidate"
+    },
+    {
+      "log": "7-baseline-exercise.log.txt",
+      "log_sha256": "2a3bef00b619302ac5ffbe510ed41d895d0cce1b8f00ecb5f776e1607621706e",
+      "passed": true,
+      "phase": "exercise",
+      "revision": "baseline",
+      "role": "baseline"
+    }
+  ]
+}
