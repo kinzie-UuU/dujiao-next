@@ -39,6 +39,9 @@ import (
 // AutoMigrate owns the application-wide schema registry and ordered data migrations.
 func AutoMigrate() error {
 	db := gormdb.DB
+	if err := validateProcurementLocalOrderUniqueness(); err != nil {
+		return err
+	}
 	if err := db.AutoMigrate(
 		&admindomain.Admin{},
 		&adminchallengestore.ChallengeRecord{},

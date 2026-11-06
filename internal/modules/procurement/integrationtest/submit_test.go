@@ -579,3 +579,71 @@ func TestPersistedUnknownRestartChild(t *testing.T) {
 		t.Fatal("process restart allowed cancellation")
 	}
 }
+
+func TestConcurrentCreateForOneLocalOrderCannotDuplicatePurchase(t *testing.T) {
+	db := setupProcurementTestDB(t)
+	sqlDB, _ := db.DB()
+	sqlDB.SetMaxOpenConns(1)
+	order := createProcTestOrder(t, db, "CREATE-RACE", constants.OrderStatusPaid, constants.FulfillmentTypeUpstream)
+	var posts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("unexpected method: %s", r.Method)
+		}
+		posts.Add(1)
+		fmt.Fprint(w, `{"ok":true,"order_id":888,"order_no":"UP-888","amount":"100.00","currency":"CNY"}`)
+	}))
+	defer server.Close()
+	connections := newTestSiteConnectionService(db, "key", t.TempDir())
+	conn, err := connections.Create(siteconnectionapp.CreateInput{Name: "synthetic", BaseURL: server.URL, ApiKey: "key", ApiSecret: "secret", Protocol: constants.ConnectionProtocolDujiaoNext})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pm := &mappingdomain.Mapping{ConnectionID: conn.ID, LocalProductID: 1, UpstreamProductID: 101, IsActive: true}
+	if err := db.Create(pm).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&mappingdomain.SKUMapping{ProductMappingID: pm.ID, LocalSKUID: 1, UpstreamSKUID: 201, UpstreamIsActive: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	// Force both application-level existence reads to finish before either INSERT.
+	ready, release := make(chan struct{}, 2), make(chan struct{})
+	if err := db.Callback().Create().Before("gorm:begin_transaction").Register("test:creation_barrier", func(tx *gorm.DB) {
+		if tx.Statement.Schema != nil && tx.Statement.Schema.Table == "procurement_orders" {
+			ready <- struct{}{}
+			<-release
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc := newTestProcurementService(db, connections)
+	done := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() { done <- svc.CreateForOrder(order.ID) }()
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-ready:
+		case <-time.After(5 * time.Second):
+			close(release)
+			t.Fatal("creation barrier timeout")
+		}
+	}
+	close(release)
+	first, second := <-done, <-done
+	if (first == nil) == (second == nil) {
+		t.Fatalf("expected exactly one successful creation: %v / %v", first, second)
+	}
+	db.Callback().Create().Remove("test:creation_barrier")
+	var rows []ProcurementOrder
+	if err := db.Where("local_order_id = ?", order.ID).Find(&rows).Error; err != nil || len(rows) != 1 {
+		t.Fatalf("rows=%d error=%v", len(rows), err)
+	}
+	if err := svc.SubmitToUpstream(rows[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	_ = svc.SubmitToUpstream(rows[0].ID)
+	if posts.Load() != 1 {
+		t.Fatalf("POST count=%d", posts.Load())
+	}
+}
