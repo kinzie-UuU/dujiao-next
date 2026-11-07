@@ -29,6 +29,7 @@ const redirectToLogin = () => {
 const isLoginEndpoint = (url: string) => /\/admin\/login\b/.test(url)
 
 interface RequestOptions {
+  timeoutMs?: number
   params?: Record<string, any>
   headers?: Record<string, string>
   blob?: boolean
@@ -118,7 +119,7 @@ async function request(method: string, path: string, bodyOrOptions?: any, option
   }
 
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeout)
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? timeout)
 
   let response: Response
   try {

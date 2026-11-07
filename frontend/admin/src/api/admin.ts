@@ -578,7 +578,7 @@ export const adminAPI = {
   batchSyncProductMappings: (ids: number[]) => api.post('/admin/product-mappings/batch-sync', { ids }),
   batchUpdateProductMappingStatus: (ids: number[], isActive: boolean) => api.post('/admin/product-mappings/batch-status', { ids, is_active: isActive }),
   batchDeleteProductMappings: (ids: number[]) => api.post('/admin/product-mappings/batch-delete', { ids }),
-  getUpstreamProducts: (params?: Record<string, unknown>) => api.get('/admin/upstream-products', { params }),
+  getUpstreamProducts: (params?: Record<string, unknown>) => api.get('/admin/upstream-products', { params, timeoutMs: 20000 }),
   getUpstreamCategories: (params: { connection_id: string }) => api.get('/admin/upstream-categories', { params }),
   batchImportByCategory: (data: Record<string, unknown>) => api.post('/admin/product-mappings/batch-import-by-category', data),
   // Procurement Orders
