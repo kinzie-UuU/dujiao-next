@@ -254,137 +254,145 @@ type newZoeTransport func(*http.Request) (*http.Response, error)
 func (f newZoeTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestNewZoePaidProcurementLifecycle(t *testing.T) {
-	for _, sku := range []uint{3, 21, 22, 24} {
-		t.Run(fmt.Sprintf("product-%d", sku), func(t *testing.T) {
-			db := setupProcurementTestDB(t)
-			order := createProcTestOrder(t, db, "LOCAL-TEST", constants.OrderStatusPaid, constants.FulfillmentTypeUpstream)
-			connections := newTestSiteConnectionService(db, "test-key", t.TempDir())
-			conn, err := connections.Create(siteconnectionapp.CreateInput{
-				Name: "NewZoe", BaseURL: "https://shop.newzoe.cloud", ApiKey: "test-key",
-				ApiSecret: "test-secret", Protocol: constants.ConnectionProtocolNewzoe,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			pm := &mappingdomain.Mapping{ConnectionID: conn.ID, LocalProductID: 1, UpstreamProductID: sku, IsActive: true}
-			if err := db.Create(pm).Error; err != nil {
-				t.Fatal(err)
-			}
-			if err := db.Create(&mappingdomain.SKUMapping{ProductMappingID: pm.ID, LocalSKUID: 1, UpstreamSKUID: sku, UpstreamIsActive: true}).Error; err != nil {
-				t.Fatal(err)
-			}
-
-			var submits int
-			status := "pending"
-			deliveryItem := "SAMPLE-CREDENTIAL"
-			if sku == 3 {
-				deliveryItem = "https://example.invalid/codex/one-use-test"
-			}
-			old := http.DefaultTransport
-			t.Cleanup(func() { http.DefaultTransport = old })
-			http.DefaultTransport = newZoeTransport(func(r *http.Request) (*http.Response, error) {
-				if r.URL.Host != "shop.newzoe.cloud" {
-					t.Fatalf("unexpected host %s", r.URL.Host)
+	for _, sku := range []uint{3, 21, 22, 24, 34} {
+		for _, legacy := range []bool{false, true} {
+			t.Run(fmt.Sprintf("product-%d/legacy-%t", sku, legacy), func(t *testing.T) {
+				db := setupProcurementTestDB(t)
+				order := createProcTestOrder(t, db, "LOCAL-TEST", constants.OrderStatusPaid, constants.FulfillmentTypeUpstream)
+				connections := newTestSiteConnectionService(db, "test-key", t.TempDir())
+				conn, err := connections.Create(siteconnectionapp.CreateInput{
+					Name: "NewZoe", BaseURL: "https://shop.newzoe.cloud", ApiKey: "test-key",
+					ApiSecret: "test-secret", Protocol: constants.ConnectionProtocolNewzoe,
+				})
+				if err != nil {
+					t.Fatal(err)
 				}
-				body := ""
-				switch r.Method + " " + r.URL.Path {
-				case "POST /api/v1/orders":
-					var item struct {
-						CouponCode    *string `json:"coupon_code"`
-						ProductID     uint    `json:"product_id"`
-						Quantity      int     `json:"quantity"`
-						PaymentMethod string  `json:"payment_method"`
+				pm := &mappingdomain.Mapping{ConnectionID: conn.ID, LocalProductID: 1, UpstreamProductID: sku, IsActive: true}
+				if err := db.Create(pm).Error; err != nil {
+					t.Fatal(err)
+				}
+				if err := db.Create(&mappingdomain.SKUMapping{ProductMappingID: pm.ID, LocalSKUID: 1, UpstreamSKUID: sku, UpstreamIsActive: true}).Error; err != nil {
+					t.Fatal(err)
+				}
+
+				var submits int
+				status := "pending"
+				deliveryItem := "SAMPLE-CREDENTIAL"
+				if sku == 3 {
+					deliveryItem = "https://example.invalid/codex/one-use-test"
+				}
+				if sku == 34 {
+					deliveryItem = "figma-test@example.invalid----synthetic-password----synthetic-mail-token"
+				}
+				old := http.DefaultTransport
+				t.Cleanup(func() { http.DefaultTransport = old })
+				http.DefaultTransport = newZoeTransport(func(r *http.Request) (*http.Response, error) {
+					if r.URL.Host != "shop.newzoe.cloud" {
+						t.Fatalf("unexpected host %s", r.URL.Host)
 					}
-					if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
+					body := ""
+					switch r.Method + " " + r.URL.Path {
+					case "POST /api/v1/orders":
+						var item struct {
+							CouponCode    *string `json:"coupon_code"`
+							ProductID     uint    `json:"product_id"`
+							Quantity      int     `json:"quantity"`
+							PaymentMethod string  `json:"payment_method"`
+						}
+						if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
+							t.Fatal(err)
+						}
+						if item.ProductID != sku || item.Quantity != 1 || item.PaymentMethod != "balance" || item.CouponCode != nil {
+							t.Fatalf("unexpected purchase: %#v", item)
+						}
+						key := r.Header.Get("Idempotency-Key")
+						submits++
+						if key != order.OrderNo {
+							t.Fatal("purchase did not use stable local order key")
+						}
+
+						body = `{"order":{"id":"NZ-A0001","status":"processing","payment_received":true,"amount":"5.00","currency":"CNY","quantity":1}}`
+					case "GET /api/v1/orders/NZ-A0001":
+						body = fmt.Sprintf(`{"order":{"id":"NZ-A0001","status":%q,"payment_received":true,"amount":"5.00","currency":"CNY","quantity":1}}`, status)
+					case "GET /api/v1/orders/NZ-A0001/delivery":
+						body = fmt.Sprintf(`{"delivery":{"available":true,"status":"completed","type":"automatic","items":[%q],"content":%q}}`, deliveryItem, deliveryItem)
+					default:
+						t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+					}
+					return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"ok":true,"data":` + body + `}`)), Request: r}, nil
+				})
+				svc := newTestProcurementService(db, connections)
+				if err := svc.CreateForOrder(order.ID); err != nil {
+					t.Fatal(err)
+				}
+				proc, err := svc.GetByLocalOrderNo(order.OrderNo)
+				if err != nil || proc == nil {
+					t.Fatalf("no procurement: %v", err)
+				}
+				if err := svc.SubmitToUpstream(proc.ID); err != nil {
+					t.Fatal(err)
+				}
+				if err := svc.SubmitToUpstream(proc.ID); err == nil {
+					t.Fatal("accepted request was replayed")
+				}
+				if submits != 1 {
+					t.Fatalf("got %d submissions", submits)
+				}
+				// Existing receipt-bearing version-0 rows keep their polling lifecycle.
+				if legacy {
+					if err := db.Model(&ProcurementOrder{}).Where("id = ?", proc.ID).Updates(map[string]interface{}{"submission_version": 0, "submitted_at": nil, "submission_request_sha256": "", "submission_connection_sha256": ""}).Error; err != nil {
 						t.Fatal(err)
 					}
-					if item.ProductID != sku || item.Quantity != 1 || item.PaymentMethod != "balance" || item.CouponCode != nil {
-						t.Fatalf("unexpected purchase: %#v", item)
-					}
-					key := r.Header.Get("Idempotency-Key")
-					submits++
-					if key != order.OrderNo {
-						t.Fatal("purchase did not use stable local order key")
-					}
-
-					body = `{"order":{"id":"NZ-A0001","status":"processing","payment_received":true,"amount":"5.00","currency":"CNY","quantity":1}}`
-				case "GET /api/v1/orders/NZ-A0001":
-					body = fmt.Sprintf(`{"order":{"id":"NZ-A0001","status":%q,"payment_received":true,"amount":"5.00","currency":"CNY","quantity":1}}`, status)
-				case "GET /api/v1/orders/NZ-A0001/delivery":
-					body = fmt.Sprintf(`{"delivery":{"available":true,"status":"completed","type":"automatic","items":[%q],"content":%q}}`, deliveryItem, deliveryItem)
-				default:
-					t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 				}
-				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"ok":true,"data":` + body + `}`)), Request: r}, nil
-			})
-			svc := newTestProcurementService(db, connections)
-			if err := svc.CreateForOrder(order.ID); err != nil {
-				t.Fatal(err)
-			}
-			proc, err := svc.GetByLocalOrderNo(order.OrderNo)
-			if err != nil || proc == nil {
-				t.Fatalf("no procurement: %v", err)
-			}
-			if err := svc.SubmitToUpstream(proc.ID); err != nil {
-				t.Fatal(err)
-			}
-			if err := svc.SubmitToUpstream(proc.ID); err == nil {
-				t.Fatal("accepted request was replayed")
-			}
-			if submits != 1 {
-				t.Fatalf("got %d submissions", submits)
-			}
-			// Existing receipt-bearing version-0 rows keep their polling lifecycle.
-			if err := db.Model(&ProcurementOrder{}).Where("id = ?", proc.ID).Updates(map[string]interface{}{"submission_version": 0, "submitted_at": nil, "submission_request_sha256": "", "submission_connection_sha256": ""}).Error; err != nil {
-				t.Fatal(err)
-			}
-			if err := svc.CancelManual(proc.ID); err == nil {
-				t.Fatal("accepted order was canceled locally")
-			}
-			if err := svc.PollUpstreamStatus(proc.ID); err != nil {
-				t.Fatal(err)
-			}
-			current, err := svc.GetByLocalOrderNo(order.OrderNo)
-			if err != nil || current.Status != "accepted" || current.UpstreamOrderNo != "NZ-A0001" {
-				t.Fatalf("lost accepted order: %#v %v", current, err)
-			}
-			status = "completed"
-			svc.SyncAcceptedOrders()
-			if err := svc.PollUpstreamStatus(proc.ID); err != nil {
-				t.Fatal(err)
-			}
-			var results []fulfillmentdomain.Fulfillment
-			if err := db.Where("order_id = ?", order.ID).Find(&results).Error; err != nil {
-				t.Fatal(err)
-			}
-			if len(results) != 1 || results[0].Payload != deliveryItem {
-				t.Fatalf("unexpected fulfillment: %#v", results)
-			}
-			var delivered orderdomain.Order
-			if err := db.First(&delivered, order.ID).Error; err != nil || delivered.Status != constants.OrderStatusDelivered {
-				t.Fatalf("not delivered: %s %v", delivered.Status, err)
-			}
+				if err := svc.CancelManual(proc.ID); err == nil {
+					t.Fatal("accepted order was canceled locally")
+				}
+				if err := svc.PollUpstreamStatus(proc.ID); err != nil {
+					t.Fatal(err)
+				}
+				current, err := svc.GetByLocalOrderNo(order.OrderNo)
+				if err != nil || current.Status != "accepted" || current.UpstreamOrderNo != "NZ-A0001" {
+					t.Fatalf("lost accepted order: %#v %v", current, err)
+				}
+				status = "completed"
+				svc.SyncAcceptedOrders()
+				if err := svc.PollUpstreamStatus(proc.ID); err != nil {
+					t.Fatal(err)
+				}
+				var results []fulfillmentdomain.Fulfillment
+				if err := db.Where("order_id = ?", order.ID).Find(&results).Error; err != nil {
+					t.Fatal(err)
+				}
+				if len(results) != 1 || results[0].Payload != deliveryItem {
+					t.Fatalf("unexpected fulfillment: %#v", results)
+				}
+				var delivered orderdomain.Order
+				if err := db.First(&delivered, order.ID).Error; err != nil || delivered.Status != constants.OrderStatusDelivered {
+					t.Fatalf("not delivered: %s %v", delivered.Status, err)
+				}
 
-			late := createProcTestOrder(t, db, "LATE-TEST", constants.OrderStatusPaid, constants.FulfillmentTypeUpstream)
-			lateProc := createTestProcurementOrder(t, db, conn.ID, late.ID, late.OrderNo, "failed")
-			if err := db.Model(lateProc).Update("created_at", time.Now().Add(-24*time.Hour)).Error; err != nil {
-				t.Fatal(err)
-			}
-			if err := svc.RetryManual(lateProc.ID); err != nil {
-				t.Fatal(err)
-			}
-			if err := svc.SubmitToUpstream(lateProc.ID); err != nil {
-				t.Fatal(err)
-			}
-			lateState, _ := svc.GetByLocalOrderNo(late.OrderNo)
-			if lateState.Status != "uncertain" {
-				t.Fatal("age guard did not preserve uncertainty")
-			}
-			if submits != 1 {
-				t.Fatal("expired procurement made another purchase")
-			}
-		})
+				late := createProcTestOrder(t, db, "LATE-TEST", constants.OrderStatusPaid, constants.FulfillmentTypeUpstream)
+				lateProc := createTestProcurementOrder(t, db, conn.ID, late.ID, late.OrderNo, "failed")
+				if err := db.Model(lateProc).Update("created_at", time.Now().Add(-24*time.Hour)).Error; err != nil {
+					t.Fatal(err)
+				}
+				if err := svc.RetryManual(lateProc.ID); err != nil {
+					t.Fatal(err)
+				}
+				if err := svc.SubmitToUpstream(lateProc.ID); err != nil {
+					t.Fatal(err)
+				}
+				lateState, _ := svc.GetByLocalOrderNo(late.OrderNo)
+				if lateState.Status != "uncertain" {
+					t.Fatal("age guard did not preserve uncertainty")
+				}
+				if submits != 1 {
+					t.Fatal("expired procurement made another purchase")
+				}
+			})
+		}
 	}
+
 }
 
 func TestSubmissionIntentSurvivesLostResponseAndReceiptWriteFailure(t *testing.T) {
