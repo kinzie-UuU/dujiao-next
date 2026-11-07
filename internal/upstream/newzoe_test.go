@@ -144,7 +144,7 @@ func TestNewzoeSyncHidesMissingProducts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !list.IncludesInactive || list.Total != 4 {
+	if !list.IncludesInactive || list.Total != 5 {
 		t.Fatalf("incomplete sync: %+v", list)
 	}
 	for _, p := range list.Items {
@@ -153,7 +153,7 @@ func TestNewzoeSyncHidesMissingProducts(t *testing.T) {
 			if !p.IsActive || p.SKUs[0].StockQuantity != 9 || p.MaxPurchaseQuantity != 2 || !strings.Contains(p.Content["zh-CN"].(string), "1 小时") {
 				t.Fatal("wrong active product")
 			}
-		case 3, 22, 24:
+		case 3, 22, 24, 34:
 			if p.IsActive {
 				t.Fatal("stale product still active")
 			}
@@ -194,5 +194,61 @@ func TestNewzoeCodexCatalogAndSavedCouponPurchase(t *testing.T) {
 	result, err := a.CreateOrder(context.Background(), CreateUpstreamOrderReq{SKUID: 3, Quantity: 1, DownstreamOrderNo: "LOCAL-SMS"})
 	if err != nil || !result.OK || result.Amount != "1.00" || calls != 2 {
 		t.Fatalf("purchase lost discounted amount: %+v %v", result, err)
+	}
+}
+
+func TestNewzoeFigmaCatalogAndPurchase(t *testing.T) {
+	calls := 0
+	a := testNewzoeClient(t, func(r *http.Request) (*http.Response, error) {
+		calls++
+		if r.Method == "GET" && r.URL.Path == "/api/v1/products" {
+			return newzoeTestResponse(200, `{"ok":true,"data":{"products":[{"id":34,"name":"Figma Pro Education","price":"40.17","type":"automatic","stock":2,"max_quantity":1},{"id":35,"name":"Unsupported","price":"1.00","type":"automatic","stock":2}]}}`), nil
+		}
+		if r.Method != "POST" || r.URL.Path != "/api/v1/orders" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(body) != `{"product_id":34,"quantity":1,"payment_method":"balance"}` || r.Header.Get("Idempotency-Key") != "LOCAL-FIGMA" {
+			t.Fatalf("unexpected purchase body or idempotency key: %s", body)
+		}
+		return newzoeTestResponse(201, `{"ok":true,"data":{"order":{"id":"FIGMA-ORDER","amount":"38.00","currency":"CNY","quantity":1,"status":"completed"}}}`), nil
+	})
+	product, err := a.GetProduct(context.Background(), 34)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if product.ID != 34 || product.PriceAmount != "40.17" || product.SKUs[0].SKUCode != "NEWZOE-34" || product.SKUs[0].StockQuantity != 2 || product.MaxPurchaseQuantity != 1 {
+		t.Fatalf("wrong Figma product %+v", product)
+	}
+	terms := product.Content["zh-CN"].(string)
+	for _, required := range []string{"邮箱 Token", "不代表两年质保", "请勿更改绑定邮箱", "教育资格"} {
+		if !strings.Contains(terms, required) {
+			t.Fatalf("missing term %s", required)
+		}
+	}
+	result, err := a.CreateOrder(context.Background(), CreateUpstreamOrderReq{SKUID: 34, Quantity: 1, DownstreamOrderNo: "LOCAL-FIGMA"})
+	if err != nil || !result.OK || result.Amount != "38.00" || calls != 2 {
+		t.Fatalf("unexpected Figma purchase %+v %v", result, err)
+	}
+	result, err = a.CreateOrder(context.Background(), CreateUpstreamOrderReq{SKUID: 35, Quantity: 1, DownstreamOrderNo: "LOCAL-UNSUPPORTED"})
+	if err != nil || result.OK || calls != 2 {
+		t.Fatal("unsupported product was purchased")
+	}
+}
+
+func TestNewzoeFigmaRejectsManualAndRequiredInputs(t *testing.T) {
+	for _, product := range []string{
+		`{"id":34,"name":"Figma","price":"40.17","type":"manual","stock":2}`,
+		`{"id":34,"name":"Figma","price":"40.17","type":"automatic","stock":2,"input_fields":[{"name":"email"}]}`,
+	} {
+		a := testNewzoeClient(t, func(*http.Request) (*http.Response, error) {
+			return newzoeTestResponse(200, `{"ok":true,"data":{"products":[`+product+`]}}`), nil
+		})
+		if _, err := a.GetProduct(context.Background(), 34); err != ErrUpstreamProductUnavailable {
+			t.Fatalf("unsafe Figma product should be unavailable: %v", err)
+		}
 	}
 }

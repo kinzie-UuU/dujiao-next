@@ -108,6 +108,7 @@ var newzoeProductTerms = map[uint]string{
 	21: museAccountTerms,
 	22: museAccountTerms,
 	24: "<p>在你自己的多邻国账号上使用激活码，可开通 12 个月的 Super 会员，无需绑定银行卡。上游标注的质保期为 5 天，激活后即结束。</p>",
+	34: "<p>Figma Pro 教育版成品账号，交付邮箱、密码及邮箱 Token。两年为上游标注规格，具体起止以交付账号为准，不代表两年质保。教育资格及功能受 Figma 官方规则约束，请勿更改绑定邮箱。</p>",
 }
 
 func (a *newzoeAdapter) ListProducts(ctx context.Context, opts ListProductsOpts) (*ProductListResult, error) {
@@ -157,7 +158,7 @@ func (a *newzoeAdapter) ListProducts(ctx context.Context, opts ListProductsOpts)
 	// Newzoe lists the complete on-sale catalog. In synchronization mode,
 	// represent missing supported products explicitly so stale stock is hidden.
 	if opts.IncludeInactive {
-		for _, id := range []uint{3, 21, 22, 24} {
+		for _, id := range []uint{3, 21, 22, 24, 34} {
 			if !active[id] {
 				items = append(items, UpstreamProduct{ID: id, IsActive: false})
 			}
