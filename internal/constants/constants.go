@@ -369,6 +369,7 @@ const (
 	TaskProcurementSubmit           = "procurement:submit"
 	TaskProcurementPollStatus       = "procurement:poll_status"
 	TaskProcurementSyncAccepted     = "procurement:sync_accepted"
+	TaskProcurementRetryPending     = "procurement:retry_pending"
 	TaskUpstreamSyncProducts        = "upstream:sync_products"
 	TaskUpstreamSyncStock           = "upstream:sync_stock"
 	TaskReconciliationRun           = "reconciliation:run"

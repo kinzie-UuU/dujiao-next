@@ -310,3 +310,31 @@ func (s *Store) BeginSubmission(id uint, fromStatus, requestSHA256, connectionSH
 	})
 	return claimed, err
 }
+
+// Only durable, never-submitted purchases may be dispatched again. The same
+// predicate is evaluated during the claim, not just when taking the snapshot.
+func (s *Store) dispatchable(at time.Time) *gorm.DB {
+	return s.db.Model(&procurementdomain.Order{}).
+		Where("procurement_orders.deleted_at IS NULL AND submission_version = 1 AND status IN ?", []string{"pending", "failed"}).
+		Where("submitted_at IS NULL AND submission_request_sha256 = '' AND submission_connection_sha256 = '' AND upstream_order_id = 0 AND upstream_order_no = ''").
+		Where("(next_retry_at <= ?) OR (next_retry_at IS NULL AND updated_at <= ?)", at, at.Add(-time.Minute)).
+		Where(`EXISTS (SELECT 1 FROM orders o WHERE o.id = procurement_orders.local_order_id AND o.deleted_at IS NULL
+   AND o.status IN ('paid','fulfilling') AND o.refunded_amount = 0
+   AND (o.parent_id IS NULL OR EXISTS (SELECT 1 FROM orders p WHERE p.id = o.parent_id AND p.deleted_at IS NULL
+     AND p.status IN ('paid','fulfilling','partially_delivered','partially_refunded'))))`)
+}
+
+func (s *Store) ListDispatchable(at time.Time, limit int) ([]procurementdomain.Order, error) {
+	var orders []procurementdomain.Order
+	err := s.dispatchable(at).Order("id ASC").Limit(limit).Find(&orders).Error
+	return orders, err
+}
+
+// A five-minute lease survives worker crashes, Redis loss and an ambiguous
+// enqueue response. Duplicate queue tasks remain fenced by BeginSubmission.
+func (s *Store) ClaimDispatch(id uint, at time.Time) (bool, error) {
+	result := s.dispatchable(at).Where("procurement_orders.id = ?", id).Updates(map[string]interface{}{
+		"next_retry_at": at.Add(5 * time.Minute), "updated_at": at,
+	})
+	return result.RowsAffected == 1, result.Error
+}

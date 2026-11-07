@@ -102,7 +102,7 @@ func (s *Service) createProcurementForSingleOrder(order *procurementdomain.Local
 	return s.enqueuePending(procOrder)
 }
 
-// A failed enqueue must leave an order the operator can retry. If a worker
+// A failed enqueue is durably scheduled for automatic retry. If a worker
 // already advanced the order, keep its state instead.
 func (s *Service) enqueuePending(order *procurementdomain.Order) error {
 	if s.queue == nil {
@@ -115,6 +115,7 @@ func (s *Service) enqueuePending(order *procurementdomain.Order) error {
 	message := fmt.Sprintf("enqueue procurement submission: %v", err)
 	failed, updateErr := s.procRepo.UpdateStatus(order.ID, constants.ProcurementStatusPending, constants.ProcurementStatusFailed, map[string]interface{}{
 		"error_message": message,
+		"next_retry_at": time.Now().Add(time.Minute),
 		"updated_at":    time.Now(),
 	})
 	if updateErr != nil {
@@ -135,4 +136,36 @@ func (s *Service) hasUpstreamItems(order *procurementdomain.LocalOrder) bool {
 		}
 	}
 	return false
+}
+
+// RetryPendingSubmissions repairs missed queue delivery without creating a new
+// purchase or clearing the durable submission fence. Supplier calls stay in the
+// normal worker, which rechecks payment/refund state and claims exactly once.
+func (s *Service) RetryPendingSubmissions() error {
+	if s.queue == nil {
+		return nil
+	}
+	now := time.Now()
+	orders, err := s.procRepo.ListDispatchable(now, 200)
+	if err != nil {
+		return fmt.Errorf("list procurement dispatch retries: %w", err)
+	}
+	var failures []error
+	for _, order := range orders {
+		claimed, err := s.procRepo.ClaimDispatch(order.ID, now)
+		if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		if !claimed {
+			continue
+		}
+		if err := s.queue.EnqueueSubmit(order.ID); err != nil {
+			failures = append(failures, err)
+			logger.Warnw("procurement_dispatch_retry_failed", "procurement_order_id", order.ID, "error", err)
+		} else {
+			logger.Infow("procurement_dispatch_retry_enqueued", "procurement_order_id", order.ID)
+		}
+	}
+	return errors.Join(failures...)
 }

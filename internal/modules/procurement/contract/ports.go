@@ -7,6 +7,8 @@ import (
 )
 
 type Repository interface {
+	ListDispatchable(at time.Time, limit int) ([]procurementdomain.Order, error)
+	ClaimDispatch(id uint, at time.Time) (bool, error)
 	BeginSubmission(id uint, fromStatus, requestSHA256, connectionSHA256 string, at time.Time) (bool, error)
 	GetByID(id uint) (*procurementdomain.Order, error)
 	GetByLocalOrderID(localOrderID uint) (*procurementdomain.Order, error)

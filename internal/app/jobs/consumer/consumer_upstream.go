@@ -105,3 +105,10 @@ func (c *Consumer) handleDownstreamCallback(ctx context.Context, task *asynq.Tas
 	}
 	return nil
 }
+
+func (c *Consumer) handleProcurementRetryPending(_ context.Context, _ *asynq.Task) error {
+	if c == nil || c.ProcurementOrderService == nil {
+		return nil
+	}
+	return c.ProcurementOrderService.RetryPendingSubmissions()
+}

@@ -33,6 +33,7 @@ const (
 	TaskProcurementPollStatus = constants.TaskProcurementPollStatus
 	// TaskProcurementSyncAccepted 采购单定时巡检任务
 	TaskProcurementSyncAccepted = constants.TaskProcurementSyncAccepted
+	TaskProcurementRetryPending = constants.TaskProcurementRetryPending
 	// TaskDownstreamCallback 下游回调通知任务
 	TaskDownstreamCallback = constants.TaskDownstreamCallback
 	// TaskReconciliationRun 对账执行任务
@@ -262,4 +263,8 @@ func NewTelegramBroadcastTask(payload TelegramBroadcastPayload) (*asynq.Task, er
 		return nil, err
 	}
 	return asynq.NewTask(TaskTelegramBroadcast, body), nil
+}
+
+func NewProcurementRetryPendingTask() *asynq.Task {
+	return asynq.NewTask(TaskProcurementRetryPending, nil)
 }

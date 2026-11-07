@@ -58,7 +58,7 @@ func TestProcurementUsesCompleteVerticalLayout(t *testing.T) {
 
 	expected := map[string][]string{
 		"service.go": {"NewService"},
-		"create.go":  {"CreateForOrder", "createProcurementForSingleOrder", "enqueuePending", "hasUpstreamItems"},
+		"create.go":  {"CreateForOrder", "createProcurementForSingleOrder", "enqueuePending", "hasUpstreamItems", "RetryPendingSubmissions"},
 		"submit.go": {
 			"SubmitToUpstream", "markProcurementError", "rejectProcurement",
 			"rollbackLocalOrderOnProcurementFailure", "notifyProcurementFailure", "markSubmissionUncertain",

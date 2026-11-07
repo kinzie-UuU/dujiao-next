@@ -322,12 +322,37 @@ func TestNewZoePaidProcurementLifecycle(t *testing.T) {
 					return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"ok":true,"data":` + body + `}`)), Request: r}, nil
 				})
 				svc := newTestProcurementService(db, connections)
-				if err := svc.CreateForOrder(order.ID); err != nil {
-					t.Fatal(err)
+				var recoveryQueue *failingSubmissionQueue
+				if sku == 34 && !legacy {
+					recoveryQueue = &failingSubmissionQueue{err: errors.New("simulated queue response unavailable")}
+					svc = newTestProcurementServiceWithQueue(db, connections, recoveryQueue)
+				}
+				createErr := svc.CreateForOrder(order.ID)
+				if recoveryQueue != nil {
+					if !errors.Is(createErr, recoveryQueue.err) {
+						t.Fatalf("expected initial queue failure: %v", createErr)
+					}
+				} else if createErr != nil {
+					t.Fatal(createErr)
 				}
 				proc, err := svc.GetByLocalOrderNo(order.OrderNo)
 				if err != nil || proc == nil {
 					t.Fatalf("no procurement: %v", err)
+				}
+				if recoveryQueue != nil {
+					if submits != 0 || proc.Status != "failed" {
+						t.Fatal("queue failure made a supplier purchase")
+					}
+					makeDispatchDue(t, db, proc.ID)
+					recoveryQueue.err = nil
+					if err := svc.RetryPendingSubmissions(); err != nil {
+						t.Fatal(err)
+					}
+					if len(recoveryQueue.ids) != 2 || recoveryQueue.ids[0] != proc.ID || recoveryQueue.ids[1] != proc.ID {
+						t.Fatalf("queue recovery changed purchase identity: %v", recoveryQueue.ids)
+					}
+					// The first ambiguous enqueue may also have kept its task. Both
+					// workers below use the same durable submission fence.
 				}
 				if err := svc.SubmitToUpstream(proc.ID); err != nil {
 					t.Fatal(err)

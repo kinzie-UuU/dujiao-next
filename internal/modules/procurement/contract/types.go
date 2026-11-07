@@ -75,6 +75,7 @@ type UseCase interface {
 	SubmitToUpstream(procurementOrderID uint) error
 	PollUpstreamStatus(procurementOrderID uint) error
 	SyncAcceptedOrders()
+	RetryPendingSubmissions() error
 	HandleUpstreamCallback(procurementOrderID uint, upstreamStatus string, fulfillment *Fulfillment) error
 	GetByID(id uint) (*procurementdomain.Order, error)
 	GetByLocalOrderNo(localOrderNo string) (*procurementdomain.Order, error)
