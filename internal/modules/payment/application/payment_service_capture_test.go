@@ -1,6 +1,18 @@
 package application
 
 import (
+	fulfillmentapp "github.com/dujiao-next/internal/modules/fulfillment/application"
+	fulfillmentdomain "github.com/dujiao-next/internal/modules/fulfillment/domain"
+	fulfillmentstore "github.com/dujiao-next/internal/modules/fulfillment/infrastructure/gormstore"
+	notificationcontract "github.com/dujiao-next/internal/modules/notification/contract"
+	orderstore "github.com/dujiao-next/internal/modules/order/infrastructure/gormstore"
+	procurementapp "github.com/dujiao-next/internal/modules/procurement/application"
+	procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
+	procurementstore "github.com/dujiao-next/internal/modules/procurement/infrastructure/gormstore"
+	procurementorder "github.com/dujiao-next/internal/modules/procurement/infrastructure/orderreader"
+	securestoreserializer "github.com/dujiao-next/internal/securestore/serializer"
+	"net/http"
+
 	"crypto/sha256"
 	"fmt"
 	userdomain "github.com/dujiao-next/internal/modules/identity/user/domain"
@@ -930,5 +942,113 @@ func TestUpstreamPaymentDispatchNoCharge(t *testing.T) {
 				t.Fatalf("order not paid: %s", order.Status)
 			}
 		})
+	}
+}
+
+type manualAccountMockTransport func(*http.Request) (*http.Response, error)
+
+func (f manualAccountMockTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type manualAccountMockQueue struct{ ids []uint }
+
+func (q *manualAccountMockQueue) EnqueueSubmit(id uint) error           { q.ids = append(q.ids, id); return nil }
+func (q *manualAccountMockQueue) EnqueuePoll(uint, time.Duration) error { return nil }
+
+type manualPurchaseNotices struct {
+	events []notificationcontract.EnqueueInput
+}
+
+func (n *manualPurchaseNotices) Enqueue(input notificationcontract.EnqueueInput) error {
+	n.events = append(n.events, input)
+	return nil
+}
+
+// Manual purchase mode: payment creates an admin task, never a supplier charge.
+// The operator pastes purchased credentials directly into the intended order.
+func TestManualAccountPurchaseAndDeliveryNoCharge(t *testing.T) {
+	if err := securestoreserializer.Configure("manual-account-test-encryption-only"); err != nil {
+		t.Fatal(err)
+	}
+	svc, db := setupPaymentServiceWalletTest(t)
+	if err := db.AutoMigrate(&procurementdomain.Order{}); err != nil {
+		t.Fatal(err)
+	}
+	old := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = old })
+	http.DefaultTransport = manualAccountMockTransport(func(*http.Request) (*http.Response, error) {
+		t.Fatal("manual workflow must never contact supplier or send live notification")
+		return nil, errors.New("network disabled")
+	})
+	queue := &receiptQueue{}
+	notices := &manualPurchaseNotices{}
+	procurementQueue := &manualAccountMockQueue{}
+	svc.queue = queue
+	svc.notificationSvc = notices
+	orders := orderstore.New(db, "test-guest-credential-secret-with-32-bytes")
+	svc.SetProcurementService(procurementapp.NewService(procurementapp.Options{
+		Repository: procurementstore.New(db), Orders: procurementorder.New(orders), Queue: procurementQueue,
+	}))
+	channel := createUnderpaidChannel(t, db, svc, "mock manual-account payment", constants.PaymentChannelTypeWechat)
+	order := createUnderpaidOrder(t, db, "MANUAL-ACCOUNT-MOCK", 0, 108)
+	unrelated := createUnderpaidOrder(t, db, "MANUAL-UNPAID-MOCK", 0, 108)
+	if err := db.Create(&orderdomain.OrderItem{OrderID: order.ID, ProductID: 1, SKUID: 1, Quantity: 1, TitleJSON: jsonmap.JSON{"zh-CN": "Plus account manual purchase"}, FulfillmentType: constants.FulfillmentTypeManual}).Error; err != nil {
+		t.Fatal(err)
+	}
+	created, err := svc.CreatePayment(CreatePaymentInput{OrderID: order.ID, ChannelID: channel.ID, Context: context.Background()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notices.events) != 0 || queue.fulfilled.Load() != 0 || len(procurementQueue.ids) != 0 {
+		t.Fatal("unpaid order dispatched")
+	}
+	callback := PaymentCallbackInput{PaymentID: created.Payment.ID, OrderNo: order.OrderNo, ChannelID: channel.ID, Status: constants.PaymentStatusSuccess, Amount: money.FromDecimal(decimal.NewFromInt(108)), Currency: "CNY", ProviderRef: "MOCK-MANUAL-ACCOUNT-RECEIPT"}
+	for i := 0; i < 3; i++ {
+		if _, err := svc.HandleCallback(callback); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pending := 0
+	for _, n := range notices.events {
+		if n.EventType == constants.NotificationEventManualFulfillmentPending {
+			pending++
+			if n.BizID != order.ID {
+				t.Fatal("notice bound to wrong order")
+			}
+		}
+	}
+	if pending != 1 || queue.fulfilled.Load() != 0 || len(procurementQueue.ids) != 0 {
+		t.Fatalf("manual notices=%d automatic=%d procurements=%d", pending, queue.fulfilled.Load(), len(procurementQueue.ids))
+	}
+	var procurementCount int64
+	if err := db.Model(&procurementdomain.Order{}).Count(&procurementCount).Error; err != nil || procurementCount != 0 {
+		t.Fatal("manual order created procurement")
+	}
+	if err := db.First(order, order.ID).Error; err != nil || (order.Status != constants.OrderStatusPaid && order.Status != constants.OrderStatusFulfilling) {
+		t.Fatal("manual order not waiting for delivery")
+	}
+	fulfill := fulfillmentapp.New(fulfillmentapp.Options{OrderStore: orders, FulfillmentStore: fulfillmentstore.New(db)})
+	payload := "账号：synthetic@example.invalid\n密码：mock-manual-password\n2FA：synthetic-only"
+	if _, err := fulfill.CreateManual(fulfillmentapp.CreateManualInput{OrderID: unrelated.ID, AdminID: 1, Payload: payload}); err == nil {
+		t.Fatal("unpaid order accepted credentials")
+	}
+	if _, err := fulfill.CreateManual(fulfillmentapp.CreateManualInput{OrderID: order.ID, AdminID: 1, Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fulfill.CreateManual(fulfillmentapp.CreateManualInput{OrderID: order.ID, AdminID: 1, Payload: "duplicate"}); err == nil {
+		t.Fatal("duplicate delivery accepted")
+	}
+	var delivered []fulfillmentdomain.Fulfillment
+	if err := db.Find(&delivered).Error; err != nil || len(delivered) != 1 || delivered[0].OrderID != order.ID || delivered[0].Payload != payload {
+		t.Fatal("delivery was not bound exactly once to intended order")
+	}
+	var raw string
+	if err := db.Raw("SELECT payload FROM fulfillments WHERE order_id=?", order.ID).Scan(&raw).Error; err != nil || !securestoreserializer.IsEncryptedString(raw) || strings.Contains(raw, "mock-manual-password") {
+		t.Fatal("account stored without encryption")
+	}
+	if err := db.First(order, order.ID).Error; err != nil || order.Status != constants.OrderStatusDelivered {
+		t.Fatal("target not delivered")
+	}
+	if err := db.First(unrelated, unrelated.ID).Error; err != nil || unrelated.Status != constants.OrderStatusPendingPayment {
+		t.Fatal("unrelated order modified")
 	}
 }

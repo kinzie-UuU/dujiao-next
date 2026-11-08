@@ -69,7 +69,7 @@ func (s *PaymentService) enqueueOrderPaidAsync(order *orderdomain.Order, payment
 	}
 	if len(order.Children) > 0 {
 		for _, child := range order.Children {
-			if child.Status == constants.OrderStatusFulfilling && hasManualFulfillmentItems(&child) {
+			if (child.Status == constants.OrderStatusPaid || child.Status == constants.OrderStatusFulfilling) && hasManualFulfillmentItems(&child) {
 				s.enqueueManualFulfillmentPendingAsync(&child, order, log)
 			}
 			if shouldAutoFulfill(&child) {
@@ -89,7 +89,7 @@ func (s *PaymentService) enqueueOrderPaidAsync(order *orderdomain.Order, payment
 		s.enqueueDownstreamCallbackAsync(order, log)
 		return
 	}
-	if order.Status == constants.OrderStatusFulfilling && hasManualFulfillmentItems(order) {
+	if (order.Status == constants.OrderStatusPaid || order.Status == constants.OrderStatusFulfilling) && hasManualFulfillmentItems(order) {
 		s.enqueueManualFulfillmentPendingAsync(order, nil, log)
 	}
 	if shouldAutoFulfill(order) {
