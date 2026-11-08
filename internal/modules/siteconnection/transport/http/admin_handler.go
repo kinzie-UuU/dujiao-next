@@ -152,7 +152,7 @@ func (h *AdminHandler) UpdateSiteConnection(c *gin.Context) {
 	after := connectionAuditFields(conn)
 	if readErr == nil && old != nil {
 		after["api_key_changed"] = old.ApiKey != conn.ApiKey
-		after["api_secret_changed"] = old.ApiSecret != conn.ApiSecret
+		after["api_secret_replaced"] = old.ApiSecret != conn.ApiSecret
 		after["base_url_changed"] = old.BaseURL != conn.BaseURL
 		after["callback_url_changed"] = old.CallbackURL != conn.CallbackURL
 		after["name_changed"] = old.Name != conn.Name

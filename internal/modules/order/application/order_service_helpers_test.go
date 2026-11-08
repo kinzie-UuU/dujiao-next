@@ -2,7 +2,9 @@ package application
 
 import (
 	"errors"
+	ordercontract "github.com/dujiao-next/internal/modules/order/contract"
 	"testing"
+	"time"
 
 	orderdomain "github.com/dujiao-next/internal/modules/order/domain"
 
@@ -119,5 +121,30 @@ func TestResolveManualFormSubmissionFallbackLegacyProductKey(t *testing.T) {
 	got := resolveManualFormSubmission(data, 1, 99)
 	if got["legacy"] != "legacy" {
 		t.Fatalf("expected legacy product key value, got: %+v", got)
+	}
+}
+
+// Only GetByID is implemented. Any reconciliation/write call panics through the
+// nil embedded Store, proving audit reads do not enter business mutation paths.
+type auditReadOnlyOrderStore struct {
+	ordercontract.Store
+	order *orderdomain.Order
+	reads int
+}
+
+func (s *auditReadOnlyOrderStore) GetByID(uint) (*orderdomain.Order, error) {
+	s.reads++
+	return s.order, nil
+}
+func TestReadOrderAuditStatusDoesNotReconcileExpiredOrder(t *testing.T) {
+	expired := time.Now().Add(-time.Hour)
+	for _, status := range []string{"pending_payment", "paid", "partially_refunded"} {
+		row := &orderdomain.Order{ID: 7, Status: status, ExpiresAt: &expired}
+		store := &auditReadOnlyOrderStore{order: row}
+		service := &OrderService{orderStore: store}
+		got, err := service.ReadOrderAuditStatus(7)
+		if err != nil || got != status || row.Status != status || store.reads != 1 {
+			t.Fatalf("audit read changed business state: %q %v", got, err)
+		}
 	}
 }

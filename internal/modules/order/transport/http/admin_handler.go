@@ -50,6 +50,7 @@ type OrderListFilter struct {
 type OrderQuery interface {
 	ListOrdersForAdmin(filter OrderListFilter) ([]orderdomain.Order, int64, error)
 	GetOrderForAdmin(orderID uint) (*orderdomain.Order, error)
+	ReadOrderAuditStatus(orderID uint) (string, error)
 	UpdateOrderStatus(orderID uint, status string) (*orderdomain.Order, error)
 }
 
@@ -419,8 +420,8 @@ func (h *AdminHandler) AdminUpdateOrderStatus(c *gin.Context) {
 	}
 
 	before := operationaudit.Fields{"snapshot_available": false}
-	if old, readErr := h.orders.GetOrderForAdmin(orderID); readErr == nil && old != nil {
-		before = operationaudit.Fields{"status": old.Status}
+	if status, readErr := h.orders.ReadOrderAuditStatus(orderID); readErr == nil {
+		before = operationaudit.Fields{"status": status}
 	}
 	audit := operationaudit.New("order.status", fmt.Sprint(orderID), before)
 	defer ginutil.RecordOperation(c, audit)

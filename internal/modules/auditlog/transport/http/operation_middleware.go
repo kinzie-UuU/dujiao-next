@@ -6,6 +6,7 @@ import (
 	"github.com/dujiao-next/internal/shared/jsonmap"
 	"github.com/dujiao-next/internal/shared/operationaudit"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"net"
 	"time"
 )
@@ -26,7 +27,7 @@ func OperationMiddleware(store OperationRecorder) gin.HandlerFunc {
 				clientIP = parsed.String()
 			}
 			row := &domain.AdminOperationLog{ClientIP: clientIP, OperatorAdminID: c.GetUint("admin_id"),
-				OperatorUsername: c.GetString("username"), RequestID: c.GetString("request_id"),
+				OperatorUsername: c.GetString("username"), RequestID: operationRequestID(c.GetString("request_id")),
 				Action: event.Action, Target: event.Target, Result: event.Result,
 				BeforeJSON: jsonmap.JSON(event.Before), AfterJSON: jsonmap.JSON(event.After), CreatedAt: time.Now()}
 			if row.OperatorAdminID == 0 {
@@ -40,4 +41,15 @@ func OperationMiddleware(store OperationRecorder) gin.HandlerFunc {
 		})
 		c.Next()
 	}
+}
+
+// The existing request middleware accepts caller-provided IDs. Audit storage and
+// its failure log accept only canonical UUIDs; untrusted values are never copied.
+func operationRequestID(value string) string {
+	if len(value) == 36 {
+		if parsed, err := uuid.Parse(value); err == nil && parsed.String() == value {
+			return value
+		}
+	}
+	return uuid.NewString()
 }

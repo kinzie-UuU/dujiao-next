@@ -44,7 +44,7 @@ func TestConnectionAuditPreservesBeforeWhenServiceMutatesObject(t *testing.T) {
 	if w.Code != 200 || got == nil || got.Result != "success" {
 		t.Fatalf("operation failed: %d %+v", w.Code, got)
 	}
-	if got.After["api_key_changed"] != true || got.After["api_secret_changed"] != true || got.After["name_changed"] != true {
+	if got.After["api_key_changed"] != true || got.After["api_secret_replaced"] != true || got.After["name_changed"] != true {
 		t.Fatal("before values aliased mutated service object")
 	}
 	for _, fields := range []operationaudit.Fields{got.Before, got.After} {

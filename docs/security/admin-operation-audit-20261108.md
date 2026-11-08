@@ -2,11 +2,11 @@
 
 基线：e42f2f733edbec15d03fa016d4cec1071ef96f65。保留采购重试与提交围栏。
 
-新增独立 `admin_operation_audit_logs` 表，由正常启动迁移创建。每条包含管理员 ID/用户名、服务端 request ID、规范化 ClientIP（沿用既有可信代理策略）、动作、目标、结果、时间，以及显式 allowlist 的前后快照。未读取或复制 HTTP 请求/响应正文；不持久化客户内容、邮件正文、口令、API key/secret 或数据库密文。凭证仅记录变化布尔；连接 URL、名称、SMTP 地址等也只记录变化布尔。
+新增独立 `admin_operation_audit_logs` 表，由正常启动迁移创建。每条包含管理员 ID/用户名、规范 UUID request ID（非规范调用方 ID 会替换为新的服务端 UUID）、规范化 ClientIP（沿用既有可信代理策略）、动作、目标、结果、时间，以及显式 allowlist 的前后快照。未读取或复制 HTTP 请求/响应正文；不持久化客户内容、邮件正文、口令、API key/secret 或数据库密文。凭证仅记录变化布尔；`api_secret_replaced` 表示密文被重写（同一明文重新提交也可能为 true），不声称明文必然改变；连接 URL、名称、SMTP 地址等也只记录变化布尔。
 
 覆盖：
 
-- `PATCH /admin/orders/:id`：订单状态前后。
+- `PATCH /admin/orders/:id`：订单状态前后；使用专门只读 getter，不触发详情页的过期/退款同步。
 - `POST /admin/payments/:id/manual-confirm`：支付状态、关联订单 ID；不记录付款人/交易凭据。
 - 连接创建、更新、状态切换：状态、协议、重试次数、汇率、加价、取整、自动跟价；敏感连接字段仅变化布尔。
 - 批量按 ID 导入映射：最多 500 项（超过显式截断）的既有映射存在状态、成功后的映射/本地商品 ID/启用状态；区分全部失败/部分失败。

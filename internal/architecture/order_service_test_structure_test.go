@@ -28,7 +28,7 @@ func TestOrderServiceTestsAreSplitByResponsibility(t *testing.T) {
 			"TestMergeCreateOrderItems", "TestMergeCreateOrderItemsConflict",
 			"TestApplyCouponDiscountToItems", "TestResolveManualFormSubmissionPreferOrderItemKey",
 			"TestResolveManualFormSubmissionFallbackLegacyProductKey", "TestOrderServiceRejectsCreateWhenSalesPaused",
-			"GetByKey", "Upsert",
+			"GetByKey", "Upsert", "GetByID", "TestReadOrderAuditStatusDoesNotReconcileExpiredOrder",
 		},
 		filepath.Join(integrationDirectory, "order_service_cancel_test.go"): {
 			"TestCancelExpiredOrderExpiresPendingPayments", "setupCancelPaymentTestDB",
