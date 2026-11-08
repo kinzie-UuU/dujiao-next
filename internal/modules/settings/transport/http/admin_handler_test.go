@@ -2,6 +2,7 @@ package settingshttp
 
 import (
 	"encoding/json"
+	settingsmessaging "github.com/dujiao-next/internal/modules/settings/schema/messaging"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -75,5 +76,21 @@ func TestAdminHandlerRejectsDedicatedKeysOnGenericUpdate(t *testing.T) {
 		if stub.updateCalls != 0 || !strings.Contains(recorder.Body.String(), endpoint) {
 			t.Fatalf("%s: generic update must be rejected with hint %s, body=%s", key, endpoint, recorder.Body.String())
 		}
+	}
+}
+
+func TestSMTPAuditSnapshotExcludesCredentialsAndContent(t *testing.T) {
+	fields := smtpAuditFields(settingsmessaging.SMTPSetting{Enabled: true, Password: "secret-password", Username: "secret-user", Host: "private-host", From: "private-address", FromName: "private-name", Port: 587})
+	raw, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"secret-password", "secret-user", "private-host", "private-address", "private-name", "password", "username", "host", "from"} {
+		if strings.Contains(string(raw), forbidden) {
+			t.Fatalf("sensitive field leaked: %s", forbidden)
+		}
+	}
+	if fields["port"] != 587 || fields["enabled"] != true {
+		t.Fatal("missing allowlisted setting fields")
 	}
 }

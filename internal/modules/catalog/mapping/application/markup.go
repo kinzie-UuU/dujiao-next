@@ -1,6 +1,7 @@
 package application
 
 import (
+	"github.com/dujiao-next/internal/shared/operationaudit"
 	"strconv"
 
 	siteconnectioncontract "github.com/dujiao-next/internal/modules/siteconnection/contract"
@@ -73,4 +74,30 @@ func (s *Service) recalcProductPrice(product *productdomain.Product) {
 	product.PriceAmount = money.FromDecimal(minPrice.Round(2))
 	product.CostPriceAmount = money.FromDecimal(minCostPrice.Round(2))
 	_ = s.products.Update(product)
+}
+
+// MarkupAuditSnapshot is bounded and never returns product content or credentials.
+func (s *Service) MarkupAuditSnapshot(connectionID uint) operationaudit.Fields {
+	mappings, err := s.mappings.ListActiveByConnection(connectionID)
+	if err != nil {
+		return operationaudit.Fields{"snapshot_available": false}
+	}
+	rows := make([]operationaudit.Fields, 0)
+	for _, mapping := range mappings {
+		skus, err := s.skuMappings.ListByProductMapping(mapping.ID)
+		if err != nil {
+			return operationaudit.Fields{"snapshot_available": false}
+		}
+		for _, sm := range skus {
+			if len(rows) >= 500 {
+				return operationaudit.Fields{"sku_prices": rows, "truncated": true}
+			}
+			sku, err := s.skus.GetByID(sm.LocalSKUID)
+			if err != nil || sku == nil {
+				return operationaudit.Fields{"snapshot_available": false}
+			}
+			rows = append(rows, operationaudit.Fields{"mapping_id": mapping.ID, "product_id": mapping.LocalProductID, "sku_id": sku.ID, "price": sku.PriceAmount.String(), "cost_price": sku.CostPriceAmount.String()})
+		}
+	}
+	return operationaudit.Fields{"sku_prices": rows, "truncated": false}
 }

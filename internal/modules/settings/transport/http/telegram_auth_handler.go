@@ -2,6 +2,8 @@ package settingshttp
 
 import (
 	"errors"
+	"github.com/dujiao-next/internal/shared/operationaudit"
+	"reflect"
 
 	ginutil "github.com/dujiao-next/internal/platform/http/ginutil"
 
@@ -49,6 +51,13 @@ func (h *TelegramAuthHandler) UpdateTelegramAuth(c *gin.Context) {
 		return
 	}
 
+	old, readErr := h.telegramAuth.GetTelegramAuthSetting()
+	before := operationaudit.Fields{"snapshot_available": readErr == nil}
+	if readErr == nil {
+		before["enabled"] = old.Enabled
+	}
+	audit := operationaudit.New("settings.telegram_auth", "telegram_auth_config", before)
+	defer ginutil.RecordOperation(c, audit)
 	setting, err := h.telegramAuth.PatchTelegramAuthSetting(req)
 	if err != nil {
 		switch {
@@ -60,6 +69,11 @@ func (h *TelegramAuthHandler) UpdateTelegramAuth(c *gin.Context) {
 		return
 	}
 
+	after := operationaudit.Fields{"enabled": setting.Enabled}
+	if readErr == nil {
+		after["configuration_changed"] = !reflect.DeepEqual(old, setting)
+	}
+	audit.Success(after)
 	h.telegramAuth.ApplyRuntime(setting)
 	_ = cache.DelAllPublicConfig(c.Request.Context())
 	response.Success(c, settingssecurity.MaskTelegramAuthSettingForAdmin(setting))

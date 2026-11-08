@@ -63,6 +63,7 @@ func (c *Container) initRepositories() error {
 	c.CategoryRepo = categorygormstore.NewCategoryStore(db)
 	c.SettingRepo = settingsstore.New(db)
 	c.UserLoginLogRepo = auditloggormstore.NewUserLoginStore(db)
+	c.OperationAuditStore = auditloggormstore.NewOperationStore(db)
 	c.AuthzAuditLogRepo = auditloggormstore.NewAuthzStore(db)
 	c.NotificationLogRepo = notificationgormstore.NewLogStore(db)
 	c.AdminLoginLogRepo = auditloggormstore.NewAdminLoginStore(db)

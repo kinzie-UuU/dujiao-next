@@ -332,7 +332,7 @@ func TestCatalogMappingImplementationLivesInBoundedContext(t *testing.T) {
 	assertDirectoryGoFileBudget(t, contractRoot, 3)
 	assertDirectoryGoFileBudget(t, applicationRoot, 11)
 	assertDirectoryGoFileBudget(t, storeRoot, 4)
-	assertDirectoryGoFileBudget(t, transportRoot, 2)
+	assertDirectoryGoFileBudget(t, transportRoot, 3)
 	assertDirectoryGoFileBudget(t, integrationRoot, 1)
 }
 

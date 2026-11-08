@@ -3,6 +3,7 @@ package orderhttp
 import (
 	"errors"
 	"fmt"
+	"github.com/dujiao-next/internal/shared/operationaudit"
 	"strings"
 	"time"
 
@@ -417,6 +418,12 @@ func (h *AdminHandler) AdminUpdateOrderStatus(c *gin.Context) {
 		return
 	}
 
+	before := operationaudit.Fields{"snapshot_available": false}
+	if old, readErr := h.orders.GetOrderForAdmin(orderID); readErr == nil && old != nil {
+		before = operationaudit.Fields{"status": old.Status}
+	}
+	audit := operationaudit.New("order.status", fmt.Sprint(orderID), before)
+	defer ginutil.RecordOperation(c, audit)
 	order, err := h.orders.UpdateOrderStatus(orderID, req.Status)
 	if err != nil {
 		switch {
@@ -430,5 +437,6 @@ func (h *AdminHandler) AdminUpdateOrderStatus(c *gin.Context) {
 		return
 	}
 
+	audit.Success(operationaudit.Fields{"status": order.Status})
 	response.Success(c, order)
 }

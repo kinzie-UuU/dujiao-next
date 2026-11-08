@@ -10,6 +10,7 @@ import (
 	apicredentialcontract "github.com/dujiao-next/internal/modules/apicredential/contract"
 	auditlogapp "github.com/dujiao-next/internal/modules/auditlog/application"
 	auditlogcontract "github.com/dujiao-next/internal/modules/auditlog/contract"
+	auditlogdomain "github.com/dujiao-next/internal/modules/auditlog/domain"
 	captchaapp "github.com/dujiao-next/internal/modules/captcha/application"
 	cardsecretapp "github.com/dujiao-next/internal/modules/cardsecret/application"
 	cardsecretgormstore "github.com/dujiao-next/internal/modules/cardsecret/infrastructure/gormstore"
@@ -110,6 +111,9 @@ type Container struct {
 	SettingRepo            settingscontract.Store
 	UserLoginLogRepo       auditlogcontract.UserLoginRepository
 	AuthzAuditLogRepo      auditlogcontract.AuthzRepository
+	OperationAuditStore    interface {
+		RecordOperation(*auditlogdomain.AdminOperationLog) error
+	}
 	NotificationLogRepo    *notificationgormstore.LogStore
 	AdminLoginLogRepo      auditlogcontract.AdminLoginRepository
 	DashboardRepo          dashboardcontract.Repository

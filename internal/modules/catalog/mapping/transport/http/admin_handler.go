@@ -2,6 +2,8 @@ package mappinghttp
 
 import (
 	"errors"
+	"fmt"
+	"github.com/dujiao-next/internal/shared/operationaudit"
 
 	mappingapp "github.com/dujiao-next/internal/modules/catalog/mapping/application"
 	mappingcontract "github.com/dujiao-next/internal/modules/catalog/mapping/contract"
@@ -191,6 +193,23 @@ func (h *AdminHandler) BatchImportUpstreamProducts(c *gin.Context) {
 		return
 	}
 
+	before := operationaudit.Fields{"snapshot_available": false}
+	if ids, readErr := h.service.GetMappedUpstreamIDs(req.ConnectionID); readErr == nil {
+		existing := make(map[uint]bool, len(ids))
+		for _, id := range ids {
+			existing[id] = true
+		}
+		entries := make([]operationaudit.Fields, 0, min(len(req.UpstreamProductIDs), 500))
+		for _, id := range req.UpstreamProductIDs {
+			if len(entries) >= 500 {
+				break
+			}
+			entries = append(entries, operationaudit.Fields{"upstream_product_id": id, "mapped": existing[id]})
+		}
+		before = operationaudit.Fields{"mappings": entries, "truncated": len(req.UpstreamProductIDs) > 500}
+	}
+	audit := operationaudit.New("mapping.batch_import", fmt.Sprint(req.ConnectionID), before)
+	defer ginutil.RecordOperation(c, audit)
 	outcomes, err := h.service.BatchImportUpstreamProducts(
 		req.ConnectionID,
 		req.UpstreamProductIDs,
@@ -219,6 +238,26 @@ func (h *AdminHandler) BatchImportUpstreamProducts(c *gin.Context) {
 		results[i] = item
 	}
 
+	entries := make([]operationaudit.Fields, 0, min(len(outcomes), 500))
+	for _, outcome := range outcomes {
+		if len(entries) >= 500 {
+			break
+		}
+		entry := operationaudit.Fields{"upstream_product_id": outcome.UpstreamProductID, "success": outcome.Err == nil}
+		if outcome.Err == nil && outcome.Mapping != nil {
+			entry["mapping_id"] = outcome.Mapping.ID
+			entry["local_product_id"] = outcome.Mapping.LocalProductID
+			entry["is_active"] = outcome.Mapping.IsActive
+		}
+		entries = append(entries, entry)
+	}
+	audit.Success(operationaudit.Fields{"success_count": successCount, "failed_count": len(outcomes) - successCount, "mappings": entries, "truncated": len(outcomes) > 500})
+	if successCount != len(outcomes) {
+		audit.Result = "partial_failure"
+	}
+	if successCount == 0 {
+		audit.Result = "failed"
+	}
 	response.Success(c, gin.H{
 		"results":       results,
 		"total":         len(req.UpstreamProductIDs),
@@ -330,6 +369,12 @@ func (h *AdminHandler) UpdateProductMappingStatus(c *gin.Context) {
 		return
 	}
 
+	before := operationaudit.Fields{"snapshot_available": false}
+	if old, readErr := h.service.GetByID(id); readErr == nil && old != nil {
+		before = operationaudit.Fields{"is_active": old.IsActive}
+	}
+	audit := operationaudit.New("mapping.status", fmt.Sprint(id), before)
+	defer ginutil.RecordOperation(c, audit)
 	if err := h.service.SetActive(id, req.IsActive); err != nil {
 		if errors.Is(err, mappingcontract.ErrMappingNotFound) {
 			ginutil.RespondError(c, response.CodeNotFound, "error.mapping_not_found", nil)
@@ -339,6 +384,7 @@ func (h *AdminHandler) UpdateProductMappingStatus(c *gin.Context) {
 		return
 	}
 
+	audit.Success(operationaudit.Fields{"is_active": req.IsActive})
 	response.Success(c, gin.H{"updated": true})
 }
 

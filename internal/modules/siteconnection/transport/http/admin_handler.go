@@ -2,6 +2,8 @@ package siteconnectionhttp
 
 import (
 	"errors"
+	"fmt"
+	"github.com/dujiao-next/internal/shared/operationaudit"
 
 	ginutil "github.com/dujiao-next/internal/platform/http/ginutil"
 
@@ -95,6 +97,8 @@ func (h *AdminHandler) CreateSiteConnection(c *gin.Context) {
 		return
 	}
 
+	audit := operationaudit.New("connection.create", "new", nil)
+	defer ginutil.RecordOperation(c, audit)
 	conn, err := h.connections.Create(input)
 	if err != nil {
 		if errors.Is(err, siteconnectioncontract.ErrInvalid) {
@@ -105,6 +109,8 @@ func (h *AdminHandler) CreateSiteConnection(c *gin.Context) {
 		return
 	}
 
+	audit.Target = fmt.Sprint(conn.ID)
+	audit.Success(connectionAuditFields(conn))
 	response.Success(c, conn)
 }
 
@@ -122,6 +128,17 @@ func (h *AdminHandler) UpdateSiteConnection(c *gin.Context) {
 		return
 	}
 
+	old, readErr := h.connections.GetByID(id)
+	if old != nil {
+		snapshot := *old
+		old = &snapshot
+	}
+	before := operationaudit.Fields{"snapshot_available": false}
+	if readErr == nil && old != nil {
+		before = connectionAuditFields(old)
+	}
+	audit := operationaudit.New("connection.update", fmt.Sprint(id), before)
+	defer ginutil.RecordOperation(c, audit)
 	conn, err := h.connections.Update(id, input)
 	if err != nil {
 		if errors.Is(err, siteconnectioncontract.ErrNotFound) {
@@ -132,6 +149,15 @@ func (h *AdminHandler) UpdateSiteConnection(c *gin.Context) {
 		return
 	}
 
+	after := connectionAuditFields(conn)
+	if readErr == nil && old != nil {
+		after["api_key_changed"] = old.ApiKey != conn.ApiKey
+		after["api_secret_changed"] = old.ApiSecret != conn.ApiSecret
+		after["base_url_changed"] = old.BaseURL != conn.BaseURL
+		after["callback_url_changed"] = old.CallbackURL != conn.CallbackURL
+		after["name_changed"] = old.Name != conn.Name
+	}
+	audit.Success(after)
 	response.Success(c, conn)
 }
 
@@ -184,6 +210,15 @@ func (h *AdminHandler) ReapplyConnectionMarkup(c *gin.Context) {
 		return
 	}
 
+	before := operationaudit.Fields{"snapshot_available": false}
+	snapshotter, hasSnapshot := h.markup.(interface {
+		MarkupAuditSnapshot(uint) operationaudit.Fields
+	})
+	if hasSnapshot {
+		before = snapshotter.MarkupAuditSnapshot(id)
+	}
+	audit := operationaudit.New("connection.reapply_markup", fmt.Sprint(id), before)
+	defer ginutil.RecordOperation(c, audit)
 	count, err := h.markup.ReapplyMarkup(id)
 	if err != nil {
 		if errors.Is(err, siteconnectioncontract.ErrNotFound) {
@@ -194,6 +229,14 @@ func (h *AdminHandler) ReapplyConnectionMarkup(c *gin.Context) {
 		return
 	}
 
+	after := operationaudit.Fields{"snapshot_available": false}
+	if hasSnapshot {
+		after = snapshotter.MarkupAuditSnapshot(id)
+	}
+	after["reported_updated_products"] = count
+	audit.After = after
+	// The existing service suppresses individual write failures; never label this as verified success.
+	audit.Result = "completed_unverified"
 	response.Success(c, gin.H{"updated_products": count})
 }
 
@@ -211,6 +254,12 @@ func (h *AdminHandler) UpdateSiteConnectionStatus(c *gin.Context) {
 		return
 	}
 
+	before := operationaudit.Fields{"snapshot_available": false}
+	if old, readErr := h.connections.GetByID(id); readErr == nil && old != nil {
+		before = operationaudit.Fields{"status": old.Status}
+	}
+	audit := operationaudit.New("connection.status", fmt.Sprint(id), before)
+	defer ginutil.RecordOperation(c, audit)
 	if err := h.connections.SetStatus(id, req.Status); err != nil {
 		if errors.Is(err, siteconnectioncontract.ErrNotFound) {
 			ginutil.RespondError(c, response.CodeNotFound, "error.connection_not_found", nil)
@@ -220,5 +269,11 @@ func (h *AdminHandler) UpdateSiteConnectionStatus(c *gin.Context) {
 		return
 	}
 
+	audit.Success(operationaudit.Fields{"status": req.Status})
 	response.Success(c, gin.H{"updated": true})
+}
+
+func connectionAuditFields(v *siteconnectiondomain.Connection) operationaudit.Fields {
+	return operationaudit.Fields{"status": v.Status, "protocol": v.Protocol, "retry_max": v.RetryMax,
+		"exchange_rate": v.ExchangeRate.String(), "price_markup_percent": v.PriceMarkupPercent.String(), "price_rounding_mode": v.PriceRoundingMode, "auto_sync_price": v.AutoSyncPrice}
 }

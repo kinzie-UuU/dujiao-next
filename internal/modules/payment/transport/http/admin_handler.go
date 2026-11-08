@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"github.com/dujiao-next/internal/shared/operationaudit"
 	"strconv"
 	"strings"
 	"time"
@@ -273,6 +274,12 @@ func (h *AdminHandler) ConfirmAdminManualPayment(c *gin.Context) {
 		response.Error(c, response.CodeBadRequest, "请核对平台实际到账记录、付款人与订单一致，并填写到账金额和币种")
 		return
 	}
+	before := operationaudit.Fields{"snapshot_available": false}
+	if old, readErr := h.payments.GetPayment(id); readErr == nil && old != nil {
+		before = operationaudit.Fields{"status": old.Status, "order_id": old.OrderID}
+	}
+	audit := operationaudit.New("payment.manual_confirm", fmt.Sprint(id), before)
+	defer ginutil.RecordOperation(c, audit)
 	payment, err := h.payments.ConfirmManualPayment(id, evidence)
 	if err != nil {
 		switch {
@@ -294,6 +301,7 @@ func (h *AdminHandler) ConfirmAdminManualPayment(c *gin.Context) {
 		return
 	}
 
+	audit.Success(operationaudit.Fields{"status": payment.Status, "order_id": payment.OrderID})
 	response.Success(c, redactAdminPayment(*payment))
 }
 
