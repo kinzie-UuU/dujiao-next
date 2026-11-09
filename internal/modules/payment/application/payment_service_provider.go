@@ -15,6 +15,7 @@ import (
 	paymentdomain "github.com/dujiao-next/internal/modules/payment/domain"
 
 	orderdomain "github.com/dujiao-next/internal/modules/order/domain"
+	walletdomain "github.com/dujiao-next/internal/modules/wallet/domain"
 
 	"github.com/dujiao-next/internal/constants"
 	resellercontract "github.com/dujiao-next/internal/modules/reseller/contract"
@@ -114,7 +115,9 @@ func (s *PaymentService) applyProviderPayment(input CreatePaymentInput, order *o
 		return s.applyManualUSDT(order, channel, payment)
 	}
 	if isManualLocalQR(channel) {
-		return s.applyManualLocalQR(input, order, channel, payment)
+		// Local QR intents must be initialized inside their creation transaction.
+		// Never save a stale post-commit copy over a QR quote, claim or expiry.
+		return ErrPaymentStatusInvalid
 	}
 	gatewayCtx, cancel := detachOutboundRequestContext(input.Context)
 	defer cancel()
@@ -436,7 +439,7 @@ func validateManualLocalQR(channel *paymentdomain.PaymentChannel) error {
 	return nil
 }
 
-func (s *PaymentService) applyManualLocalQR(input CreatePaymentInput, order *orderdomain.Order, channel *paymentdomain.PaymentChannel, payment *paymentdomain.Payment) error {
+func prepareManualLocalQR(order *orderdomain.Order, channel *paymentdomain.PaymentChannel, payment *paymentdomain.Payment, recharge *walletdomain.RechargeOrder) error {
 	if err := validateManualLocalQR(channel); err != nil {
 		return err
 	}
@@ -450,24 +453,17 @@ func (s *PaymentService) applyManualLocalQR(input CreatePaymentInput, order *ord
 	var marker string
 	if payment.OrderID == 0 {
 		// Recharge intents are identified by payment ID, never by the shared order_id=0.
-		if input.ReturnBizType != "recharge" || order.ID != 0 || order.UserID == 0 || s.walletRepo == nil {
-			return ErrPaymentChannelConfigInvalid
-		}
-		recharge, err := s.walletRepo.GetRechargeOrderByPaymentID(payment.ID)
-		if err != nil {
-			return ErrPaymentUpdateFailed
-		}
-		if recharge == nil || recharge.UserID != order.UserID || recharge.RechargeNo != order.OrderNo ||
+		if order.ID != 0 || order.UserID == 0 || order.ExpiresAt == nil || recharge == nil ||
+			recharge.PaymentID != payment.ID || recharge.DeletedAt != nil || recharge.UserID != order.UserID || recharge.RechargeNo != order.OrderNo ||
 			recharge.ChannelID != channel.ID || recharge.ProviderType != channel.ProviderType || recharge.ChannelType != channel.ChannelType ||
 			recharge.Status != constants.WalletRechargeStatusPending || recharge.Currency != payment.Currency ||
 			!recharge.PayableAmount.Decimal.Equal(payment.Amount.Decimal) {
 			return ErrPaymentChannelConfigInvalid
 		}
 		marker = "recharge"
-		expiresAt := time.Now().Add(time.Duration(s.resolveExpireMinutes()) * time.Minute)
-		payment.ExpiredAt = &expiresAt
+		payment.ExpiredAt = order.ExpiresAt
 	} else {
-		if input.ReturnBizType == "recharge" || order.ID == 0 || payment.OrderID != order.ID ||
+		if recharge != nil || order.ID == 0 || payment.OrderID != order.ID ||
 			order.Status != constants.OrderStatusPendingPayment || order.Currency != "CNY" {
 			return ErrPaymentChannelConfigInvalid
 		}
@@ -480,8 +476,5 @@ func (s *PaymentService) applyManualLocalQR(input CreatePaymentInput, order *ord
 	payment.ProviderPayload = jsonmap.JSON{"manual_confirmation_required": true}
 	payment.Status = constants.PaymentStatusPending
 	payment.UpdatedAt = time.Now()
-	if err := s.paymentRepo.Update(payment); err != nil {
-		return ErrPaymentUpdateFailed
-	}
 	return nil
 }

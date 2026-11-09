@@ -28,7 +28,7 @@ func TestPaymentServiceImplementationIsSplitByResponsibility(t *testing.T) {
 			"resolveProviderOrderNo", "matchesBusinessOrderNo", "buildPaymentReturnQuery",
 			"applyProviderPayment", "ValidateChannel", "resolveTenantReturnURL",
 			"validateManualUSDT", "applyManualUSDT",
-			"isManualLocalQR", "validateManualLocalQR", "applyManualLocalQR",
+			"isManualLocalQR", "validateManualLocalQR", "prepareManualLocalQR",
 			"tenantReturnPath", "resolveTokenPayOrderUserKey",
 		},
 		"payment_service_rules.go": {

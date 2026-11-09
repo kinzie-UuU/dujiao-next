@@ -241,6 +241,14 @@ func (s *PaymentService) CreatePayment(input CreatePaymentInput) (*CreatePayment
 		if err := paymentRepo.Create(payment); err != nil {
 			return ErrPaymentCreateFailed
 		}
+		if isManualLocalQR(channel) {
+			if err := prepareManualLocalQR(&lockedOrder, channel, payment, nil); err != nil {
+				return err
+			}
+			if err := paymentRepo.Update(payment); err != nil {
+				return ErrPaymentUpdateFailed
+			}
+		}
 		if err := tx.Orders().UpdateFields(lockedOrder.ID, map[string]interface{}{
 			"online_paid_amount": money.FromDecimal(onlineAmount),
 			"updated_at":         time.Now(),
@@ -299,46 +307,49 @@ func (s *PaymentService) CreatePayment(input CreatePaymentInput) (*CreatePayment
 		return nil, ErrPaymentCreateFailed
 	}
 
-	if err := s.applyProviderPayment(input, order, channel, payment); err != nil {
-		rollbackErr := s.paymentRepo.WithinTransaction(func(tx paymentcontract.Transaction) error {
-			paymentRepo := tx.Payments()
-			payment.Status = constants.PaymentStatusFailed
-			payment.UpdatedAt = time.Now()
-			if updateErr := paymentRepo.Update(payment); updateErr != nil {
-				return updateErr
+	if !isManualLocalQR(channel) {
+		if err := s.applyProviderPayment(input, order, channel, payment); err != nil {
+			rollbackErr := s.paymentRepo.WithinTransaction(func(tx paymentcontract.Transaction) error {
+				paymentRepo := tx.Payments()
+				payment.Status = constants.PaymentStatusFailed
+				payment.UpdatedAt = time.Now()
+				if updateErr := paymentRepo.Update(payment); updateErr != nil {
+					return updateErr
+				}
+				if s.walletSvc == nil {
+					return nil
+				}
+				preloaded, findErr := tx.Orders().GetByIDForUpdate(order.ID)
+				if findErr != nil {
+					return findErr
+				}
+				if preloaded == nil {
+					return orderapp.ErrOrderNotFound
+				}
+				lockedOrder := *preloaded
+				_, refundErr := orderapp.ReleaseWalletBalance(s.walletSvc, tx, &lockedOrder, constants.WalletTxnTypeOrderRefund, "在线支付创建失败，退回余额")
+				return refundErr
+			})
+			if rollbackErr != nil {
+				log.Errorw("payment_create_provider_failed_with_rollback_error",
+					"payment_id", payment.ID,
+					"order_id", order.ID,
+					"provider_type", payment.ProviderType,
+					"channel_type", payment.ChannelType,
+					"provider_error", err,
+					"rollback_error", rollbackErr,
+				)
+			} else {
+				log.Errorw("payment_create_provider_failed",
+					"payment_id", payment.ID,
+					"provider_type", payment.ProviderType,
+					"channel_type", payment.ChannelType,
+					"error", err,
+				)
 			}
-			if s.walletSvc == nil {
-				return nil
-			}
-			preloaded, findErr := tx.Orders().GetByIDForUpdate(order.ID)
-			if findErr != nil {
-				return findErr
-			}
-			if preloaded == nil {
-				return orderapp.ErrOrderNotFound
-			}
-			lockedOrder := *preloaded
-			_, refundErr := orderapp.ReleaseWalletBalance(s.walletSvc, tx, &lockedOrder, constants.WalletTxnTypeOrderRefund, "在线支付创建失败，退回余额")
-			return refundErr
-		})
-		if rollbackErr != nil {
-			log.Errorw("payment_create_provider_failed_with_rollback_error",
-				"payment_id", payment.ID,
-				"order_id", order.ID,
-				"provider_type", payment.ProviderType,
-				"channel_type", payment.ChannelType,
-				"provider_error", err,
-				"rollback_error", rollbackErr,
-			)
-		} else {
-			log.Errorw("payment_create_provider_failed",
-				"payment_id", payment.ID,
-				"provider_type", payment.ProviderType,
-				"channel_type", payment.ChannelType,
-				"error", err,
-			)
+			return nil, err
 		}
-		return nil, err
+
 	}
 
 	log.Infow("payment_create_success",
