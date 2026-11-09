@@ -88,6 +88,7 @@ type NotificationCenterSetting struct {
 	PaymentOrderAlertIntervalSeconds int                          `json:"payment_order_alert_interval_seconds"`
 	PaymentOrderAlertCheckSeconds    int                          `json:"payment_order_alert_check_interval_seconds"`
 	IgnoredProductIDs                []uint                       `json:"ignored_product_ids"`
+	IgnoredPaymentIDs                []uint                       `json:"ignored_payment_ids"`
 }
 
 // NotificationCenterSettingPatch 通知中心配置补丁
@@ -102,6 +103,7 @@ type NotificationCenterSettingPatch struct {
 	PaymentOrderAlertIntervalSeconds *int                        `json:"payment_order_alert_interval_seconds"`
 	PaymentOrderAlertCheckSeconds    *int                        `json:"payment_order_alert_check_interval_seconds"`
 	IgnoredProductIDs                *[]uint                     `json:"ignored_product_ids"`
+	IgnoredPaymentIDs                *[]uint                     `json:"ignored_payment_ids"`
 }
 
 // NotificationChannelsPatch 通知渠道补丁
@@ -229,6 +231,7 @@ func NotificationCenterDefaultSetting() NotificationCenterSetting {
 		PaymentOrderAlertIntervalSeconds: notificationPaymentOrderAlertIntervalDefaultSeconds,
 		PaymentOrderAlertCheckSeconds:    notificationPaymentOrderAlertCheckDefaultSeconds,
 		IgnoredProductIDs:                []uint{},
+		IgnoredPaymentIDs:                []uint{},
 	})
 }
 
@@ -241,7 +244,8 @@ func NormalizeNotificationCenterSetting(setting NotificationCenterSetting) Notif
 	setting.InventoryAlertIntervalSeconds = NormalizeNotificationInventoryAlertInterval(setting.InventoryAlertIntervalSeconds)
 	setting.PaymentOrderAlertIntervalSeconds = NormalizeNotificationPaymentOrderAlertInterval(setting.PaymentOrderAlertIntervalSeconds)
 	setting.PaymentOrderAlertCheckSeconds = NormalizeNotificationPaymentOrderAlertCheck(setting.PaymentOrderAlertCheckSeconds)
-	setting.IgnoredProductIDs = normalizeNotificationIgnoredProductIDs(setting.IgnoredProductIDs)
+	setting.IgnoredProductIDs = normalizeNotificationIgnoredIDs(setting.IgnoredProductIDs)
+	setting.IgnoredPaymentIDs = normalizeNotificationIgnoredIDs(setting.IgnoredPaymentIDs)
 	setting.Templates = normalizeNotificationTemplates(setting.Templates)
 	return setting
 }
@@ -322,6 +326,7 @@ func NotificationCenterSettingToMap(setting NotificationCenterSetting) map[strin
 		"payment_order_alert_interval_seconds":       normalized.PaymentOrderAlertIntervalSeconds,
 		"payment_order_alert_check_interval_seconds": normalized.PaymentOrderAlertCheckSeconds,
 		"ignored_product_ids":                        settingsvalue.CloneUintSlice(normalized.IgnoredProductIDs),
+		"ignored_payment_ids":                        settingsvalue.CloneUintSlice(normalized.IgnoredPaymentIDs),
 	}
 }
 
@@ -354,6 +359,9 @@ func ApplyNotificationCenterSettingPatch(current NotificationCenterSetting, patc
 	}
 	if patch.IgnoredProductIDs != nil {
 		next.IgnoredProductIDs = settingsvalue.CloneUintSlice(*patch.IgnoredProductIDs)
+	}
+	if patch.IgnoredPaymentIDs != nil {
+		next.IgnoredPaymentIDs = settingsvalue.CloneUintSlice(*patch.IgnoredPaymentIDs)
 	}
 	if patch.Channels != nil {
 		if patch.Channels.Email != nil {
@@ -467,6 +475,7 @@ func DecodeNotificationCenterSetting(raw jsonmap.JSON, fallback NotificationCent
 	next.PaymentOrderAlertIntervalSeconds = settingsvalue.ReadInt(raw, "payment_order_alert_interval_seconds", settingsvalue.ReadInt(raw, "payment_failed_alert_interval_seconds", next.PaymentOrderAlertIntervalSeconds))
 	next.PaymentOrderAlertCheckSeconds = settingsvalue.ReadInt(raw, "payment_order_alert_check_interval_seconds", next.PaymentOrderAlertCheckSeconds)
 	next.IgnoredProductIDs = settingsvalue.ReadUintList(raw, "ignored_product_ids", next.IgnoredProductIDs)
+	next.IgnoredPaymentIDs = settingsvalue.ReadUintList(raw, "ignored_payment_ids", next.IgnoredPaymentIDs)
 
 	if channelsMap := settingsvalue.ToStringAnyMap(raw["channels"]); channelsMap != nil {
 		if emailMap := settingsvalue.ToStringAnyMap(channelsMap["email"]); emailMap != nil {
@@ -644,7 +653,7 @@ func normalizeNotificationStringList(items []string, lower bool) []string {
 	return result
 }
 
-func normalizeNotificationIgnoredProductIDs(items []uint) []uint {
+func normalizeNotificationIgnoredIDs(items []uint) []uint {
 	if len(items) == 0 {
 		return []uint{}
 	}

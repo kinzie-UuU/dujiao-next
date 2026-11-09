@@ -9,6 +9,7 @@ import (
 	"github.com/dujiao-next/internal/constants"
 
 	"github.com/dujiao-next/internal/logger"
+	dashboard "github.com/dujiao-next/internal/modules/dashboard/contract"
 	"github.com/dujiao-next/internal/modules/notification/application/format"
 	settingsmessaging "github.com/dujiao-next/internal/modules/settings/schema/messaging"
 	"github.com/dujiao-next/internal/queue"
@@ -50,6 +51,8 @@ func (s *Service) dispatchExceptionAlertCheck(ctx context.Context, setting setti
 	if err != nil {
 		return err
 	}
+
+	paymentOrderCounts = excludeIgnoredPaymentFailures(paymentOrderCounts, setting.IgnoredPaymentIDs)
 
 	for _, itemPayload := range format.BuildPaymentOrderAlertDispatchPayloads(setting, dashboardSetting, payload, paymentOrderCounts) {
 		if resolvePaymentOrderAlertTypeKey(itemPayload.Data) == constants.NotificationAlertTypePaymentsFailed {
@@ -127,4 +130,25 @@ func hasNewPaymentFailure(ids, seen []uint) bool {
 		}
 	}
 	return false
+}
+
+// Exclusions acknowledge individual attempts only. Apply them before threshold
+// evaluation without mutating repository rows or other dashboard statistics.
+func excludeIgnoredPaymentFailures(counts dashboard.PaymentOrderAlertCountsRow, ignored []uint) dashboard.PaymentOrderAlertCountsRow {
+	if len(ignored) == 0 {
+		return counts
+	}
+	excluded := make(map[uint]struct{}, len(ignored))
+	for _, id := range ignored {
+		excluded[id] = struct{}{}
+	}
+	remaining := make([]uint, 0, len(counts.FailedPaymentIDs))
+	for _, id := range counts.FailedPaymentIDs {
+		if _, skip := excluded[id]; !skip {
+			remaining = append(remaining, id)
+		}
+	}
+	counts.FailedPaymentIDs = remaining
+	counts.PaymentsFailed = int64(len(remaining))
+	return counts
 }

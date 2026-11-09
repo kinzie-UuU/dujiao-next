@@ -571,3 +571,85 @@ func TestPaymentFailureAlertCacheErrorsAreRetryable(t *testing.T) {
 		t.Fatal("successful retry was not remembered")
 	}
 }
+
+type ignoredPaymentDashboardSpy struct {
+	inventorySwitchDashboardSpy
+	counts dashboard.PaymentOrderAlertCountsRow
+}
+
+func (s *ignoredPaymentDashboardSpy) GetPaymentOrderAlertCounts(context.Context, time.Time, time.Time) (dashboard.PaymentOrderAlertCountsRow, error) {
+	return s.counts, nil
+}
+
+func TestIgnoredPaymentFailuresFilterBeforeThresholdAndPreserveNewAlerts(t *testing.T) {
+	redis := miniredis.RunT(t)
+	port, _ := strconv.Atoi(redis.Port())
+	if err := cache.InitRedis(&config.RedisConfig{Enabled: true, Host: redis.Host(), Port: port, Prefix: "ignored-payment-test"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cache.Client().Close(); _ = cache.InitRedis(nil) })
+	counts := dashboard.PaymentOrderAlertCountsRow{PendingPaymentOrders: 7, PaymentsFailed: 3, FailedPaymentIDs: []uint{660, 673, 677}}
+	filtered := excludeIgnoredPaymentFailures(counts, []uint{660, 677})
+	if filtered.PaymentsFailed != 1 || !reflect.DeepEqual(filtered.FailedPaymentIDs, []uint{673}) || filtered.PendingPaymentOrders != 7 {
+		t.Fatalf("incorrect filtered counters: %+v", filtered)
+	}
+	if !reflect.DeepEqual(counts.FailedPaymentIDs, []uint{660, 673, 677}) || counts.PaymentsFailed != 3 {
+		t.Fatal("filter mutated original statistics")
+	}
+	setting := settingsmessaging.NotificationCenterDefaultSetting()
+	setting.InventoryAlertEnabled = false
+	setting.IgnoredPaymentIDs = []uint{660, 677}
+	setting.Channels.Telegram = settingsmessaging.NotificationChannelSetting{Enabled: true, Recipients: []string{"123"}}
+	ds := settingsstorefront.DashboardSetting{Alert: settingsstorefront.DashboardAlertSetting{PendingPaymentOrdersThreshold: 100, PaymentsFailedThreshold: 2}}
+	reader := &ignoredPaymentDashboardSpy{counts: counts}
+	tg := &loginTelegramSpy{}
+	svc := NewService(notificationSettingsStub{notification: setting, dashboard: ds}, nil, nil, reader, nil, tg)
+	payload := queue.NotificationDispatchPayload{EventType: constants.NotificationEventExceptionAlertCheck}
+	if err := svc.Dispatch(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(tg.messages) != 0 {
+		t.Fatal("unfiltered count triggered threshold")
+	}
+	// Lowering the threshold to one includes the unresolved 673, not the excluded attempts.
+	ds.Alert.PaymentsFailedThreshold = 1
+	svc = NewService(notificationSettingsStub{notification: setting, dashboard: ds}, nil, nil, reader, nil, tg)
+	if err := svc.Dispatch(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(tg.messages) != 1 || !strings.Contains(tg.messages[0], "失败记录 1 笔") {
+		t.Fatalf("remaining failure not notified: %v", tg.messages)
+	}
+	var seen []uint
+	if _, err := cache.GetJSON(context.Background(), "notification:payment_failures:seen", &seen); err != nil || !reflect.DeepEqual(seen, []uint{673}) {
+		t.Fatalf("dedupe contains excluded IDs: %v %v", seen, err)
+	}
+	redis.FastForward(31 * time.Minute)
+	if err := svc.Dispatch(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(tg.messages) != 1 {
+		t.Fatal("excluded historical attempts retriggered alert")
+	}
+	reader.counts.FailedPaymentIDs = []uint{660, 673, 677, 678}
+	reader.counts.PaymentsFailed = 4
+	if err := svc.Dispatch(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(tg.messages) != 2 || !strings.Contains(tg.messages[1], "失败记录 2 笔") {
+		t.Fatalf("new real failure suppressed: %v", tg.messages)
+	}
+	if _, err := cache.GetJSON(context.Background(), "notification:payment_failures:seen", &seen); err != nil || !reflect.DeepEqual(seen, []uint{673, 678}) {
+		t.Fatalf("new failure identity lost: %v %v", seen, err)
+	}
+	// The unrelated pending-order alert still uses its original count.
+	redis.FastForward(31 * time.Minute)
+	ds.Alert.PendingPaymentOrdersThreshold = 7
+	svc = NewService(notificationSettingsStub{notification: setting, dashboard: ds}, nil, nil, reader, nil, tg)
+	if err := svc.Dispatch(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(tg.messages) != 3 || !strings.Contains(tg.messages[2], "待支付订单 7 笔") {
+		t.Fatal("payment exclusions altered pending-order alert")
+	}
+}
