@@ -113,6 +113,9 @@ func (s *PaymentService) applyProviderPayment(input CreatePaymentInput, order *o
 	if providerType == manualQRProviderType && channelType == "binance_usdt" {
 		return s.applyManualUSDT(order, channel, payment)
 	}
+	if isManualLocalQR(channel) {
+		return s.applyManualLocalQR(input, order, channel, payment)
+	}
 	gatewayCtx, cancel := detachOutboundRequestContext(input.Context)
 	defer cancel()
 	payment.GatewayOrderNo = resolveGatewayOrderNo(channel, payment)
@@ -266,6 +269,9 @@ func (s *PaymentService) ValidateChannel(channel *paymentdomain.PaymentChannel) 
 	if providerType == manualQRProviderType && channelType == "binance_usdt" {
 		return validateManualUSDT(channel)
 	}
+	if isManualLocalQR(channel) {
+		return validateManualLocalQR(channel)
+	}
 
 	// wallet 是内部余额通道，无 native adapter，直接通过。
 	if providerType == constants.PaymentProviderWallet {
@@ -406,6 +412,70 @@ func (s *PaymentService) applyManualUSDT(order *orderdomain.Order, channel *paym
 	}
 	payment.PayURL = ""
 	payment.QRCode = fmt.Sprintf("manual://order/%s", order.OrderNo)
+	payment.ProviderRef = fmt.Sprintf("manual-%d", payment.ID)
+	payment.ProviderPayload = jsonmap.JSON{"manual_confirmation_required": true}
+	payment.Status = constants.PaymentStatusPending
+	payment.UpdatedAt = time.Now()
+	if err := s.paymentRepo.Update(payment); err != nil {
+		return ErrPaymentUpdateFailed
+	}
+	return nil
+}
+
+// The storefront QR service supplies the actual code and records the customer's
+// claim. Native creation only reserves a pending intent; it never proves receipt.
+func isManualLocalQR(channel *paymentdomain.PaymentChannel) bool {
+	return channel != nil && channel.ProviderType == manualQRProviderType &&
+		(channel.ChannelType == "alipay" || channel.ChannelType == "wechat")
+}
+
+func validateManualLocalQR(channel *paymentdomain.PaymentChannel) error {
+	if !isManualLocalQR(channel) || channel.InteractionMode != constants.PaymentInteractionQR {
+		return ErrPaymentChannelConfigInvalid
+	}
+	return nil
+}
+
+func (s *PaymentService) applyManualLocalQR(input CreatePaymentInput, order *orderdomain.Order, channel *paymentdomain.PaymentChannel, payment *paymentdomain.Payment) error {
+	if err := validateManualLocalQR(channel); err != nil {
+		return err
+	}
+	if !channel.IsActive || channel.DeletedAt != nil || order == nil || payment == nil ||
+		order.OrderNo == "" || payment.ID == 0 || payment.ChannelID != channel.ID ||
+		payment.ProviderType != channel.ProviderType || payment.ChannelType != channel.ChannelType ||
+		payment.InteractionMode != constants.PaymentInteractionQR || payment.Currency != "CNY" ||
+		!payment.Amount.Decimal.GreaterThan(decimal.Zero) || payment.Status != constants.PaymentStatusInitiated {
+		return ErrPaymentChannelConfigInvalid
+	}
+	var marker string
+	if payment.OrderID == 0 {
+		// Recharge intents are identified by payment ID, never by the shared order_id=0.
+		if input.ReturnBizType != "recharge" || order.ID != 0 || order.UserID == 0 || s.walletRepo == nil {
+			return ErrPaymentChannelConfigInvalid
+		}
+		recharge, err := s.walletRepo.GetRechargeOrderByPaymentID(payment.ID)
+		if err != nil {
+			return ErrPaymentUpdateFailed
+		}
+		if recharge == nil || recharge.UserID != order.UserID || recharge.RechargeNo != order.OrderNo ||
+			recharge.ChannelID != channel.ID || recharge.ProviderType != channel.ProviderType || recharge.ChannelType != channel.ChannelType ||
+			recharge.Status != constants.WalletRechargeStatusPending || recharge.Currency != payment.Currency ||
+			!recharge.PayableAmount.Decimal.Equal(payment.Amount.Decimal) {
+			return ErrPaymentChannelConfigInvalid
+		}
+		marker = "recharge"
+		expiresAt := time.Now().Add(time.Duration(s.resolveExpireMinutes()) * time.Minute)
+		payment.ExpiredAt = &expiresAt
+	} else {
+		if input.ReturnBizType == "recharge" || order.ID == 0 || payment.OrderID != order.ID ||
+			order.Status != constants.OrderStatusPendingPayment || order.Currency != "CNY" {
+			return ErrPaymentChannelConfigInvalid
+		}
+		marker = "order"
+		payment.ExpiredAt = order.ExpiresAt
+	}
+	payment.PayURL = ""
+	payment.QRCode = fmt.Sprintf("manual://%s/%s", marker, order.OrderNo)
 	payment.ProviderRef = fmt.Sprintf("manual-%d", payment.ID)
 	payment.ProviderPayload = jsonmap.JSON{"manual_confirmation_required": true}
 	payment.Status = constants.PaymentStatusPending

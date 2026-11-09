@@ -86,9 +86,9 @@ func buildPaymentOrderAlertMessage(locale string, alertType string, value, thres
 	default:
 		return localizedNotificationText(
 			locale,
-			fmt.Sprintf("当前统计周期内支付失败 %d 笔，已达到告警阈值 %d 笔；本类告警最短 %s 发送一次。", value, threshold, intervalText),
-			fmt.Sprintf("目前統計週期內支付失敗 %d 筆，已達到告警門檻 %d 筆；本類告警最短 %s 發送一次。", value, threshold, intervalText),
-			fmt.Sprintf("Payment failures reached %d in the current alert window, meeting the threshold of %d; this alert is sent at most once every %s.", value, threshold, intervalText),
+			fmt.Sprintf("当前统计周期内尚未支付成功的失败记录 %d 笔，已达到告警阈值 %d 笔；仅有新增失败记录时提醒，最短间隔 %s。", value, threshold, intervalText),
+			fmt.Sprintf("目前統計週期內尚未支付成功的失敗記錄 %d 筆，已達到告警門檻 %d 筆；僅有新增失敗記錄時提醒，最短間隔 %s。", value, threshold, intervalText),
+			fmt.Sprintf("Unresolved payment failures reached %d in the current alert window, meeting the threshold of %d; alerts require new failures and are sent at most once every %s.", value, threshold, intervalText),
 		)
 	}
 }

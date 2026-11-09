@@ -900,7 +900,7 @@ func TestManualUSDTValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, mutate := range []func(*paymentdomain.PaymentChannel){
-		func(c *paymentdomain.PaymentChannel) { c.ChannelType = "alipay" },
+		func(c *paymentdomain.PaymentChannel) { c.ChannelType = "unknown" },
 		func(c *paymentdomain.PaymentChannel) { c.InteractionMode = "redirect" },
 		func(c *paymentdomain.PaymentChannel) { c.ConfigJSON["usdt_fixed"] = map[string]interface{}{} },
 		func(c *paymentdomain.PaymentChannel) {
@@ -995,10 +995,10 @@ func TestManualUSDTCoreCreateAndAdminConfirm(t *testing.T) {
 	}
 }
 
-func TestManualUSDTKeepsLegacyProvidersAndRejectsRecharge(t *testing.T) {
+func TestManualUSDTKeepsUnknownProvidersAndRejectsRecharge(t *testing.T) {
 	svc := &PaymentService{}
 	order := &orderdomain.Order{OrderNo: "DJLEGACY"}
-	for _, kind := range []string{"alipay", "wechat", "unknown"} {
+	for _, kind := range []string{"unknown"} {
 		channel := manualUSDTChannel()
 		channel.ChannelType = kind
 		if err := svc.ValidateChannel(channel); err != ErrPaymentProviderNotSupported {

@@ -500,7 +500,7 @@ func TestBuildPaymentOrderAlertDispatchPayloadsUseDashboardThresholds(t *testing
 		t.Fatalf("payment failed alert value/threshold mismatch: %#v", failedPayload.Data)
 	}
 	failedMessage := fmt.Sprintf("%v", failedPayload.Data["message"])
-	if !strings.Contains(failedMessage, "支付失败 4 笔") || !strings.Contains(failedMessage, "10 分钟") {
+	if !strings.Contains(failedMessage, "尚未支付成功的失败记录 4 笔") || !strings.Contains(failedMessage, "仅有新增失败记录时提醒") || !strings.Contains(failedMessage, "10 分钟") {
 		t.Fatalf("unexpected payment failed message: %s", failedMessage)
 	}
 

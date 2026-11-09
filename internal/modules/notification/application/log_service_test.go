@@ -398,7 +398,7 @@ func (s *inventorySwitchDashboardSpy) GetInventoryAlertItems(context.Context, in
 }
 func (s *inventorySwitchDashboardSpy) GetPaymentOrderAlertCounts(context.Context, time.Time, time.Time) (dashboard.PaymentOrderAlertCountsRow, error) {
 	s.paymentCalls++
-	return dashboard.PaymentOrderAlertCountsRow{PendingPaymentOrders: 2, PaymentsFailed: 2}, nil
+	return dashboard.PaymentOrderAlertCountsRow{PendingPaymentOrders: 2, PaymentsFailed: 2, FailedPaymentIDs: []uint{1, 2}}, nil
 }
 func TestDisabledInventoryKeepsPaymentInspectionAndStopsBuilder(t *testing.T) {
 	setting := settingsmessaging.NotificationCenterDefaultSetting()
