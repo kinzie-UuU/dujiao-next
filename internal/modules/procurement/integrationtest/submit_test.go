@@ -254,7 +254,7 @@ type newZoeTransport func(*http.Request) (*http.Response, error)
 func (f newZoeTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestNewZoePaidProcurementLifecycle(t *testing.T) {
-	for _, sku := range []uint{3, 21, 22, 24, 34} {
+	for _, sku := range []uint{3, 16, 21, 22, 24, 34, 35, 36, 37, 38, 39, 40} {
 		for _, legacy := range []bool{false, true} {
 			t.Run(fmt.Sprintf("product-%d/legacy-%t", sku, legacy), func(t *testing.T) {
 				db := setupProcurementTestDB(t)

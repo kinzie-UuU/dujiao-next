@@ -144,7 +144,7 @@ func TestNewzoeSyncHidesMissingProducts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !list.IncludesInactive || list.Total != 5 {
+	if !list.IncludesInactive || list.Total != len(newzoeProductTerms) {
 		t.Fatalf("incomplete sync: %+v", list)
 	}
 	for _, p := range list.Items {
@@ -153,7 +153,7 @@ func TestNewzoeSyncHidesMissingProducts(t *testing.T) {
 			if !p.IsActive || p.SKUs[0].StockQuantity != 9 || p.MaxPurchaseQuantity != 2 || !strings.Contains(p.Content["zh-CN"].(string), "1 小时") {
 				t.Fatal("wrong active product")
 			}
-		case 3, 22, 24, 34:
+		case 3, 16, 22, 24, 34, 35, 36, 37, 38, 39, 40:
 			if p.IsActive {
 				t.Fatal("stale product still active")
 			}
@@ -202,7 +202,7 @@ func TestNewzoeFigmaCatalogAndPurchase(t *testing.T) {
 	a := testNewzoeClient(t, func(r *http.Request) (*http.Response, error) {
 		calls++
 		if r.Method == "GET" && r.URL.Path == "/api/v1/products" {
-			return newzoeTestResponse(200, `{"ok":true,"data":{"products":[{"id":34,"name":"Figma Pro Education","price":"40.17","type":"automatic","stock":2,"max_quantity":1},{"id":35,"name":"Unsupported","price":"1.00","type":"automatic","stock":2}]}}`), nil
+			return newzoeTestResponse(200, `{"ok":true,"data":{"products":[{"id":34,"name":"Figma Pro Education","price":"40.17","type":"automatic","stock":2,"max_quantity":1},{"id":999,"name":"Unsupported","price":"1.00","type":"automatic","stock":2}]}}`), nil
 		}
 		if r.Method != "POST" || r.URL.Path != "/api/v1/orders" {
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
@@ -233,7 +233,7 @@ func TestNewzoeFigmaCatalogAndPurchase(t *testing.T) {
 	if err != nil || !result.OK || result.Amount != "38.00" || calls != 2 {
 		t.Fatalf("unexpected Figma purchase %+v %v", result, err)
 	}
-	result, err = a.CreateOrder(context.Background(), CreateUpstreamOrderReq{SKUID: 35, Quantity: 1, DownstreamOrderNo: "LOCAL-UNSUPPORTED"})
+	result, err = a.CreateOrder(context.Background(), CreateUpstreamOrderReq{SKUID: 999, Quantity: 1, DownstreamOrderNo: "LOCAL-UNSUPPORTED"})
 	if err != nil || result.OK || calls != 2 {
 		t.Fatal("unsupported product was purchased")
 	}
