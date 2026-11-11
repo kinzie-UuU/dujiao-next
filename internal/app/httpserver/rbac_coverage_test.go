@@ -250,3 +250,25 @@ func extractAdminRoutesFromFile(path string) ([]adminRoute, error) {
 	}
 	return routes, nil
 }
+
+func TestAdvertisingRoutesAndPermissionsAreRemoved(t *testing.T) {
+	routes, err := extractAdminRoutesFromSource()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routes) == 0 {
+		t.Fatal("expected the normal admin routes to remain registered")
+	}
+	for _, route := range routes {
+		if strings.HasPrefix(route.object, "/admin/ads/") {
+			t.Errorf("cached admin clients must not reach an ad proxy: %s %s", route.method, route.object)
+		}
+	}
+	for _, role := range authz.BuiltinRoleSeeds() {
+		for _, policy := range role.Policies {
+			if strings.HasPrefix(policy.Object, "/admin/ads/") {
+				t.Errorf("obsolete ad permission remains for %s: %s", role.Role, policy.Object)
+			}
+		}
+	}
+}
