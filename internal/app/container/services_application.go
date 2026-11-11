@@ -3,8 +3,6 @@ package container
 import (
 	"context"
 
-	adproxyapp "github.com/dujiao-next/internal/modules/adproxy/application"
-	adproxygateway "github.com/dujiao-next/internal/modules/adproxy/infrastructure/adgateway"
 	categoryapp "github.com/dujiao-next/internal/modules/catalog/category/application"
 
 	"github.com/dujiao-next/internal/logger"
@@ -35,7 +33,6 @@ import (
 
 // initApplicationServices 装配内容、购物车、订单、履约和营销用例。
 func (c *Container) initApplicationServices() {
-	c.AdProxyService = adproxyapp.NewService(adproxygateway.New())
 	postStore := gormstore.NewPostStore(gormdb.DB)
 	postCategoryStore := gormstore.NewPostCategoryStore(gormdb.DB)
 	c.ContentPostService = contentapp.NewPostService(

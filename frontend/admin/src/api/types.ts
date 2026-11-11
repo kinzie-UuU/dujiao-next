@@ -704,38 +704,6 @@ export interface AdminDashboardInventoryAlert {
   available_stock: number
 }
 
-// --- Ad Proxy ---
-export interface AdRenderSlotDTO {
-  code: string
-  scene: string
-  layout: string
-  render_mode: string
-  max_items: number
-}
-
-export interface AdRenderItemDTO {
-  id: number
-  advertiser_name: string
-  title: string
-  subtitle: string
-  cta_label: string
-  badge: string
-  image: string
-  mobile_image: string
-  icon: string
-  link_type: string
-  open_in_new_tab: boolean
-  theme: string
-  dismissible: boolean
-  click_url: string
-  impression_token: string
-}
-
-export interface AdRenderResponse {
-  slot: AdRenderSlotDTO
-  items: AdRenderItemDTO[]
-}
-
 // --- Affiliate ---
 export interface AdminAffiliateUser {
   id: number

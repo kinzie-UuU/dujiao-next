@@ -10,7 +10,6 @@ const api = vi.hoisted(() => ({
 }))
 vi.mock('@/api/admin', () => ({ adminAPI: api }))
 vi.mock('vue-i18n', async (importOriginal) => ({ ...await importOriginal<typeof import('vue-i18n')>(), useI18n: () => ({ t: (key: string) => key, locale: { value: 'zh-CN' } }) }))
-vi.mock('@/components/admin/DashboardAd.vue', () => ({ default: { template: '<div />' } }))
 
 let app: App | undefined
 afterEach(() => { app?.unmount(); document.body.innerHTML = ''; vi.clearAllMocks() })
