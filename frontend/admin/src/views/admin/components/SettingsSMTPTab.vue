@@ -133,7 +133,11 @@ const testSMTPSettings = async () => {
   }
   smtpTesting.value = true
   try {
-    await adminAPI.testSMTPSettings({ to_email: form.test_email.trim() })
+    await adminAPI.testSMTPSettings({
+      to_email: form.test_email.trim(),
+      subject: 'UuUAiGC SMTP 配置测试邮件',
+      body: '这是一封来自 UuUAiGC 的 SMTP 测试邮件，说明当前配置可正常发送。',
+    })
     notifySuccess(t('admin.settings.smtp.testSuccess'))
   } catch (err) {
     notifyErrorIfNeeded(err, t('admin.settings.smtp.testFailed'))
