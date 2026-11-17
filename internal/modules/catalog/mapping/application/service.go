@@ -1,11 +1,14 @@
 package application
 
 import (
+	"context"
 	"strconv"
+	"time"
 
 	"github.com/dujiao-next/internal/constants"
 	mappingcontract "github.com/dujiao-next/internal/modules/catalog/mapping/contract"
 	mappingdomain "github.com/dujiao-next/internal/modules/catalog/mapping/domain"
+	"github.com/shopspring/decimal"
 )
 
 // 文件组织约定:
@@ -17,28 +20,30 @@ import (
 //   pricing.go       — 汇率与加价换算
 
 type Options struct {
-	Mappings     mappingcontract.MappingRepository
-	SKUMappings  mappingcontract.SKUMappingRepository
-	Products     mappingcontract.ProductRepository
-	SKUs         mappingcontract.SKURepository
-	Categories   mappingcontract.CategoryRepository
-	Connections  mappingcontract.ConnectionProvider
-	Media        mappingcontract.MediaRecorder
-	Transactions mappingcontract.UnitOfWork
+	ReadOnlyBindings mappingcontract.ReadOnlyBindingRepository
+	Mappings         mappingcontract.MappingRepository
+	SKUMappings      mappingcontract.SKUMappingRepository
+	Products         mappingcontract.ProductRepository
+	SKUs             mappingcontract.SKURepository
+	Categories       mappingcontract.CategoryRepository
+	Connections      mappingcontract.ConnectionProvider
+	Media            mappingcontract.MediaRecorder
+	Transactions     mappingcontract.UnitOfWork
 }
 
 // Service 承载本地商品与上游站点之间的映射用例。
 type Service struct {
-	mappings        mappingcontract.MappingRepository
-	skuMappings     mappingcontract.SKUMappingRepository
-	products        mappingcontract.ProductRepository
-	skus            mappingcontract.SKURepository
-	categories      mappingcontract.CategoryRepository
-	connections     mappingcontract.ConnectionProvider
-	media           mappingcontract.MediaRecorder
-	transactions    mappingcontract.UnitOfWork
-	categoryCreator mappingcontract.CategoryCreator
-	settings        mappingcontract.SettingsProvider
+	readOnlyBindings mappingcontract.ReadOnlyBindingRepository
+	mappings         mappingcontract.MappingRepository
+	skuMappings      mappingcontract.SKUMappingRepository
+	products         mappingcontract.ProductRepository
+	skus             mappingcontract.SKURepository
+	categories       mappingcontract.CategoryRepository
+	connections      mappingcontract.ConnectionProvider
+	media            mappingcontract.MediaRecorder
+	transactions     mappingcontract.UnitOfWork
+	categoryCreator  mappingcontract.CategoryCreator
+	settings         mappingcontract.SettingsProvider
 }
 
 func NewService(options Options) (*Service, error) {
@@ -46,14 +51,15 @@ func NewService(options Options) (*Service, error) {
 		return nil, mappingcontract.ErrMediaRecorderRequired
 	}
 	return &Service{
-		mappings:     options.Mappings,
-		skuMappings:  options.SKUMappings,
-		products:     options.Products,
-		skus:         options.SKUs,
-		categories:   options.Categories,
-		connections:  options.Connections,
-		media:        options.Media,
-		transactions: options.Transactions,
+		readOnlyBindings: options.ReadOnlyBindings,
+		mappings:         options.Mappings,
+		skuMappings:      options.SKUMappings,
+		products:         options.Products,
+		skus:             options.SKUs,
+		categories:       options.Categories,
+		connections:      options.Connections,
+		media:            options.Media,
+		transactions:     options.Transactions,
 	}, nil
 }
 
@@ -129,4 +135,100 @@ func (s *Service) GetSKUMappings(mappingID uint) ([]mappingdomain.SKUMapping, er
 // GetMappedUpstreamIDs 获取指定连接下所有已映射的上游商品 ID
 func (s *Service) GetMappedUpstreamIDs(connectionID uint) ([]uint, error) {
 	return s.mappings.ListUpstreamIDsByConnection(connectionID)
+}
+
+type ReadOnlyBindingInput struct {
+	ConnectionID      uint `json:"connection_id" binding:"required"`
+	LocalProductID    uint `json:"local_product_id" binding:"required"`
+	LocalSKUID        uint `json:"local_sku_id" binding:"required"`
+	UpstreamProductID uint `json:"upstream_product_id" binding:"required"`
+}
+
+func (s *Service) ListReadOnlyBindings(connectionID uint) ([]mappingdomain.ReadOnlyBinding, error) {
+	if s.readOnlyBindings == nil || connectionID == 0 {
+		return nil, mappingcontract.ErrReadOnlyBindingInvalid
+	}
+	conn, err := s.connections.GetByID(connectionID)
+	if err != nil {
+		return nil, err
+	}
+	if conn == nil || conn.Protocol != constants.ConnectionProtocolFangfang {
+		return nil, mappingcontract.ErrReadOnlyBindingInvalid
+	}
+	return s.readOnlyBindings.ListReadOnlyBindings(connectionID)
+}
+
+func (s *Service) BindReadOnlySupplier(ctx context.Context, input ReadOnlyBindingInput) (*mappingdomain.ReadOnlyBinding, error) {
+	if s.readOnlyBindings == nil || input.ConnectionID == 0 || input.LocalProductID == 0 || input.LocalSKUID == 0 {
+		return nil, mappingcontract.ErrReadOnlyBindingInvalid
+	}
+	// Only the reviewed ready-made accounts may be associated. In particular the
+	// Muse invitation/CDK product is not equivalent to the 31B account.
+	slug, nativeID := "", ""
+	switch input.UpstreamProductID {
+	case 1:
+		slug, nativeID = "upstream-1-22-1793713309179", "6aeedc6cadf360530f5faf80"
+	case 2:
+		slug, nativeID = "gpt-plus-account-preorder", "6a4b4d7d1827db4ca39bb8be"
+	default:
+		return nil, mappingcontract.ErrReadOnlyBindingInvalid
+	}
+	conn, err := s.connections.GetByID(input.ConnectionID)
+	if err != nil {
+		return nil, err
+	}
+	if conn == nil || conn.Protocol != constants.ConnectionProtocolFangfang {
+		return nil, mappingcontract.ErrReadOnlyBindingInvalid
+	}
+	product, err := s.products.GetByID(strconv.FormatUint(uint64(input.LocalProductID), 10))
+	if err != nil {
+		return nil, err
+	}
+	if product == nil || product.DeletedAt != nil || product.Slug != slug {
+		return nil, mappingcontract.ErrReadOnlyBindingInvalid
+	}
+	sku, err := s.skus.GetByID(input.LocalSKUID)
+	if err != nil {
+		return nil, err
+	}
+	if sku == nil || sku.DeletedAt != nil || sku.ProductID != product.ID {
+		return nil, mappingcontract.ErrReadOnlyBindingInvalid
+	}
+	adapter, err := s.connections.GetAdapter(conn)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	upstreamProduct, err := adapter.GetProduct(ctx, input.UpstreamProductID)
+	if err != nil {
+		return nil, err
+	}
+	if upstreamProduct == nil || upstreamProduct.ID != input.UpstreamProductID || upstreamProduct.Currency != "USD" || !upstreamProduct.IsActive || len(upstreamProduct.SKUs) != 1 {
+		return nil, mappingcontract.ErrReadOnlyBindingInvalid
+	}
+	upstreamSKU := upstreamProduct.SKUs[0]
+	price, err := decimal.NewFromString(upstreamSKU.PriceAmount)
+	if err != nil || !price.IsPositive() || upstreamSKU.ID != input.UpstreamProductID || upstreamSKU.SKUCode != nativeID || !upstreamSKU.IsActive || upstreamSKU.StockQuantity < 0 {
+		return nil, mappingcontract.ErrReadOnlyBindingInvalid
+	}
+	row := &mappingdomain.ReadOnlyBinding{ConnectionID: input.ConnectionID, LocalProductID: input.LocalProductID, LocalSKUID: input.LocalSKUID, UpstreamProductID: input.UpstreamProductID, UpstreamSKUCode: nativeID, UpstreamPrice: price.String(), Currency: "USD", UpstreamStock: upstreamSKU.StockQuantity, QuotedAt: time.Now().UTC()}
+	if err := s.readOnlyBindings.StoreReadOnlyQuote(row); err != nil {
+		return nil, err
+	}
+	return row, nil
+}
+
+func (s *Service) RefreshReadOnlyBinding(ctx context.Context, id uint) (*mappingdomain.ReadOnlyBinding, error) {
+	if s.readOnlyBindings == nil || id == 0 {
+		return nil, mappingcontract.ErrReadOnlyBindingInvalid
+	}
+	old, err := s.readOnlyBindings.GetReadOnlyBinding(id)
+	if err != nil {
+		return nil, err
+	}
+	if old == nil {
+		return nil, mappingcontract.ErrMappingNotFound
+	}
+	return s.BindReadOnlySupplier(ctx, ReadOnlyBindingInput{ConnectionID: old.ConnectionID, LocalProductID: old.LocalProductID, LocalSKUID: old.LocalSKUID, UpstreamProductID: old.UpstreamProductID})
 }

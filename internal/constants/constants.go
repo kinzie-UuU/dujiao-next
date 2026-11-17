@@ -414,6 +414,7 @@ const (
 const (
 	ConnectionProtocolDujiaoNext = "dujiao-next"
 	ConnectionProtocolNewzoe     = "newzoe"
+	ConnectionProtocolFangfang   = "fangfang-readonly"
 )
 
 // API 凭证状态常量

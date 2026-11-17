@@ -98,3 +98,10 @@ type ImportRepositories struct {
 type UnitOfWork interface {
 	WithinTransaction(fn func(ImportRepositories) error) error
 }
+
+type ReadOnlyBindingRepository interface {
+	ListReadOnlyBindings(connectionID uint) ([]mappingdomain.ReadOnlyBinding, error)
+	GetReadOnlyBinding(id uint) (*mappingdomain.ReadOnlyBinding, error)
+	// StoreReadOnlyQuote creates or refreshes a quote, never changes its association.
+	StoreReadOnlyQuote(binding *mappingdomain.ReadOnlyBinding) error
+}

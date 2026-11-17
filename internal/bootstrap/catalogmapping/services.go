@@ -41,26 +41,28 @@ type SKUMappingStore interface {
 
 // Dependencies 集中声明 Catalog Mapping 模块的启动装配依赖。
 type Dependencies struct {
-	Mappings    MappingStore
-	SKUMappings SKUMappingStore
-	Products    ProductStore
-	SKUs        SKUStore
-	Categories  categorycontract.Repository
-	Connections *siteconnectionapp.Service
-	Media       mappingcontract.MediaRecorder
+	ReadOnlyBindings mappingcontract.ReadOnlyBindingRepository
+	Mappings         MappingStore
+	SKUMappings      SKUMappingStore
+	Products         ProductStore
+	SKUs             SKUStore
+	Categories       categorycontract.Repository
+	Connections      *siteconnectionapp.Service
+	Media            mappingcontract.MediaRecorder
 }
 
 // New 创建可直接注入调用方的 Catalog Mapping 应用服务。
 func New(dependencies Dependencies) (*mappingapp.Service, error) {
 	core, err := mappingapp.NewService(mappingapp.Options{
-		Mappings:     dependencies.Mappings,
-		SKUMappings:  dependencies.SKUMappings,
-		Products:     dependencies.Products,
-		SKUs:         dependencies.SKUs,
-		Categories:   dependencies.Categories,
-		Connections:  dependencies.Connections,
-		Media:        dependencies.Media,
-		Transactions: newUnitOfWork(dependencies.Products, dependencies.SKUs, dependencies.Mappings, dependencies.SKUMappings),
+		Mappings:         dependencies.Mappings,
+		ReadOnlyBindings: dependencies.ReadOnlyBindings,
+		SKUMappings:      dependencies.SKUMappings,
+		Products:         dependencies.Products,
+		SKUs:             dependencies.SKUs,
+		Categories:       dependencies.Categories,
+		Connections:      dependencies.Connections,
+		Media:            dependencies.Media,
+		Transactions:     newUnitOfWork(dependencies.Products, dependencies.SKUs, dependencies.Mappings, dependencies.SKUMappings),
 	})
 	if err != nil {
 		return nil, err

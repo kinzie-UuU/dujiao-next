@@ -87,6 +87,7 @@ func AutoMigrate() error {
 		&siteconnectiondomain.Connection{},
 		&mappingdomain.Mapping{},
 		&mappingdomain.SKUMapping{},
+		&mappingdomain.ReadOnlyBinding{},
 		&procurementdomain.Order{},
 		&downstreamcallbackdomain.OrderRef{},
 		&reconciliationdomain.Job{},

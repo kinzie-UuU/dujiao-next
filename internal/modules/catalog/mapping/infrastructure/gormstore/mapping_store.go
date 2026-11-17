@@ -176,3 +176,43 @@ func (r *MappingStore) ListUpstreamIDsByConnection(connectionID uint) ([]uint, e
 	}
 	return ids, nil
 }
+
+type ReadOnlyBindingStore struct{ db *gorm.DB }
+
+func NewReadOnlyBindingStore(db *gorm.DB) *ReadOnlyBindingStore { return &ReadOnlyBindingStore{db: db} }
+func (s *ReadOnlyBindingStore) ListReadOnlyBindings(connectionID uint) ([]mappingdomain.ReadOnlyBinding, error) {
+	rows := []mappingdomain.ReadOnlyBinding{}
+	err := s.db.Where("connection_id = ?", connectionID).Order("id").Find(&rows).Error
+	return rows, err
+}
+func (s *ReadOnlyBindingStore) GetReadOnlyBinding(id uint) (*mappingdomain.ReadOnlyBinding, error) {
+	var row mappingdomain.ReadOnlyBinding
+	if err := s.db.First(&row, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &row, nil
+}
+func (s *ReadOnlyBindingStore) StoreReadOnlyQuote(row *mappingdomain.ReadOnlyBinding) error {
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var old mappingdomain.ReadOnlyBinding
+		err := tx.Where("connection_id = ? AND (upstream_product_id = ? OR local_sku_id = ?)", row.ConnectionID, row.UpstreamProductID, row.LocalSKUID).First(&old).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return tx.Create(row).Error
+		}
+		if err != nil {
+			return err
+		}
+		if old.LocalProductID != row.LocalProductID || old.LocalSKUID != row.LocalSKUID || old.UpstreamProductID != row.UpstreamProductID || old.UpstreamSKUCode != row.UpstreamSKUCode {
+			return mappingcontract.ErrReadOnlyBindingConflict
+		}
+		row.ID = old.ID
+		row.CreatedAt = old.CreatedAt
+		if err := tx.Model(&mappingdomain.ReadOnlyBinding{}).Where("id = ?", old.ID).Updates(map[string]interface{}{"upstream_price": row.UpstreamPrice, "currency": row.Currency, "upstream_stock": row.UpstreamStock, "quoted_at": row.QuotedAt}).Error; err != nil {
+			return err
+		}
+		return tx.First(row, old.ID).Error
+	})
+}

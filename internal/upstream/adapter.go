@@ -177,6 +177,8 @@ type Adapter interface {
 // NewAdapter 根据协议类型创建适配器
 func NewAdapter(conn *siteconnectiondomain.Connection, uploadsDir string) (Adapter, error) {
 	switch conn.Protocol {
+	case constants.ConnectionProtocolFangfang:
+		return newFangfangAdapter(conn)
 	case constants.ConnectionProtocolNewzoe:
 		return newNewzoeAdapter(conn)
 	case constants.ConnectionProtocolDujiaoNext:

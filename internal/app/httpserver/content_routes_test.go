@@ -16,6 +16,7 @@ import (
 
 	"github.com/dujiao-next/internal/app/httpserver/middleware"
 	"github.com/dujiao-next/internal/authz"
+	mappinghttp "github.com/dujiao-next/internal/modules/catalog/mapping/transport/http"
 	contenttransport "github.com/dujiao-next/internal/modules/content/transport/http"
 	admincontract "github.com/dujiao-next/internal/modules/identity/admin/contract"
 	admindomain "github.com/dujiao-next/internal/modules/identity/admin/domain"
@@ -299,6 +300,72 @@ func TestUploadDocumentsAreSandboxed(t *testing.T) {
 			if name == "image.webp" && (w.Code != 200 || w.Header().Get("Content-Disposition") != "") {
 				t.Fatal("image embedding changed")
 			}
+		}
+	}
+}
+
+type unusedReadOnlyMappingService struct {
+	mappinghttp.ProductMappingService
+}
+
+// Only the existing supplier integration role and super admins may manage quotes.
+var readOnlySupplierAdminRoutes = []adminRoute{
+	{method: "GET", object: "/admin/supplier-readonly-bindings"},
+	{method: "POST", object: "/admin/supplier-readonly-bindings"},
+	{method: "POST", object: "/admin/supplier-readonly-bindings/:id/refresh"},
+}
+
+func TestReadOnlySupplierRoutesRequireSupplierIntegrationPermission(t *testing.T) {
+	repo, authzService, noRole, operations := setupContentRouteAccessTest(t)
+	super := &admindomain.Admin{Username: "supplier-super", PasswordHash: "test", IsSuper: true}
+	if err := repo.Create(super); err != nil {
+		t.Fatal(err)
+	}
+	integration := &admindomain.Admin{Username: "supplier-integration", PasswordHash: "test"}
+	if err := repo.Create(integration); err != nil {
+		t.Fatal(err)
+	}
+	if err := authzService.SetAdminRoles(integration.ID, []string{"integration"}); err != nil {
+		t.Fatal(err)
+	}
+	userToken, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"user_id": super.ID, "typ": "access", "exp": time.Now().Add(time.Hour).Unix()}).SignedString([]byte(contentAdminJWTSecret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := gin.New()
+	admin := r.Group("/api/v1/admin", middleware.JWTAuthMiddleware(contentAdminJWTSecret, repo), middleware.AdminRBACMiddleware(authzService))
+	admin.Use(func(c *gin.Context) { response.Success(c, nil); c.Abort() })
+	mappinghttp.RegisterAdminRoutes(admin, mappinghttp.NewAdminHandler(&unusedReadOnlyMappingService{}))
+	for _, route := range readOnlySupplierAdminRoutes {
+		path := strings.ReplaceAll("/api/v1"+route.object, ":id", "1")
+		for _, tc := range []struct {
+			name, token string
+			status      int
+		}{
+			{"anonymous", "", response.CodeUnauthorized},
+			{"ordinary user", userToken, response.CodeUnauthorized},
+			{"no role", noRole, response.CodeForbidden},
+			{"operations", operations, response.CodeForbidden},
+			{"super", signContentAdminToken(t, super), response.CodeOK},
+			{"integration", signContentAdminToken(t, integration), response.CodeOK},
+		} {
+			t.Run(route.method+path+tc.name, func(t *testing.T) {
+				req := httptest.NewRequest(route.method, path, nil)
+				if tc.token != "" {
+					req.Header.Set("Authorization", "Bearer "+tc.token)
+				}
+				w := httptest.NewRecorder()
+				r.ServeHTTP(w, req)
+				var got struct {
+					Status int `json:"status_code"`
+				}
+				if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+					t.Fatal(err)
+				}
+				if got.Status != tc.status {
+					t.Fatalf("want %d got %d: %s", tc.status, got.Status, w.Body.String())
+				}
+			})
 		}
 	}
 }
