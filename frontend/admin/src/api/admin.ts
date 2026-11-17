@@ -559,6 +559,9 @@ export const adminAPI = {
   getCardSecretTemplate: () => api.get('/admin/card-secrets/template'),
   // Site Connections
   getSiteConnections: (params?: Record<string, unknown>) => api.get('/admin/site-connections', { params }),
+  getReadOnlySupplierBindings: (connectionId: number) => api.get('/admin/supplier-readonly-bindings', { params: { connection_id: connectionId } }),
+  bindReadOnlySupplier: (data: { connection_id: number; local_product_id: number; local_sku_id: number; upstream_product_id: number }) => api.post('/admin/supplier-readonly-bindings', data, { timeoutMs: 25000 }),
+  refreshReadOnlySupplierBinding: (id: number) => api.post(`/admin/supplier-readonly-bindings/${id}/refresh`, {}, { timeoutMs: 25000 }),
   getSiteConnection: (id: number) => api.get(`/admin/site-connections/${id}`),
   createSiteConnection: (data: Partial<AdminSiteConnection>) => api.post('/admin/site-connections', data),
   updateSiteConnection: (id: number, data: Partial<AdminSiteConnection>) => api.put(`/admin/site-connections/${id}`, data),
