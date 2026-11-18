@@ -3,6 +3,7 @@ package siteconnection_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	siteconnectionapp "github.com/dujiao-next/internal/modules/siteconnection/application"
 	siteconnectioncontract "github.com/dujiao-next/internal/modules/siteconnection/contract"
@@ -135,6 +136,17 @@ func (r *siteConnectionRepoStub) Update(conn *siteconnectiondomain.Connection) e
 	r.updated = true
 	copy := *conn
 	r.conn = &copy
+	return nil
+}
+
+func (r *siteConnectionRepoStub) RecordPing(id uint, at time.Time, ok, activatePending bool) error {
+	if r.conn != nil && r.conn.ID == id {
+		r.updated = true
+		r.conn.LastPingAt, r.conn.LastPingOK = &at, ok
+		if activatePending && r.conn.Protocol != constants.ConnectionProtocolFangfang && r.conn.Status == constants.ConnectionStatusPending {
+			r.conn.Status = constants.ConnectionStatusActive
+		}
+	}
 	return nil
 }
 

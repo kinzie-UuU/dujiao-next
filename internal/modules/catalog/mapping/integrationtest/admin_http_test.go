@@ -366,13 +366,15 @@ func TestBatchImportUpstreamProductsRestoresSoftDeletedAutoCategory(t *testing.T
 
 type readonlyQuoteAdapter struct {
 	upstream.Adapter
-	price string
-	stock int
-	reads int
+	price      string
+	stock      int
+	reads      int
+	observedAt time.Time
 }
 
 func (a *readonlyQuoteAdapter) GetProduct(_ context.Context, id uint) (*upstream.UpstreamProduct, error) {
 	a.reads++
+	a.observedAt = time.Now().UTC()
 	native := map[uint]string{1: "6aeedc6cadf360530f5faf80", 2: "6a4b4d7d1827db4ca39bb8be"}[id]
 	return &upstream.UpstreamProduct{ID: id, Currency: "USD", IsActive: true, SKUs: []upstream.UpstreamSKU{{ID: id, SKUCode: native, PriceAmount: a.price, StockQuantity: a.stock, IsActive: true}}}, nil
 }
@@ -434,12 +436,16 @@ func TestReadOnlyBindingsPreserveExistingFulfillment(t *testing.T) {
 	service, db, adapter := readonlyBindingFixture(t)
 	before := snapshotReadOnlyProtected(t, db)
 	muse := mappingapp.ReadOnlyBindingInput{ConnectionID: 1, LocalProductID: 37, LocalSKUID: 70, UpstreamProductID: 1}
+	beforeRequest := time.Now().UTC()
 	first, err := service.BindReadOnlySupplier(context.Background(), muse)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if first.PurchaseEnabled || first.UpstreamPrice != "0.96" || first.UpstreamStock != 3 || first.UpstreamSKUCode != "6aeedc6cadf360530f5faf80" {
 		t.Fatalf("incorrect quote: %+v", first)
+	}
+	if first.QuotedAt.Before(beforeRequest) || first.QuotedAt.After(adapter.observedAt) {
+		t.Fatal("quote time must be the start of the supplier request")
 	}
 	adapter.price, adapter.stock = "1.02", 8
 	again, err := service.RefreshReadOnlyBinding(context.Background(), first.ID)

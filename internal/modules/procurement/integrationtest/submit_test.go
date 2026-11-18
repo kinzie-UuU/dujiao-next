@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	fulfillmentdomain "github.com/dujiao-next/internal/modules/fulfillment/domain"
+	procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
 	procurementstore "github.com/dujiao-next/internal/modules/procurement/infrastructure/gormstore"
+	securestoreserializer "github.com/dujiao-next/internal/securestore/serializer"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	"io"
@@ -678,5 +680,81 @@ func TestConcurrentCreateForOneLocalOrderCannotDuplicatePurchase(t *testing.T) {
 	_ = svc.SubmitToUpstream(rows[0].ID)
 	if posts.Load() != 1 {
 		t.Fatalf("POST count=%d", posts.Load())
+	}
+}
+
+func TestSavedReceiptEncryptedAndResumed(t *testing.T) {
+	if err := securestoreserializer.Configure("test-only-encryption-key"); err != nil {
+		t.Fatal(err)
+	}
+	db := setupProcurementTestDB(t)
+	order := createProcTestOrder(t, db, "RECEIPT-LOCAL", constants.OrderStatusPaid, constants.FulfillmentTypeUpstream)
+	proc := createTestProcurementOrder(t, db, 1, order.ID, order.OrderNo, constants.ProcurementStatusSubmitted)
+	secret := "synthetic-account-password"
+	receipt := `{"Payload":"` + secret + `"}`
+	changed, err := procurementstore.New(db).UpdateStatus(proc.ID, constants.ProcurementStatusSubmitted, constants.ProcurementStatusAccepted, map[string]interface{}{"submission_fulfillment": receipt})
+	if err != nil || !changed {
+		t.Fatalf("save receipt: %v", err)
+	}
+	var stored string
+	if err := db.Raw("SELECT submission_fulfillment FROM procurement_orders WHERE id = ?", proc.ID).Scan(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored == "" || strings.Contains(stored, secret) {
+		t.Fatal("receipt not encrypted")
+	}
+	var loaded procurementdomain.Order
+	if err := db.First(&loaded, proc.ID).Error; err != nil || loaded.SubmissionFulfillment != receipt {
+		t.Fatalf("receipt unavailable: %v", err)
+	}
+	public, err := json.Marshal(loaded)
+	if err != nil || strings.Contains(string(public), secret) {
+		t.Fatal("receipt exposed in JSON")
+	}
+	service := newTestProcurementService(db, newTestSiteConnectionService(db, "test-key", t.TempDir()))
+	if err := service.PollUpstreamStatus(proc.ID); err != nil {
+		t.Fatalf("resume delivery: %v", err)
+	}
+	if err := db.First(&loaded, proc.ID).Error; err != nil || loaded.Status != constants.ProcurementStatusFulfilled || loaded.SubmissionFulfillment != "" {
+		t.Fatalf("delivery not completed: %v", err)
+	}
+}
+
+func TestSavedReceiptConflictingFulfillmentRollsBack(t *testing.T) {
+	if err := securestoreserializer.Configure("test-only-encryption-key"); err != nil {
+		t.Fatal(err)
+	}
+	db := setupProcurementTestDB(t)
+	order := createProcTestOrder(t, db, "RECEIPT-CONFLICT", constants.OrderStatusPaid, constants.FulfillmentTypeUpstream)
+	proc := createTestProcurementOrder(t, db, 1, order.ID, order.OrderNo, constants.ProcurementStatusSubmitted)
+	old := fulfillmentdomain.Fulfillment{OrderID: order.ID, Type: constants.FulfillmentTypeManual, Status: constants.FulfillmentStatusDelivered, Payload: "prior-delivery"}
+	if err := db.Create(&old).Error; err != nil {
+		t.Fatal(err)
+	}
+	const secret = "new-supplier-secret"
+	const receipt = `{"Payload":"` + secret + `"}`
+	changed, err := procurementstore.New(db).UpdateStatus(proc.ID, constants.ProcurementStatusSubmitted, constants.ProcurementStatusAccepted, map[string]interface{}{"submission_fulfillment": receipt})
+	if err != nil || !changed {
+		t.Fatalf("save receipt: %v", err)
+	}
+	service := newTestProcurementService(db, newTestSiteConnectionService(db, "test-key", t.TempDir()))
+	if err := service.PollUpstreamStatus(proc.ID); err == nil || !strings.Contains(err.Error(), "reconciliation required") {
+		t.Fatalf("expected reconciliation error, got %v", err)
+	}
+	var loaded procurementdomain.Order
+	if err := db.First(&loaded, proc.ID).Error; err != nil || loaded.Status != constants.ProcurementStatusAccepted || loaded.SubmissionFulfillment != receipt {
+		t.Fatalf("procurement state or receipt lost: %v", err)
+	}
+	var stored string
+	if err := db.Raw("SELECT submission_fulfillment FROM procurement_orders WHERE id = ?", proc.ID).Scan(&stored).Error; err != nil || stored == "" || strings.Contains(stored, secret) {
+		t.Fatal("receipt was not retained encrypted")
+	}
+	var local orderdomain.Order
+	if err := db.First(&local, order.ID).Error; err != nil || local.Status != constants.OrderStatusPaid {
+		t.Fatalf("local order was advanced: %v", err)
+	}
+	var current fulfillmentdomain.Fulfillment
+	if err := db.Where("order_id = ?", order.ID).First(&current).Error; err != nil || current.Payload != old.Payload {
+		t.Fatalf("existing fulfillment changed: %v", err)
 	}
 }

@@ -25,7 +25,9 @@ import (
 	notificationdomain "github.com/dujiao-next/internal/modules/notification/domain"
 	orderdomain "github.com/dujiao-next/internal/modules/order/domain"
 	paymentdomain "github.com/dujiao-next/internal/modules/payment/domain"
+	backupstate "github.com/dujiao-next/internal/modules/procurement/backupstate"
 	procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
+	procurementreceipt "github.com/dujiao-next/internal/modules/procurement/receipts/infrastructure/gormstore"
 	promotiondomain "github.com/dujiao-next/internal/modules/promotion/domain"
 	reconciliationdomain "github.com/dujiao-next/internal/modules/reconciliation/domain"
 	resellerstore "github.com/dujiao-next/internal/modules/reseller/infrastructure/gormstore"
@@ -34,6 +36,7 @@ import (
 	broadcastdomain "github.com/dujiao-next/internal/modules/telegram/broadcast/domain"
 	walletdomain "github.com/dujiao-next/internal/modules/wallet/domain"
 	"github.com/dujiao-next/internal/platform/database/gormdb"
+	"gorm.io/gorm/clause"
 )
 
 // AutoMigrate owns the application-wide schema registry and ordered data migrations.
@@ -89,6 +92,10 @@ func AutoMigrate() error {
 		&mappingdomain.SKUMapping{},
 		&mappingdomain.ReadOnlyBinding{},
 		&procurementdomain.Order{},
+		&backupstate.Claim{},
+		&backupstate.Gate{},
+		&backupstate.GateAudit{},
+		&procurementreceipt.PurchaseReceipt{},
 		&downstreamcallbackdomain.OrderRef{},
 		&reconciliationdomain.Job{},
 		&reconciliationdomain.Item{},
@@ -98,6 +105,10 @@ func AutoMigrate() error {
 		&memberleveldomain.MemberLevelPrice{},
 		&contentdomain.Media{},
 	); err != nil {
+		return err
+	}
+	// Never overwrite a pre-existing gate. New installations start closed.
+	if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&backupstate.Gate{ID: 1, Enabled: false}).Error; err != nil {
 		return err
 	}
 

@@ -367,6 +367,7 @@ const (
 	TaskAffiliateOrderPaid          = "affiliate:order_paid"
 	TaskResellerConfirmLedger       = "reseller:confirm_ledger"
 	TaskProcurementSubmit           = "procurement:submit"
+	TaskBackupProcurementSubmit     = "procurement:backup_submit"
 	TaskProcurementPollStatus       = "procurement:poll_status"
 	TaskProcurementSyncAccepted     = "procurement:sync_accepted"
 	TaskProcurementRetryPending     = "procurement:retry_pending"

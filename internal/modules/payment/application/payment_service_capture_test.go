@@ -7,6 +7,7 @@ import (
 	notificationcontract "github.com/dujiao-next/internal/modules/notification/contract"
 	orderstore "github.com/dujiao-next/internal/modules/order/infrastructure/gormstore"
 	procurementapp "github.com/dujiao-next/internal/modules/procurement/application"
+	"github.com/dujiao-next/internal/modules/procurement/backupstate"
 	procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
 	procurementstore "github.com/dujiao-next/internal/modules/procurement/infrastructure/gormstore"
 	procurementorder "github.com/dujiao-next/internal/modules/procurement/infrastructure/orderreader"
@@ -970,7 +971,7 @@ func TestManualAccountPurchaseAndDeliveryNoCharge(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc, db := setupPaymentServiceWalletTest(t)
-	if err := db.AutoMigrate(&procurementdomain.Order{}); err != nil {
+	if err := db.AutoMigrate(&procurementdomain.Order{}, &backupstate.Claim{}); err != nil {
 		t.Fatal(err)
 	}
 	old := http.DefaultTransport

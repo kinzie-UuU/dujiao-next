@@ -28,6 +28,8 @@ import (
 	notificationtransport "github.com/dujiao-next/internal/modules/notification/transport/http"
 	ordertransport "github.com/dujiao-next/internal/modules/order/transport/http"
 	paymenttransport "github.com/dujiao-next/internal/modules/payment/transport/http"
+	backupgormstore "github.com/dujiao-next/internal/modules/procurement/backupservice/infrastructure/gormstore"
+	backuphttp "github.com/dujiao-next/internal/modules/procurement/backupservice/transport/http"
 	procurementtransport "github.com/dujiao-next/internal/modules/procurement/transport/http"
 	promotiontransport "github.com/dujiao-next/internal/modules/promotion/transport/http"
 	reconciliationtransport "github.com/dujiao-next/internal/modules/reconciliation/transport/http"
@@ -37,6 +39,7 @@ import (
 	broadcasthttp "github.com/dujiao-next/internal/modules/telegram/broadcast/transport/http"
 	uploadtransport "github.com/dujiao-next/internal/modules/upload/transport/http"
 	wallettransport "github.com/dujiao-next/internal/modules/wallet/transport/http"
+	"github.com/dujiao-next/internal/platform/database/gormdb"
 	"github.com/dujiao-next/internal/platform/http/response"
 	systemtransport "github.com/dujiao-next/internal/platform/http/system"
 
@@ -188,6 +191,12 @@ func registerAdminRoutes(
 
 	// 采购单管理
 	procurementtransport.RegisterAdminRoutes(authorized, adminProcurementHandler)
+	if c.QueueClient != nil && c.SiteConnectionService != nil && gormdb.DB != nil {
+		backuphttp.RegisterAdminRoutes(authorized, backuphttp.NewHandler(
+			&backupgormstore.PlusTrigger{DB: gormdb.DB, Queue: c.QueueClient},
+			&backupgormstore.GateAdmin{DB: gormdb.DB},
+		))
+	}
 
 	// 对账管理
 	reconciliationtransport.RegisterAdminRoutes(paymentProtected, reconciliationtransport.NewAdminHandler(c.ReconciliationService))

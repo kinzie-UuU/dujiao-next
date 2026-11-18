@@ -38,14 +38,16 @@ type CreateOrderRequest struct {
 }
 
 type CreateOrderResult struct {
-	OK           bool
-	OrderID      uint
-	OrderNo      string
-	Status       string
-	Amount       string
-	Currency     string
-	ErrorCode    string
-	ErrorMessage string
+	RequiresReconciliation bool
+	Fulfillment            *Fulfillment
+	OK                     bool
+	OrderID                uint
+	OrderNo                string
+	Status                 string
+	Amount                 string
+	Currency               string
+	ErrorCode              string
+	ErrorMessage           string
 }
 
 type UpstreamOrder struct {

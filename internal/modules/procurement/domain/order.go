@@ -14,6 +14,8 @@ const PayloadPreviewMaxLines = 100
 
 // Order 是采购上下文的聚合根。
 type Order struct {
+	// SubmissionFulfillment is an encrypted, private receipt retained until local delivery commits.
+	SubmissionFulfillment      string       `gorm:"serializer:secure_string;type:text" json:"-"`
 	SubmissionConnectionSHA256 string       `gorm:"type:varchar(64);not null;default:''" json:"submission_connection_sha256"`
 	SubmissionVersion          uint         `gorm:"not null;default:0" json:"submission_version"`
 	SubmissionRequestSHA256    string       `gorm:"type:varchar(64);not null;default:''" json:"submission_request_sha256"`

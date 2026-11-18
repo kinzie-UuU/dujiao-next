@@ -834,5 +834,14 @@ func (r *Store) AssertNoUncertainProcurement(rootID uint) error {
 	if count > 0 {
 		return errors.New("upstream purchase receipt is uncertain; reconcile before refund")
 	}
+	// The backup claimant takes the same root lock before it can send a purchase.
+	// Keep refunds and manual delivery fenced until the attempt is reconciled.
+	err = r.db.Table("backup_procurement_claims").Where("state <> ? AND NOT (state = ? AND submitted_at IS NULL AND request_sha256 = '' AND connection_sha256 = '') AND (local_order_id = ? OR local_order_id IN (SELECT id FROM orders WHERE parent_id = ? AND deleted_at IS NULL))", "completed", "not_sent", rootID, rootID).Count(&count).Error
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		return errors.New("backup purchase requires reconciliation")
+	}
 	return nil
 }

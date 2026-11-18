@@ -200,6 +200,10 @@ func (s *Service) BindReadOnlySupplier(ctx context.Context, input ReadOnlyBindin
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
+	// Timestamp the beginning of the supplier request, not its completion.
+	// Concurrent requests may finish out of order; a slow earlier response must
+	// never be presented as a fresher quote than a later request.
+	quoteStartedAt := time.Now().UTC()
 	upstreamProduct, err := adapter.GetProduct(ctx, input.UpstreamProductID)
 	if err != nil {
 		return nil, err
@@ -212,7 +216,7 @@ func (s *Service) BindReadOnlySupplier(ctx context.Context, input ReadOnlyBindin
 	if err != nil || !price.IsPositive() || upstreamSKU.ID != input.UpstreamProductID || upstreamSKU.SKUCode != nativeID || !upstreamSKU.IsActive || upstreamSKU.StockQuantity < 0 {
 		return nil, mappingcontract.ErrReadOnlyBindingInvalid
 	}
-	row := &mappingdomain.ReadOnlyBinding{ConnectionID: input.ConnectionID, LocalProductID: input.LocalProductID, LocalSKUID: input.LocalSKUID, UpstreamProductID: input.UpstreamProductID, UpstreamSKUCode: nativeID, UpstreamPrice: price.String(), Currency: "USD", UpstreamStock: upstreamSKU.StockQuantity, QuotedAt: time.Now().UTC()}
+	row := &mappingdomain.ReadOnlyBinding{ConnectionID: input.ConnectionID, LocalProductID: input.LocalProductID, LocalSKUID: input.LocalSKUID, UpstreamProductID: input.UpstreamProductID, UpstreamSKUCode: nativeID, UpstreamPrice: price.String(), Currency: "USD", UpstreamStock: upstreamSKU.StockQuantity, QuotedAt: quoteStartedAt}
 	if err := s.readOnlyBindings.StoreReadOnlyQuote(row); err != nil {
 		return nil, err
 	}

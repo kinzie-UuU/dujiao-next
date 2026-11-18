@@ -244,15 +244,10 @@ func (s *Service) Ping(id uint) (*PingResult, error) {
 
 	result, pingErr := adapter.Ping(ctx)
 	now := time.Now()
-	conn.LastPingAt = &now
-	conn.LastPingOK = pingErr == nil
-
-	if pingErr == nil && conn.Status == constants.ConnectionStatusPending {
-		conn.Status = constants.ConnectionStatusActive
-	}
-
-	// 更新连接状态（不管 ping 是否成功）
-	_ = s.connRepo.Update(conn)
+	// Only update health columns. Saving the stale connection object here can
+	// overwrite a concurrent credential/status change after the network call.
+	// Fang remains explicitly controlled even when its initial status is pending.
+	_ = s.connRepo.RecordPing(id, now, pingErr == nil, pingErr == nil && conn.Status == constants.ConnectionStatusPending)
 
 	if pingErr != nil {
 		return nil, pingErr

@@ -16,6 +16,7 @@ import (
 	"github.com/dujiao-next/internal/config"
 	mappinggormstore "github.com/dujiao-next/internal/modules/catalog/mapping/infrastructure/gormstore"
 	procurementapp "github.com/dujiao-next/internal/modules/procurement/application"
+	backupstate "github.com/dujiao-next/internal/modules/procurement/backupstate"
 	procurementcontract "github.com/dujiao-next/internal/modules/procurement/contract"
 	procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
 	procurementgormstore "github.com/dujiao-next/internal/modules/procurement/infrastructure/gormstore"
@@ -59,6 +60,7 @@ func setupProcurementTestDB(t *testing.T) *gorm.DB {
 		&orderdomain.OrderRefundRecord{},
 		&fulfillmentdomain.Fulfillment{},
 		&procurementdomain.Order{},
+		&backupstate.Claim{},
 		&siteconnectiondomain.Connection{},
 		&mappingdomain.Mapping{},
 		&mappingdomain.SKUMapping{},

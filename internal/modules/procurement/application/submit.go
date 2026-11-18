@@ -133,6 +133,31 @@ func (s *Service) SubmitToUpstream(procurementOrderID uint) error {
 		"retry_count":       0,
 		"updated_at":        now,
 	}
+	if resp.RequiresReconciliation {
+		updates["error_message"] = "Supplier accepted purchase but delivery material is incomplete; manual reconciliation required"
+		updates["next_retry_at"] = nil
+		changed, persistErr := s.procRepo.UpdateStatus(procOrder.ID, procOrder.Status, constants.ProcurementStatusUncertain, updates)
+		if persistErr != nil {
+			return fmt.Errorf("persist supplier reconciliation receipt: %w", persistErr)
+		}
+		if changed {
+			s.notifyProcurementFailure(procOrder, updates["error_message"].(string))
+		}
+		return nil
+	}
+
+	// Some suppliers return credentials only in this response. Save the complete
+	// normalized receipt atomically with acceptance before publishing any delivery.
+	if resp.Fulfillment != nil && mapProcurementUpstreamStatus(resp.Status) == "delivered" {
+		if strings.TrimSpace(resp.Fulfillment.Payload) == "" {
+			return s.markSubmissionUncertain(procOrder, "Supplier receipt has no delivery material; reconcile before retry")
+		}
+		receipt, encodeErr := json.Marshal(resp.Fulfillment)
+		if encodeErr != nil {
+			return s.markSubmissionUncertain(procOrder, "Supplier delivery receipt cannot be persisted; reconcile before retry")
+		}
+		updates["submission_fulfillment"] = string(receipt)
+	}
 	accepted, err := s.procRepo.UpdateStatus(procOrder.ID, procOrder.Status, constants.ProcurementStatusAccepted, updates)
 	if err != nil {
 		return fmt.Errorf("update procurement status: %w", err)
@@ -157,6 +182,18 @@ func (s *Service) SubmitToUpstream(procurementOrderID uint) error {
 
 	if err != nil {
 		return fmt.Errorf("update local procurement status: %w", err)
+	}
+
+	if receipt, ok := updates["submission_fulfillment"].(string); ok {
+		procOrder.Status = constants.ProcurementStatusAccepted
+		procOrder.SubmissionFulfillment = receipt
+		if _, deliveryErr := s.deliverSubmissionReceipt(procOrder); deliveryErr != nil {
+			if s.queue != nil {
+				_ = s.queue.EnqueuePoll(procOrder.ID, 30*time.Second)
+			}
+			return deliveryErr
+		}
+		return nil
 	}
 
 	// 入队轮询任务（30s 延迟，作为回调的 fallback）

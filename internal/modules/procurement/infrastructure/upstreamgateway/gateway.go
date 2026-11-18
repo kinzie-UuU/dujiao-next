@@ -65,11 +65,13 @@ func (s *session) CreateOrder(ctx context.Context, request procurementcontract.C
 		SKUID: request.SKUID, Quantity: request.Quantity, ManualFormData: request.ManualFormData,
 		DownstreamOrderNo: request.DownstreamOrderNo, TraceID: request.TraceID, CallbackURL: request.CallbackURL,
 	})
-	if err != nil {
+	if err != nil || result == nil {
 		return nil, err
 	}
 	return &procurementcontract.CreateOrderResult{
-		OK: result.OK, OrderID: result.OrderID, OrderNo: result.OrderNo,
+		Fulfillment:            fromUpstreamFulfillment(result.Fulfillment),
+		RequiresReconciliation: result.RequiresReconciliation,
+		OK:                     result.OK, OrderID: result.OrderID, OrderNo: result.OrderNo,
 		Status: result.Status, Amount: result.Amount, Currency: result.Currency,
 		ErrorCode: result.ErrorCode, ErrorMessage: result.ErrorMessage,
 	}, nil

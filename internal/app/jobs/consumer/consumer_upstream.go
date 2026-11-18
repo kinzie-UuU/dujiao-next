@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 
 	"github.com/dujiao-next/internal/logger"
+	backupservice "github.com/dujiao-next/internal/modules/procurement/backupservice"
+	backupgormstore "github.com/dujiao-next/internal/modules/procurement/backupservice/infrastructure/gormstore"
+	"github.com/dujiao-next/internal/platform/database/gormdb"
 	"github.com/dujiao-next/internal/queue"
 
 	"github.com/hibiken/asynq"
@@ -111,4 +114,31 @@ func (c *Consumer) handleProcurementRetryPending(_ context.Context, _ *asynq.Tas
 		return nil
 	}
 	return c.ProcurementOrderService.RetryPendingSubmissions()
+}
+
+// handleBackupProcurementSubmit runs the fail-closed Fang backup purchase worker.
+// Gate closed, inactive connection, or unverified delivery contracts all refuse purchase/delivery.
+func (c *Consumer) handleBackupProcurementSubmit(ctx context.Context, task *asynq.Task) error {
+	if c == nil || task == nil || c.SiteConnectionService == nil || gormdb.DB == nil {
+		logger.Debugw("worker_backup_procurement_submit_skip_nil")
+		return nil
+	}
+	var payload queue.BackupProcurementSubmitPayload
+	if err := json.Unmarshal(task.Payload(), &payload); err != nil || payload.ClaimID == 0 {
+		logger.Warnw("worker_backup_procurement_submit_invalid_payload")
+		return nil
+	}
+	store := &backupgormstore.ReceiptStore{
+		DB: gormdb.DB,
+		Controller: &backupgormstore.Controller{
+			DB:      gormdb.DB,
+			Decrypt: c.SiteConnectionService.DecryptSecret,
+			Policy:  backupgormstore.StructuralPolicy,
+		},
+	}
+	if err := (backupservice.Worker{Store: store}).Run(ctx, payload.ClaimID); err != nil {
+		logger.Warnw("worker_backup_procurement_submit_failed", "claim_id", payload.ClaimID, "error", err)
+		return err
+	}
+	return nil
 }

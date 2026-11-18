@@ -196,6 +196,9 @@ func (s *ReadOnlyBindingStore) GetReadOnlyBinding(id uint) (*mappingdomain.ReadO
 	return &row, nil
 }
 func (s *ReadOnlyBindingStore) StoreReadOnlyQuote(row *mappingdomain.ReadOnlyBinding) error {
+	if row == nil || row.QuotedAt.IsZero() {
+		return mappingcontract.ErrReadOnlyBindingInvalid
+	}
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		var old mappingdomain.ReadOnlyBinding
 		err := tx.Where("connection_id = ? AND (upstream_product_id = ? OR local_sku_id = ?)", row.ConnectionID, row.UpstreamProductID, row.LocalSKUID).First(&old).Error
@@ -210,7 +213,9 @@ func (s *ReadOnlyBindingStore) StoreReadOnlyQuote(row *mappingdomain.ReadOnlyBin
 		}
 		row.ID = old.ID
 		row.CreatedAt = old.CreatedAt
-		if err := tx.Model(&mappingdomain.ReadOnlyBinding{}).Where("id = ?", old.ID).Updates(map[string]interface{}{"upstream_price": row.UpstreamPrice, "currency": row.Currency, "upstream_stock": row.UpstreamStock, "quoted_at": row.QuotedAt}).Error; err != nil {
+		// The condition is evaluated by the database so a stale concurrent
+		// response cannot replace a quote from a later-started request.
+		if err := tx.Model(&mappingdomain.ReadOnlyBinding{}).Where("id = ? AND quoted_at < ?", old.ID, row.QuotedAt).Updates(map[string]interface{}{"upstream_price": row.UpstreamPrice, "currency": row.Currency, "upstream_stock": row.UpstreamStock, "quoted_at": row.QuotedAt}).Error; err != nil {
 			return err
 		}
 		return tx.First(row, old.ID).Error

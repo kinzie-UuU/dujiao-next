@@ -13,6 +13,7 @@ import (
 
 	productdomain "github.com/dujiao-next/internal/modules/catalog/product/domain"
 	orderdomain "github.com/dujiao-next/internal/modules/order/domain"
+	backupstate "github.com/dujiao-next/internal/modules/procurement/backupstate"
 	procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
 	resellerdomain "github.com/dujiao-next/internal/modules/reseller/domain"
 	settingsstore "github.com/dujiao-next/internal/modules/settings/infrastructure/gormstore"
@@ -449,6 +450,26 @@ func TestAutoMigrateOwnsResellerSchemaAndCrossModuleConstraints(t *testing.T) {
 	}
 	if db.Migrator().HasConstraint(&procurementdomain.Order{}, supersededProcurementOrderForeignKeyConstraint) {
 		t.Errorf("central AutoMigrate retained superseded procurement constraint %s", supersededProcurementOrderForeignKeyConstraint)
+	}
+}
+
+func TestBackupGateMigrationStartsClosedAndDoesNotOverwriteState(t *testing.T) {
+	db := setupRegistryMigrationTestDB(t)
+	if err := AutoMigrate(); err != nil {
+		t.Fatal(err)
+	}
+	var gate backupstate.Gate
+	if err := db.First(&gate, 1).Error; err != nil || gate.Enabled {
+		t.Fatalf("new gate not closed: %v", err)
+	}
+	if err := db.Model(&backupstate.Gate{}).Where("id = 1").Update("enabled", true).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := AutoMigrate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&gate, 1).Error; err != nil || !gate.Enabled {
+		t.Fatalf("existing gate overwritten: %v", err)
 	}
 }
 

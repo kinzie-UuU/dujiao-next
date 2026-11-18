@@ -10,6 +10,7 @@ import (
 
 	orderdomain "github.com/dujiao-next/internal/modules/order/domain"
 
+	backupstate "github.com/dujiao-next/internal/modules/procurement/backupstate"
 	procurementcontract "github.com/dujiao-next/internal/modules/procurement/contract"
 	procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
 	"github.com/dujiao-next/internal/modules/procurement/infrastructure/orderreader"
@@ -117,7 +118,11 @@ func (s *Store) updateStatus(id uint, fromStatus, toStatus string, updates map[s
 	}
 	// Map updates bypass GORM field serializers. Serialize the fulfillment material
 	// before it reaches the SQL driver (including refund callback updates).
-	if payload, ok := updates["upstream_payload"]; ok {
+	for _, field := range []string{"upstream_payload", "submission_fulfillment"} {
+		payload, ok := updates[field]
+		if !ok {
+			continue
+		}
 		updates = maps.Clone(updates)
 		codec, registered := schema.GetSerializer(securestoreserializer.StringSerializerName)
 		if !registered {
@@ -127,7 +132,7 @@ func (s *Store) updateStatus(id uint, fromStatus, toStatus string, updates map[s
 		if err != nil {
 			return false, err
 		}
-		updates["upstream_payload"] = value
+		updates[field] = value
 	}
 	updates["status"] = toStatus
 	result := s.db.Model(&procurementdomain.Order{}).
@@ -302,6 +307,16 @@ func (s *Store) BeginSubmission(id uint, fromStatus, requestSHA256, connectionSH
 			return err
 		}
 		if order.DeletedAt != nil || parent.DeletedAt != nil || (order.Status != constants.OrderStatusPaid && order.Status != constants.OrderStatusFulfilling) || (parent.Status != constants.OrderStatusPaid && parent.Status != constants.OrderStatusFulfilling && parent.Status != constants.OrderStatusPartiallyDelivered && parent.Status != constants.OrderStatusPartiallyRefunded) || order.RefundedAmount.IsPositive() {
+			return procurementcontract.ErrStatusInvalid
+		}
+		// The backup reservation shares the root-order lock. Once any backup
+		// claim exists, the primary may never submit for the same local order.
+		// A durable not_sent terminal record proves no POST was permitted.
+		var backupCount int64
+		if err := tx.Model(&backupstate.Claim{}).Where("local_order_id = ? AND NOT (state = ? AND submitted_at IS NULL AND request_sha256 = '' AND connection_sha256 = '')", proc.LocalOrderID, backupstate.NotSent).Count(&backupCount).Error; err != nil {
+			return err
+		}
+		if backupCount != 0 {
 			return procurementcontract.ErrStatusInvalid
 		}
 		result := tx.Model(&procurementdomain.Order{}).Where("id = ? AND deleted_at IS NULL AND status = ? AND submission_version = 1 AND submission_request_sha256 = '' AND submitted_at IS NULL", id, fromStatus).Updates(map[string]interface{}{"status": constants.ProcurementStatusSubmitted, "submission_request_sha256": requestSHA256, "submission_connection_sha256": connectionSHA256, "submitted_at": at, "next_retry_at": nil, "error_message": "Upstream submission in progress; reconcile if receipt is unavailable", "updated_at": at})

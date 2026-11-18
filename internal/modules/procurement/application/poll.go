@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -34,6 +35,10 @@ func (s *Service) PollUpstreamStatus(procurementOrderID uint) error {
 	// 只轮询 accepted 状态的订单
 	if procOrder.Status != "accepted" {
 		return nil
+	}
+
+	if handled, err := s.deliverSubmissionReceipt(procOrder); handled {
+		return err
 	}
 
 	connection, err := s.connections.Open(procOrder.ConnectionID)
@@ -131,6 +136,13 @@ func (s *Service) SyncAcceptedOrders() {
 			continue
 		}
 
+		if handled, err := s.deliverSubmissionReceipt(procOrder); handled {
+			if err != nil {
+				logger.Warnw("procurement_saved_delivery_failed", "procurement_order_id", procOrder.ID)
+			}
+			continue
+		}
+
 		connection, err := s.connections.Open(procOrder.ConnectionID)
 		if err != nil || connection == nil {
 			continue
@@ -212,4 +224,17 @@ func mapProcurementUpstreamStatus(status string) string {
 	default:
 		return normalized
 	}
+}
+
+// deliverSubmissionReceipt never contacts the supplier. A process restart or
+// failed local transaction can safely resume delivery from the encrypted receipt.
+func (s *Service) deliverSubmissionReceipt(order *procurementdomain.Order) (bool, error) {
+	if order.SubmissionFulfillment == "" {
+		return false, nil
+	}
+	var fulfillment procurementcontract.Fulfillment
+	if err := json.Unmarshal([]byte(order.SubmissionFulfillment), &fulfillment); err != nil || strings.TrimSpace(fulfillment.Payload) == "" {
+		return true, fmt.Errorf("saved supplier delivery receipt is invalid")
+	}
+	return true, s.HandleUpstreamCallback(order.ID, "delivered", &fulfillment)
 }
