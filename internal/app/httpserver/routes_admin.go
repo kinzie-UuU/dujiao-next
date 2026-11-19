@@ -192,6 +192,7 @@ func registerAdminRoutes(
 	// 采购单管理
 	procurementtransport.RegisterAdminRoutes(authorized, adminProcurementHandler)
 	if c.QueueClient != nil && c.SiteConnectionService != nil && gormdb.DB != nil {
+		c.PaymentService.SetBackupPaidTrigger(&backupgormstore.PaidTrigger{DB: gormdb.DB, Queue: c.QueueClient})
 		backuphttp.RegisterAdminRoutes(authorized, backuphttp.NewHandler(
 			&backupgormstore.PlusTrigger{DB: gormdb.DB, Queue: c.QueueClient},
 			&backupgormstore.GateAdmin{DB: gormdb.DB},

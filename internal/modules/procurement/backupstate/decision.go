@@ -21,7 +21,8 @@ const (
 type PrimaryEvidence string
 
 const (
-	// NoPrimary is used for the manually fulfilled Plus product only.
+	// NoPrimary means the SKU has no primary upstream attempt by design
+	// (paid Fang Fang auto-buy for Muse/Plus pins, or admin Plus trigger).
 	NoPrimary PrimaryEvidence = "no_primary"
 	// NeverSent is a durable, verified assertion, not an absence of a receipt.
 	NeverSent PrimaryEvidence = "never_sent"
@@ -83,11 +84,18 @@ func Evaluate(s Snapshot) Decision {
 		if s.Trigger != Automatic {
 			return RejectTrigger
 		}
-		if s.PrimaryEvidence != NeverSent && s.PrimaryEvidence != NoPurchaseConfirmed {
+		if s.PrimaryEvidence != NeverSent && s.PrimaryEvidence != NoPurchaseConfirmed && s.PrimaryEvidence != NoPrimary {
 			return RejectPrimary
 		}
 	case Plus:
-		if s.Trigger != Manual || !s.AdminAuthorized {
+		switch s.Trigger {
+		case Automatic:
+			// Paid auto-buy for the pinned Gmail/Plus SKU; no admin required.
+		case Manual:
+			if !s.AdminAuthorized {
+				return RejectTrigger
+			}
+		default:
 			return RejectTrigger
 		}
 		if s.PrimaryEvidence != NoPrimary {

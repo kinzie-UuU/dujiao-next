@@ -162,14 +162,20 @@ func (s *Service) BindReadOnlySupplier(ctx context.Context, input ReadOnlyBindin
 	if s.readOnlyBindings == nil || input.ConnectionID == 0 || input.LocalProductID == 0 || input.LocalSKUID == 0 {
 		return nil, mappingcontract.ErrReadOnlyBindingInvalid
 	}
-	// Only the reviewed ready-made accounts may be associated. In particular the
-	// Muse invitation/CDK product is not equivalent to the 31B account.
+	// Only the reviewed Fang Fang ready-made account pins may be associated.
+	// Keep local IDs/slugs aligned with backupstate catalog pins.
 	slug, nativeID := "", ""
 	switch input.UpstreamProductID {
 	case 1:
-		slug, nativeID = "upstream-1-22-1793713309179", "6aeedc6cadf360530f5faf80"
+		if input.LocalProductID != 50 || input.LocalSKUID != 85 {
+			return nil, mappingcontract.ErrReadOnlyBindingInvalid
+		}
+		slug, nativeID = "muse-31b-first-login", "6aeedc6cadf360530f5faf80"
 	case 2:
-		slug, nativeID = "gpt-plus-account-preorder", "6a4b4d7d1827db4ca39bb8be"
+		if input.LocalProductID != 51 || input.LocalSKUID != 86 {
+			return nil, mappingcontract.ErrReadOnlyBindingInvalid
+		}
+		slug, nativeID = "gmail-aged-2010-2022", "6a4b4d7d1827db4ca39bb8be"
 	default:
 		return nil, mappingcontract.ErrReadOnlyBindingInvalid
 	}

@@ -28,7 +28,13 @@ func ClaimPlus(db *gorm.DB, orderID, adminID uint) (*backupstate.Claim, error) {
 	return claim(db, claimInput{orderID: orderID, product: backupstate.Plus, trigger: backupstate.Manual, productID: backupstate.LocalPlusProductID, skuID: backupstate.LocalPlusSKUID, adminID: adminID})
 }
 
-// ClaimMuse creates a durable Muse backup claim after primary never-sent evidence.
+// ClaimPlusAutomatic creates a durable Plus backup claim after payment confirmation.
+func ClaimPlusAutomatic(db *gorm.DB, orderID uint) (*backupstate.Claim, error) {
+	return claim(db, claimInput{orderID: orderID, product: backupstate.Plus, trigger: backupstate.Automatic, productID: backupstate.LocalPlusProductID, skuID: backupstate.LocalPlusSKUID})
+}
+
+// ClaimMuse creates a durable Muse backup claim for paid auto-buy (no primary)
+// or after verified primary never-sent / no-purchase evidence.
 func ClaimMuse(db *gorm.DB, orderID uint) (*backupstate.Claim, error) {
 	return claim(db, claimInput{orderID: orderID, product: backupstate.Muse, trigger: backupstate.Automatic, productID: backupstate.LocalMuseProductID, skuID: backupstate.LocalMuseSKUID})
 }

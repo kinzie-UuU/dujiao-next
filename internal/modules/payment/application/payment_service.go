@@ -62,6 +62,7 @@ type PaymentService struct {
 	affiliateSvc            AffiliatePaymentLifecycle
 	notificationSvc         notificationcontract.NotificationEnqueuer
 	procurementSvc          ProcurementCreator
+	backupPaidTrigger       BackupPaidTrigger
 	downstreamCallbackSvc   DownstreamCallbackEnqueuer
 	memberLevelSvc          MemberLevelProgressor
 	paymentProviderRegistry paymentcontract.GatewayRegistry
@@ -75,6 +76,11 @@ type MemberLevelProgressor interface {
 
 type ProcurementCreator interface {
 	CreateForOrder(orderID uint) error
+}
+
+// BackupPaidTrigger claims Fang Fang backup procurement after payment confirmation.
+type BackupPaidTrigger interface {
+	OnOrderPaid(orderID uint) error
 }
 
 // DownstreamCallbackEnqueuer 是支付与交付上下文触发下游回调所需的最小端口。
@@ -94,6 +100,11 @@ type resellerAccountingTransactions interface {
 // SetProcurementService 设置采购单服务（解决循环依赖）
 func (s *PaymentService) SetProcurementService(svc ProcurementCreator) {
 	s.procurementSvc = svc
+}
+
+// SetBackupPaidTrigger 设置 Fang Fang 确认收款后的自动采买触发器。
+func (s *PaymentService) SetBackupPaidTrigger(trigger BackupPaidTrigger) {
+	s.backupPaidTrigger = trigger
 }
 
 // SetDownstreamCallbackService 设置下游回调服务（解决循环依赖）

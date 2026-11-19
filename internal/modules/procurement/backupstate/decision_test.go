@@ -11,6 +11,7 @@ func TestMuseRequiresVerifiedNeverAttemptedPrimary(t *testing.T) {
 	}{
 		{"verified never sent", func(*Snapshot) {}, AllowClaim},
 		{"verified no purchase", func(s *Snapshot) { s.PrimaryEvidence = NoPurchaseConfirmed }, AllowClaim},
+		{"no primary pin", func(s *Snapshot) { s.PrimaryEvidence = NoPrimary }, AllowClaim},
 		{"unknown legacy evidence", func(s *Snapshot) { s.PrimaryEvidence = "" }, RejectPrimary},
 		{"submitted despite claim of no purchase", func(s *Snapshot) { s.PrimaryEvidence = NoPurchaseConfirmed; s.PrimaryAttempted = true }, RejectPrimary},
 		{"uncertain despite claim of no purchase", func(s *Snapshot) { s.PrimaryEvidence = NoPurchaseConfirmed; s.PrimaryUncertain = true }, RejectPrimary},
@@ -36,7 +37,6 @@ func TestPlusRequiresAuthorizedManualTrigger(t *testing.T) {
 		t.Fatalf("manual trigger: %s", got)
 	}
 	for name, edit := range map[string]func(*Snapshot){
-		"automatic":    func(s *Snapshot) { s.Trigger = Automatic },
 		"unauthorized": func(s *Snapshot) { s.AdminAuthorized = false },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -50,6 +50,17 @@ func TestPlusRequiresAuthorizedManualTrigger(t *testing.T) {
 	base.PrimaryEvidence = NeverSent
 	if got := Evaluate(base); got != RejectPrimary {
 		t.Fatalf("unexpected primary: %s", got)
+	}
+}
+
+func TestPlusAllowsPaidAutomaticWithoutAdmin(t *testing.T) {
+	base := Snapshot{Product: Plus, Trigger: Automatic, Paid: true, PrimaryEvidence: NoPrimary, ExistingBackup: NoBackup}
+	if got := Evaluate(base); got != AllowClaim {
+		t.Fatalf("automatic plus: %s", got)
+	}
+	base.PrimaryEvidence = NeverSent
+	if got := Evaluate(base); got != RejectPrimary {
+		t.Fatalf("automatic plus unexpected primary: %s", got)
 	}
 }
 

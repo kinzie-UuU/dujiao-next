@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	orderdomain "github.com/dujiao-next/internal/modules/order/domain"
 	backupstate "github.com/dujiao-next/internal/modules/procurement/backupstate"
 	claimstore "github.com/dujiao-next/internal/modules/procurement/backupstate/infrastructure/gormstore"
 	"github.com/dujiao-next/internal/queue"
@@ -30,6 +31,47 @@ func (t *PlusTrigger) TriggerPlusBackup(_ context.Context, orderID, adminID uint
 	if t == nil || t.DB == nil || t.Queue == nil || orderID == 0 || adminID == 0 {
 		return 0, errTriggerUnavailable
 	}
+	return t.claimSnapshotEnqueue(orderID, backupstate.Plus, adminID)
+}
+
+// PaidTrigger claims a paid Muse/Plus pin order after payment confirmation,
+// persists the immutable snapshot, then enqueues the bound worker.
+type PaidTrigger struct {
+	DB    *gorm.DB
+	Queue Enqueuer
+	Now   func() time.Time
+}
+
+func (t *PaidTrigger) OnOrderPaid(orderID uint) error {
+	if t == nil || t.DB == nil || t.Queue == nil || orderID == 0 {
+		return errTriggerUnavailable
+	}
+	var items []orderdomain.OrderItem
+	if err := t.DB.Where("order_id = ? AND deleted_at IS NULL", orderID).Find(&items).Error; err != nil {
+		return errTriggerUnavailable
+	}
+	if len(items) != 1 {
+		return nil
+	}
+	item := items[0]
+	var product backupstate.Product
+	switch {
+	case item.ProductID == backupstate.LocalMuseProductID && item.SKUID == backupstate.LocalMuseSKUID:
+		product = backupstate.Muse
+	case item.ProductID == backupstate.LocalPlusProductID && item.SKUID == backupstate.LocalPlusSKUID:
+		product = backupstate.Plus
+	default:
+		return nil
+	}
+	_, err := t.claimSnapshotEnqueue(orderID, product, 0)
+	return err
+}
+
+func (t *PaidTrigger) claimSnapshotEnqueue(orderID uint, product backupstate.Product, adminID uint) (uint, error) {
+	return (&PlusTrigger{DB: t.DB, Queue: t.Queue, Now: t.Now}).claimSnapshotEnqueue(orderID, product, adminID)
+}
+
+func (t *PlusTrigger) claimSnapshotEnqueue(orderID uint, product backupstate.Product, adminID uint) (uint, error) {
 	now := time.Now()
 	if t.Now != nil {
 		now = t.Now()
@@ -37,7 +79,7 @@ func (t *PlusTrigger) TriggerPlusBackup(_ context.Context, orderID, adminID uint
 	var claimID uint
 	err := t.DB.Transaction(func(tx *gorm.DB) error {
 		var existing backupstate.Claim
-		findErr := tx.Where("local_order_id = ? AND product = ?", orderID, backupstate.Plus).First(&existing).Error
+		findErr := tx.Where("local_order_id = ? AND product = ?", orderID, product).First(&existing).Error
 		if findErr == nil {
 			if existing.State != backupstate.Claimed || existing.SubmittedAt != nil || existing.RequestSHA256 != "" {
 				return errTriggerUnavailable
@@ -53,7 +95,20 @@ func (t *PlusTrigger) TriggerPlusBackup(_ context.Context, orderID, adminID uint
 		if !errors.Is(findErr, gorm.ErrRecordNotFound) {
 			return errTriggerUnavailable
 		}
-		claim, err := claimstore.ClaimPlus(tx, orderID, adminID)
+		var claim *backupstate.Claim
+		var err error
+		switch product {
+		case backupstate.Muse:
+			claim, err = claimstore.ClaimMuse(tx, orderID)
+		case backupstate.Plus:
+			if adminID != 0 {
+				claim, err = claimstore.ClaimPlus(tx, orderID, adminID)
+			} else {
+				claim, err = claimstore.ClaimPlusAutomatic(tx, orderID)
+			}
+		default:
+			return errTriggerUnavailable
+		}
 		if err != nil || claim == nil || claim.ID == 0 {
 			return errTriggerUnavailable
 		}
@@ -69,7 +124,7 @@ func (t *PlusTrigger) TriggerPlusBackup(_ context.Context, orderID, adminID uint
 		return 0, errTriggerUnavailable
 	}
 	if err := t.Queue.EnqueueBackupProcurementSubmit(queue.BackupProcurementSubmitPayload{ClaimID: claimID}); err != nil {
-		// Claim+snapshot remain durable; a later TriggerPlus re-enqueues.
+		// Claim+snapshot remain durable; a later trigger re-enqueues.
 		return 0, errTriggerUnavailable
 	}
 	return claimID, nil

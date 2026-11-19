@@ -117,6 +117,34 @@ func TestManualPlusRequiresAdministrator(t *testing.T) {
 	}
 }
 
+func TestPaidPinsAllowNoPrimaryAutomaticClaim(t *testing.T) {
+	db := claimDB(t)
+	order := orderdomain.Order{OrderNo: "muse-paid", Status: "paid", Currency: "CNY"}
+	if err := db.Create(&order).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&orderdomain.OrderItem{OrderID: order.ID, ProductID: backupstate.LocalMuseProductID, SKUID: backupstate.LocalMuseSKUID, Quantity: 1, FulfillmentType: "manual", TitleJSON: map[string]interface{}{"zh-CN": "test"}}).Error; err != nil {
+		t.Fatal(err)
+	}
+	got, err := ClaimMuse(db, order.ID)
+	if err != nil || got == nil || got.PrimaryOrderID != 0 || got.State != backupstate.Claimed {
+		t.Fatalf("muse no-primary claim=%v err=%v", got, err)
+	}
+
+	db = claimDB(t)
+	order = orderdomain.Order{OrderNo: "plus-paid", Status: "paid", Currency: "CNY"}
+	if err := db.Create(&order).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&orderdomain.OrderItem{OrderID: order.ID, ProductID: backupstate.LocalPlusProductID, SKUID: backupstate.LocalPlusSKUID, Quantity: 1, FulfillmentType: "manual", TitleJSON: map[string]interface{}{"zh-CN": "test"}}).Error; err != nil {
+		t.Fatal(err)
+	}
+	got, err = ClaimPlusAutomatic(db, order.ID)
+	if err != nil || got == nil || got.AdminID != 0 || got.State != backupstate.Claimed {
+		t.Fatalf("plus automatic claim=%v err=%v", got, err)
+	}
+}
+
 func TestConcurrentClaimsHaveOneWinner(t *testing.T) {
 	db := claimDB(t)
 	in := seedClaim(t, db, backupstate.Plus)

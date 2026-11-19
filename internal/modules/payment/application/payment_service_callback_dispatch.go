@@ -15,6 +15,7 @@ import (
 	"github.com/dujiao-next/internal/constants"
 	notificationformat "github.com/dujiao-next/internal/modules/notification/application/format"
 	notificationcontract "github.com/dujiao-next/internal/modules/notification/contract"
+	backupstate "github.com/dujiao-next/internal/modules/procurement/backupstate"
 	procurementcontract "github.com/dujiao-next/internal/modules/procurement/contract"
 	"go.uber.org/zap"
 )
@@ -70,7 +71,11 @@ func (s *PaymentService) enqueueOrderPaidAsync(order *orderdomain.Order, payment
 	if len(order.Children) > 0 {
 		for _, child := range order.Children {
 			if (child.Status == constants.OrderStatusPaid || child.Status == constants.OrderStatusFulfilling) && hasManualFulfillmentItems(&child) {
-				s.enqueueManualFulfillmentPendingAsync(&child, order, log)
+				if isFangFangBackupPinOrder(&child) {
+					s.enqueueBackupPaidAsync(&child, log)
+				} else {
+					s.enqueueManualFulfillmentPendingAsync(&child, order, log)
+				}
 			}
 			if shouldAutoFulfill(&child) {
 				if err := s.queue.EnqueueOrderAutoFulfill(child.ID); err != nil {
@@ -90,7 +95,11 @@ func (s *PaymentService) enqueueOrderPaidAsync(order *orderdomain.Order, payment
 		return
 	}
 	if (order.Status == constants.OrderStatusPaid || order.Status == constants.OrderStatusFulfilling) && hasManualFulfillmentItems(order) {
-		s.enqueueManualFulfillmentPendingAsync(order, nil, log)
+		if isFangFangBackupPinOrder(order) {
+			s.enqueueBackupPaidAsync(order, log)
+		} else {
+			s.enqueueManualFulfillmentPendingAsync(order, nil, log)
+		}
 	}
 	if shouldAutoFulfill(order) {
 		if err := s.queue.EnqueueOrderAutoFulfill(order.ID); err != nil {
@@ -120,6 +129,29 @@ func (s *PaymentService) enqueueProcurementAsync(order *orderdomain.Order, log *
 				"error", err,
 			)
 		}
+	}
+}
+
+func isFangFangBackupPinOrder(order *orderdomain.Order) bool {
+	if order == nil || len(order.Items) != 1 {
+		return false
+	}
+	item := order.Items[0]
+	return (item.ProductID == backupstate.LocalMuseProductID && item.SKUID == backupstate.LocalMuseSKUID) ||
+		(item.ProductID == backupstate.LocalPlusProductID && item.SKUID == backupstate.LocalPlusSKUID)
+}
+
+// enqueueBackupPaidAsync claims Fang Fang backup procurement after payment confirmation.
+func (s *PaymentService) enqueueBackupPaidAsync(order *orderdomain.Order, log *zap.SugaredLogger) {
+	if s.backupPaidTrigger == nil || order == nil {
+		return
+	}
+	if err := s.backupPaidTrigger.OnOrderPaid(order.ID); err != nil {
+		log.Warnw("payment_enqueue_backup_paid_failed",
+			"order_id", order.ID,
+			"order_no", order.OrderNo,
+			"error", err,
+		)
 	}
 }
 

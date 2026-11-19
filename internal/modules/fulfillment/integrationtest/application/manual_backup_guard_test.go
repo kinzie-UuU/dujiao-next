@@ -22,7 +22,7 @@ func TestManualDeliveryBlockedByBackupClaim(t *testing.T) {
 	if err := db.Create(order).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&backupstate.Claim{LocalOrderID: order.ID, ProductID: 41, SKUID: 74, State: backupstate.Claimed, Product: backupstate.Plus, AdminID: 1}).Error; err != nil {
+	if err := db.Create(&backupstate.Claim{LocalOrderID: order.ID, ProductID: backupstate.LocalPlusProductID, SKUID: backupstate.LocalPlusSKUID, State: backupstate.Claimed, Product: backupstate.Plus, AdminID: 1}).Error; err != nil {
 		t.Fatal(err)
 	}
 	svc := fulfillmentapp.New(fulfillmentapp.Options{OrderStore: orderstore.New(db, "test-guest-credential-secret-with-32-bytes"), FulfillmentStore: fulfillmentstore.New(db)})

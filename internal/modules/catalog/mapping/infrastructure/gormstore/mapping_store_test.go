@@ -60,7 +60,7 @@ func TestReadOnlyQuoteDoesNotOverwriteNewerRequest(t *testing.T) {
 	store := NewReadOnlyBindingStore(db)
 	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
 	quote := func(at time.Time, price string, stock int) *mappingdomain.ReadOnlyBinding {
-		return &mappingdomain.ReadOnlyBinding{ConnectionID: 4, LocalProductID: 37, LocalSKUID: 70, UpstreamProductID: 1, UpstreamSKUCode: "supplier-item", Currency: "USD", UpstreamPrice: price, UpstreamStock: stock, QuotedAt: at}
+		return &mappingdomain.ReadOnlyBinding{ConnectionID: 4, LocalProductID: 50, LocalSKUID: 85, UpstreamProductID: 1, UpstreamSKUCode: "supplier-item", Currency: "USD", UpstreamPrice: price, UpstreamStock: stock, QuotedAt: at}
 	}
 	newer := quote(now, "1.50", 2)
 	if err := store.StoreReadOnlyQuote(newer); err != nil {
