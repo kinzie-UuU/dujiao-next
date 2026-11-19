@@ -12,8 +12,9 @@ import (
 
 var ErrReconcile = errors.New("backup purchase requires reconciliation")
 
-// ErrDeferred means the claim is still Claimed (e.g. gate closed) and the queue
-// may retry without contacting the supplier.
+// ErrDeferred means the claim is still safe to retry without contacting the
+// supplier again: either still Claimed (e.g. gate closed) or Submitted with a
+// durable receipt awaiting delivery-only completion.
 var ErrDeferred = errors.New("backup purchase deferred")
 
 // ErrDenied is a terminal pre-submit refusal; the consumer must not retry it.
@@ -33,6 +34,9 @@ type Store interface {
 	// Begin atomically fences the order and transitions claimed to submitted.
 	// A false result acknowledges a duplicate without contacting the supplier.
 	Begin(ctx context.Context, claimID uint) (Attempt, bool, error)
+	// ResumeSubmitted returns a delivery-only attempt when the claim is already
+	// Submitted and a durable encrypted receipt exists. It never purchases.
+	ResumeSubmitted(ctx context.Context, claimID uint) (Attempt, bool, error)
 	SaveReceipt(ctx context.Context, attempt Attempt, httpStatus int, raw []byte) error
 	MarkUncertain(ctx context.Context, attempt Attempt) error
 	// DeliverSaved must read the encrypted receipt and atomically create delivery,
@@ -51,6 +55,16 @@ type Worker struct {
 func (w Worker) Run(ctx context.Context, claimID uint) error {
 	if w.Store == nil || claimID == 0 {
 		return errors.New("invalid backup worker")
+	}
+	if attempt, resume, err := w.Store.ResumeSubmitted(ctx, claimID); err != nil {
+		// Submitted claims must not fall through to Begin on transient read errors.
+		return ErrDeferred
+	} else if resume {
+		if err := w.Store.DeliverSaved(ctx, attempt); err != nil {
+			// Receipt stays durable; queue may retry delivery without PurchaseOnce.
+			return ErrDeferred
+		}
+		return nil
 	}
 	attempt, started, err := w.Store.Begin(ctx, claimID)
 	if err != nil {
@@ -80,8 +94,8 @@ func (w Worker) Run(ctx context.Context, claimID uint) error {
 		return ErrReconcile
 	}
 	if err := w.Store.DeliverSaved(ctx, attempt); err != nil {
-		// Durable response remains available to a delivery-only recovery task.
-		return ErrReconcile
+		// Durable response remains; next Run resumes delivery only.
+		return ErrDeferred
 	}
 	return nil
 }

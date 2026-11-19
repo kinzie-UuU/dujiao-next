@@ -11,6 +11,7 @@ import (
 
 type mockStore struct {
 	started              bool
+	resume               bool
 	saveErr, deliveryErr error
 	result               *upstream.FangfangPurchaseResult
 	purchaseErr          error
@@ -27,12 +28,20 @@ func (s *mockStore) Begin(context.Context, uint) (Attempt, bool, error) {
 	return attempt, s.started, nil
 }
 
+func (s *mockStore) ResumeSubmitted(context.Context, uint) (Attempt, bool, error) {
+	s.calls = append(s.calls, "resume")
+	if !s.resume {
+		return Attempt{}, false, nil
+	}
+	return Attempt{ClaimID: 1, AttemptHash: "fixed"}, true, nil
+}
+
 func TestWorkerRejectsMissingBoundClient(t *testing.T) {
 	s := &mockStore{started: true, unbound: true}
 	if err := (Worker{Store: s}).Run(context.Background(), 1); !errors.Is(err, ErrReconcile) {
 		t.Fatal("unbound attempt did not fail closed")
 	}
-	if !reflect.DeepEqual(s.calls, []string{"begin", "uncertain"}) {
+	if !reflect.DeepEqual(s.calls, []string{"resume", "begin", "uncertain"}) {
 		t.Fatalf("unexpected calls: %v", s.calls)
 	}
 }
@@ -69,12 +78,12 @@ func TestWorkerDurableReceiptBeforeDelivery(t *testing.T) {
 		want                              []string
 		wantErr                           bool
 	}{
-		{"success", true, true, nil, nil, nil, []string{"begin", "purchase", "save", "deliver"}, false},
-		{"duplicate", false, true, nil, nil, nil, []string{"begin"}, false},
-		{"supplier uncertainty with receipt", true, true, errors.New("secret"), nil, nil, []string{"begin", "purchase", "save", "uncertain"}, true},
-		{"lost response", true, false, errors.New("secret"), nil, nil, []string{"begin", "purchase", "uncertain"}, true},
-		{"receipt failure", true, true, nil, errors.New("secret"), nil, []string{"begin", "purchase", "save", "uncertain"}, true},
-		{"delivery failure", true, true, nil, nil, errors.New("secret"), []string{"begin", "purchase", "save", "deliver"}, true},
+		{"success", true, true, nil, nil, nil, []string{"resume", "begin", "purchase", "save", "deliver"}, false},
+		{"duplicate", false, true, nil, nil, nil, []string{"resume", "begin"}, false},
+		{"supplier uncertainty with receipt", true, true, errors.New("secret"), nil, nil, []string{"resume", "begin", "purchase", "save", "uncertain"}, true},
+		{"lost response", true, false, errors.New("secret"), nil, nil, []string{"resume", "begin", "purchase", "uncertain"}, true},
+		{"receipt failure", true, true, nil, errors.New("secret"), nil, []string{"resume", "begin", "purchase", "save", "uncertain"}, true},
+		{"delivery failure", true, true, nil, nil, errors.New("secret"), []string{"resume", "begin", "purchase", "save", "deliver"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &mockStore{started: tc.started, saveErr: tc.saveErr, deliveryErr: tc.deliveryErr, purchaseErr: tc.purchaseErr}
@@ -87,6 +96,43 @@ func TestWorkerDurableReceiptBeforeDelivery(t *testing.T) {
 			if (err != nil) != tc.wantErr || !reflect.DeepEqual(s.calls, tc.want) {
 				t.Fatalf("got calls %v, error %v", s.calls, err)
 			}
+			if tc.name == "delivery failure" && !errors.Is(err, ErrDeferred) {
+				t.Fatalf("delivery failure should defer retry, got %v", err)
+			}
 		})
+	}
+}
+
+func TestWorkerResumesDeliveryWithoutPurchase(t *testing.T) {
+	s := &mockStore{resume: true}
+	if err := (Worker{Store: s}).Run(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(s.calls, []string{"resume", "deliver"}) {
+		t.Fatalf("unexpected calls: %v", s.calls)
+	}
+	s = &mockStore{resume: true, deliveryErr: errors.New("temporary")}
+	if err := (Worker{Store: s}).Run(context.Background(), 1); !errors.Is(err, ErrDeferred) {
+		t.Fatalf("expected deferred delivery retry, got %v", err)
+	}
+}
+
+type resumeErrorStore struct {
+	mockStore
+	resumeErr error
+}
+
+func (s *resumeErrorStore) ResumeSubmitted(context.Context, uint) (Attempt, bool, error) {
+	s.calls = append(s.calls, "resume")
+	return Attempt{}, false, s.resumeErr
+}
+
+func TestWorkerDefersWhenResumeSubmittedErrors(t *testing.T) {
+	s := &resumeErrorStore{resumeErr: errors.New("db blip")}
+	if err := (Worker{Store: s}).Run(context.Background(), 1); !errors.Is(err, ErrDeferred) {
+		t.Fatalf("expected deferred, got %v", err)
+	}
+	if !reflect.DeepEqual(s.calls, []string{"resume"}) {
+		t.Fatalf("must not fall through to Begin: %v", s.calls)
 	}
 }

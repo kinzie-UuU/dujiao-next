@@ -122,13 +122,13 @@ func (c *Consumer) handleProcurementRetryPending(_ context.Context, _ *asynq.Tas
 // Gate closed, inactive connection, or unverified delivery contracts all refuse purchase/delivery.
 func (c *Consumer) handleBackupProcurementSubmit(ctx context.Context, task *asynq.Task) error {
 	if c == nil || task == nil || c.SiteConnectionService == nil || gormdb.DB == nil {
-		logger.Debugw("worker_backup_procurement_submit_skip_nil")
-		return nil
+		logger.Warnw("worker_backup_procurement_submit_unavailable")
+		return errors.New("backup procurement worker unavailable")
 	}
 	var payload queue.BackupProcurementSubmitPayload
 	if err := json.Unmarshal(task.Payload(), &payload); err != nil || payload.ClaimID == 0 {
 		logger.Warnw("worker_backup_procurement_submit_invalid_payload")
-		return nil
+		return fmt.Errorf("backup procurement invalid payload: %w", asynq.SkipRetry)
 	}
 	store := &backupgormstore.ReceiptStore{
 		DB: gormdb.DB,
@@ -141,9 +141,10 @@ func (c *Consumer) handleBackupProcurementSubmit(ctx context.Context, task *asyn
 	if err := (backupservice.Worker{Store: store}).Run(ctx, payload.ClaimID); err != nil {
 		logger.Warnw("worker_backup_procurement_submit_failed", "claim_id", payload.ClaimID, "error", err)
 		if errors.Is(err, backupservice.ErrDeferred) {
+			// Gate closed (still Claimed) or delivery-only resume after a saved receipt.
 			return err
 		}
-		// After Begin submits (or permanently denies), never replay PurchaseOnce.
+		// Uncertain / denied / missing deps: never replay PurchaseOnce.
 		return fmt.Errorf("backup procurement terminal: %w", asynq.SkipRetry)
 	}
 	return nil

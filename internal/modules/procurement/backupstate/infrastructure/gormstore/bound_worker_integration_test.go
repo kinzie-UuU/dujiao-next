@@ -37,6 +37,28 @@ func (c syntheticController) Begin(ctx context.Context, id uint) (backupservice.
 	}
 	return attempt, started, err
 }
+func (c syntheticController) ResumeSubmitted(ctx context.Context, id uint) (backupservice.Attempt, bool, error) {
+	var claim backupstate.Claim
+	if err := c.db.WithContext(ctx).First(&claim, id).Error; err != nil {
+		return backupservice.Attempt{}, false, err
+	}
+	if claim.State != backupstate.Submitted {
+		return backupservice.Attempt{}, false, nil
+	}
+	if claim.RequestSHA256 == "" {
+		return backupservice.Attempt{}, false, errors.New("submitted backup claim missing attempt hash")
+	}
+	var count int64
+	if err := c.db.WithContext(ctx).Model(&receiptstore.PurchaseReceipt{}).
+		Where("owner_kind = ? AND owner_id = ? AND attempt_hash = ?", "backup_claim", claim.ID, claim.RequestSHA256).
+		Count(&count).Error; err != nil {
+		return backupservice.Attempt{}, false, err
+	}
+	if count == 0 {
+		return backupservice.Attempt{}, false, errors.New("submitted backup claim missing receipt")
+	}
+	return backupservice.Attempt{ClaimID: claim.ID, AttemptHash: claim.RequestSHA256}, true, nil
+}
 func (c syntheticController) MarkUncertain(ctx context.Context, attempt backupservice.Attempt) error {
 	return MarkUncertain(ctx, c.db, attempt.ClaimID, attempt.AttemptHash)
 }
@@ -89,8 +111,8 @@ func TestBoundWorkerPersistsReceiptAndNeverRepurchases(t *testing.T) {
 	if err := db.First(&receipt).Error; err != nil || strings.Contains(receipt.ResponseCiphertext, "synthetic-secret") || !securestoreserializer.IsEncryptedString(receipt.ResponseCiphertext) {
 		t.Fatal("encrypted receipt missing")
 	}
-	if err := worker.Run(context.Background(), claimRow.ID); err == nil || calls != 1 {
-		t.Fatal("replayed submitted purchase")
+	if err := worker.Run(context.Background(), claimRow.ID); !errors.Is(err, backupservice.ErrDeferred) || calls != 1 {
+		t.Fatalf("expected delivery-only deferred resume without repurchase: err=%v calls=%d", err, calls)
 	}
 	if err := CheckSavedDelivery(context.Background(), db, claimRow.ID, saved.RequestSHA256); !errors.Is(err, errDeliveryPolicy) {
 		t.Fatal("unverified delivery was not blocked")

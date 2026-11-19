@@ -53,7 +53,7 @@ func TestBackupProcurementQueueRejectsDisabledAndEnqueuesWithLimitedRetries(t *t
 	if err != nil || len(items) != 1 {
 		t.Fatalf("pending tasks=%d err=%v", len(items), err)
 	}
-	if items[0].Type != TaskBackupProcurementSubmit || items[0].MaxRetry != 10 || string(items[0].Payload) != `{"claim_id":42}` {
+	if items[0].Type != TaskBackupProcurementSubmit || items[0].MaxRetry != 30 || string(items[0].Payload) != `{"claim_id":42}` {
 		t.Fatalf("unexpected queued task: %+v", items[0])
 	}
 }

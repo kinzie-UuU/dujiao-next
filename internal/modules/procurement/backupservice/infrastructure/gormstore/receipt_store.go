@@ -3,9 +3,10 @@ package gormstore
 import (
 	"context"
 	"errors"
-	backupservice "github.com/dujiao-next/internal/modules/procurement/backupservice"
 	"regexp"
 
+	backupservice "github.com/dujiao-next/internal/modules/procurement/backupservice"
+	backupstate "github.com/dujiao-next/internal/modules/procurement/backupstate"
 	procurementstore "github.com/dujiao-next/internal/modules/procurement/receipts/infrastructure/gormstore"
 	"gorm.io/gorm"
 )
@@ -48,6 +49,37 @@ func (s *ReceiptStore) Begin(ctx context.Context, claimID uint) (backupservice.A
 		return backupservice.Attempt{}, false, errors.New("backup client unavailable")
 	}
 	return attempt, started, nil
+}
+
+func (s *ReceiptStore) ResumeSubmitted(ctx context.Context, claimID uint) (backupservice.Attempt, bool, error) {
+	if s == nil || s.DB == nil || claimID == 0 {
+		return backupservice.Attempt{}, false, errors.New("backup claim controller unavailable")
+	}
+	var claim backupstate.Claim
+	if err := s.DB.WithContext(ctx).First(&claim, claimID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return backupservice.Attempt{}, false, nil
+		}
+		return backupservice.Attempt{}, false, err
+	}
+	if claim.State != backupstate.Submitted {
+		return backupservice.Attempt{}, false, nil
+	}
+	if !validAttemptHash.MatchString(claim.RequestSHA256) {
+		// Submitted fence without a usable attempt hash must not fall through to Begin.
+		return backupservice.Attempt{}, false, errors.New("submitted backup claim missing attempt hash")
+	}
+	var count int64
+	if err := s.DB.WithContext(ctx).Model(&procurementstore.PurchaseReceipt{}).
+		Where("owner_kind = ? AND owner_id = ? AND attempt_hash = ?", "backup_claim", claim.ID, claim.RequestSHA256).
+		Count(&count).Error; err != nil {
+		return backupservice.Attempt{}, false, err
+	}
+	if count == 0 {
+		// Submitted before SaveReceipt; never repurchase via Begin.
+		return backupservice.Attempt{}, false, errors.New("submitted backup claim missing receipt")
+	}
+	return backupservice.Attempt{ClaimID: claim.ID, AttemptHash: claim.RequestSHA256}, true, nil
 }
 
 func (s *ReceiptStore) SaveReceipt(ctx context.Context, attempt backupservice.Attempt, httpStatus int, raw []byte) error {

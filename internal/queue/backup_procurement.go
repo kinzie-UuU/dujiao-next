@@ -31,8 +31,8 @@ func NewBackupProcurementSubmitTask(payload BackupProcurementSubmitPayload) (*as
 
 // EnqueueBackupProcurementSubmit reports disabled queues as failures so callers
 // can recover committed claims. A timeout does not prove the task was not
-// queued. Limited retries cover pre-submit deferrals (gate closed); after the
-// claim is Submitted the consumer skips further retries.
+// queued. Limited retries cover gate-closed deferrals and delivery-only resume
+// after a durable receipt is saved; PurchaseOnce is never replayed once Submitted.
 func (c *Client) EnqueueBackupProcurementSubmit(payload BackupProcurementSubmitPayload) error {
 	task, err := NewBackupProcurementSubmitTask(payload)
 	if err != nil {
@@ -43,7 +43,9 @@ func (c *Client) EnqueueBackupProcurementSubmit(payload BackupProcurementSubmitP
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_, err = c.client.EnqueueContext(ctx, task, asynq.Queue(c.defaultQueue), asynq.MaxRetry(10), asynq.Timeout(2*time.Minute))
+	// Delivery-only resume shares this task; keep retries generous for transient
+	// delivery/DB blips without ever replaying PurchaseOnce once Submitted.
+	_, err = c.client.EnqueueContext(ctx, task, asynq.Queue(c.defaultQueue), asynq.MaxRetry(30), asynq.Timeout(2*time.Minute))
 	if err != nil {
 		return errors.New("backup procurement enqueue failed")
 	}

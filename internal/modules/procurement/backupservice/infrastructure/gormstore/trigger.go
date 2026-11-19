@@ -124,8 +124,10 @@ func (t *PlusTrigger) claimSnapshotEnqueue(orderID uint, product backupstate.Pro
 		return 0, errTriggerUnavailable
 	}
 	if err := t.Queue.EnqueueBackupProcurementSubmit(queue.BackupProcurementSubmitPayload{ClaimID: claimID}); err != nil {
-		// Claim+snapshot remain durable; a later trigger re-enqueues.
-		return 0, errTriggerUnavailable
+		// Claim+snapshot remain durable; one immediate re-enqueue covers a blip.
+		if retryErr := t.Queue.EnqueueBackupProcurementSubmit(queue.BackupProcurementSubmitPayload{ClaimID: claimID}); retryErr != nil {
+			return claimID, errTriggerUnavailable
+		}
 	}
 	return claimID, nil
 }
