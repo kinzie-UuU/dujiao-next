@@ -35,7 +35,10 @@ func (s *ReceiptStore) Begin(ctx context.Context, claimID uint) (backupservice.A
 	}
 	attempt, started, err := s.Controller.Begin(ctx, claimID)
 	if err != nil {
-		return backupservice.Attempt{}, false, errors.New("backup claim begin failed")
+		if errors.Is(err, backupservice.ErrDeferred) {
+			return backupservice.Attempt{}, false, err
+		}
+		return backupservice.Attempt{}, false, backupservice.ErrDenied
 	}
 	if started && (attempt.ClaimID != claimID || !validAttemptHash.MatchString(attempt.AttemptHash)) {
 		return backupservice.Attempt{}, false, errors.New("invalid backup attempt")

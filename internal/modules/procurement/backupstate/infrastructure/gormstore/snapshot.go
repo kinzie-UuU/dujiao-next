@@ -59,9 +59,9 @@ func prepareSnapshot(db *gorm.DB, id uint, now time.Time) error {
 		expected, limit := "", ""
 		switch c.Product {
 		case backupstate.Muse:
-			expected, limit = "6aeedc6cadf360530f5faf80", "1.20"
+			expected, limit = backupstate.UpstreamMuseProductID, backupstate.MusePreflightMaxUSD
 		case backupstate.Plus:
-			expected, limit = "6a4b4d7d1827db4ca39bb8be", "7.00"
+			expected, limit = backupstate.UpstreamPlusProductID, backupstate.PlusPreflightMaxUSD
 		default:
 			return errors.New("snapshot unavailable")
 		}

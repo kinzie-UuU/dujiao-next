@@ -32,7 +32,7 @@ func TestDeliveryBindsSavedResponseButFailsClosedWithoutVerifiedContract(t *test
 	if err := transition(db, c.ID, backupstate.Claimed, backupstate.Submitted, h, h, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Model(&backupstate.Claim{}).Where("id = ?", c.ID).Update("snapshot_json", fmt.Sprintf(`{"version":1,"claim_id":%d,"upstream_product_id":"6a4b4d7d1827db4ca39bb8be","quantity":1}`, c.ID)).Error; err != nil {
+	if err := db.Model(&backupstate.Claim{}).Where("id = ?", c.ID).Update("snapshot_json", fmt.Sprintf(`{"version":1,"claim_id":%d,"upstream_product_id":%q,"quantity":1,"preflight_max_usd":%q}`, c.ID, backupstate.UpstreamPlusProductID, backupstate.PlusPreflightMaxUSD)).Error; err != nil {
 		t.Fatal(err)
 	}
 	raw := []byte(`{"success":true,"delivery":{"accounts":[{"user":"test","password":"secret"}]}}`)
@@ -72,7 +72,7 @@ func TestDeliveryCompletesVerifiedPlusContract(t *testing.T) {
 	if err := transition(db, c.ID, backupstate.Claimed, backupstate.Submitted, h, h, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Model(&backupstate.Claim{}).Where("id = ?", c.ID).Update("snapshot_json", fmt.Sprintf(`{"version":1,"claim_id":%d,"upstream_product_id":"6a4b4d7d1827db4ca39bb8be","quantity":1}`, c.ID)).Error; err != nil {
+	if err := db.Model(&backupstate.Claim{}).Where("id = ?", c.ID).Update("snapshot_json", fmt.Sprintf(`{"version":1,"claim_id":%d,"upstream_product_id":%q,"quantity":1,"preflight_max_usd":%q}`, c.ID, backupstate.UpstreamPlusProductID, backupstate.PlusPreflightMaxUSD)).Error; err != nil {
 		t.Fatal(err)
 	}
 	raw := []byte(`{"success":true,"order":{"orderCode":"ORDER2","status":"completed","productId":"6a4b4d7d1827db4ca39bb8be","productType":"account","quantity":1,"bonusQuantity":0,"finalQuantity":1},"payment":{"amount":"6.51","currency":"USD"},"delivery":{"accounts":[{"user":"plus@example.com","password":"secret-pass","otherInfo":"JBSWY3DPEHPK3PXP"}]}}`)

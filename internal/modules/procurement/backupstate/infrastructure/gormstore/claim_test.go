@@ -33,9 +33,9 @@ func seedClaim(t *testing.T, db *gorm.DB, product backupstate.Product) claimInpu
 	if err := db.Create(&order).Error; err != nil {
 		t.Fatal(err)
 	}
-	productID, skuID := uint(localMuseProductID), uint(localMuseSKUID)
+	productID, skuID := uint(backupstate.LocalMuseProductID), uint(backupstate.LocalMuseSKUID)
 	if product == backupstate.Plus {
-		productID, skuID = localPlusProductID, localPlusSKUID
+		productID, skuID = backupstate.LocalPlusProductID, backupstate.LocalPlusSKUID
 	}
 	item := orderdomain.OrderItem{OrderID: order.ID, ProductID: productID, SKUID: skuID, Quantity: 1, FulfillmentType: "upstream", TitleJSON: map[string]interface{}{"zh-CN": "test"}}
 	if err := db.Create(&item).Error; err != nil {

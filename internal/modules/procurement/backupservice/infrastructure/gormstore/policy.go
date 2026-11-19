@@ -30,11 +30,11 @@ func StructuralPolicy(tx *gorm.DB, claimID uint) error {
 	}
 	switch c.Product {
 	case backupstate.Muse:
-		if c.ProductID != 37 || c.SKUID != 70 || snap.LocalProductID != 37 || snap.LocalSKUID != 70 || snap.UpstreamProductID != "6aeedc6cadf360530f5faf80" {
+		if c.ProductID != backupstate.LocalMuseProductID || c.SKUID != backupstate.LocalMuseSKUID || snap.LocalProductID != backupstate.LocalMuseProductID || snap.LocalSKUID != backupstate.LocalMuseSKUID || snap.UpstreamProductID != backupstate.UpstreamMuseProductID {
 			return errors.New("backup purchase policy unavailable")
 		}
 	case backupstate.Plus:
-		if c.ProductID != 41 || c.SKUID != 74 || snap.LocalProductID != 41 || snap.LocalSKUID != 74 || snap.UpstreamProductID != "6a4b4d7d1827db4ca39bb8be" {
+		if c.ProductID != backupstate.LocalPlusProductID || c.SKUID != backupstate.LocalPlusSKUID || snap.LocalProductID != backupstate.LocalPlusProductID || snap.LocalSKUID != backupstate.LocalPlusSKUID || snap.UpstreamProductID != backupstate.UpstreamPlusProductID {
 			return errors.New("backup purchase policy unavailable")
 		}
 	default:

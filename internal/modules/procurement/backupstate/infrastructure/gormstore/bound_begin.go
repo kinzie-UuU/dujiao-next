@@ -25,6 +25,10 @@ import (
 
 var boundIdempotencyKey = regexp.MustCompile(`^[A-Za-z0-9_-]{8,128}$`)
 
+// ErrGateClosed means the durable claim is still Claimed and may be retried after
+// an administrator reopens the singleton purchase switch.
+var ErrGateClosed = errors.New("backup procurement gate closed")
+
 // BeginBound must be called only by a queue consumer after a trusted claim and
 // immutable snapshot have been prepared. The policy callback must validate the
 // live product binding, customer contract, price and FX under this same
@@ -43,8 +47,11 @@ func beginBound(ctx context.Context, db *gorm.DB, claimID uint, decrypt func(str
 	}
 	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		gate, err := lockGate(tx)
-		if err != nil || !gate.Enabled {
+		if err != nil {
 			return denied
+		}
+		if !gate.Enabled {
+			return ErrGateClosed
 		}
 		claim, root, order, err := lockClaimOrder(tx, claimID)
 		if err != nil || claim.State != backupstate.Claimed || claim.SubmittedAt != nil || claim.RequestSHA256 != "" || claim.ConnectionSHA256 != "" || root.DeletedAt != nil || order.DeletedAt != nil || root.RefundedAmount.IsPositive() || order.RefundedAmount.IsPositive() || (order.Status != constants.OrderStatusPaid && order.Status != constants.OrderStatusFulfilling) || (root.Status != constants.OrderStatusPaid && root.Status != constants.OrderStatusFulfilling && root.Status != constants.OrderStatusPartiallyDelivered && root.Status != constants.OrderStatusPartiallyRefunded) {
@@ -58,7 +65,7 @@ func beginBound(ctx context.Context, db *gorm.DB, claimID uint, decrypt func(str
 		if err != nil || !limit.IsPositive() || strings.TrimSpace(snap.PreflightMaxUSD) != snap.PreflightMaxUSD {
 			return denied
 		}
-		if (claim.Product == backupstate.Muse && snap.UpstreamProductID != "6aeedc6cadf360530f5faf80") || (claim.Product == backupstate.Plus && snap.UpstreamProductID != "6a4b4d7d1827db4ca39bb8be") || (claim.Product != backupstate.Muse && claim.Product != backupstate.Plus) {
+		if (claim.Product == backupstate.Muse && snap.UpstreamProductID != backupstate.UpstreamMuseProductID) || (claim.Product == backupstate.Plus && snap.UpstreamProductID != backupstate.UpstreamPlusProductID) || (claim.Product != backupstate.Muse && claim.Product != backupstate.Plus) {
 			return denied
 		}
 		if err := policy(tx, claim.ID); err != nil {
@@ -99,6 +106,9 @@ func beginBound(ctx context.Context, db *gorm.DB, claimID uint, decrypt func(str
 		return nil
 	})
 	if err != nil {
+		if errors.Is(err, ErrGateClosed) {
+			return backupservice.Attempt{}, false, ErrGateClosed
+		}
 		return backupservice.Attempt{}, false, denied
 	}
 	return attempt, true, nil

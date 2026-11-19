@@ -72,7 +72,7 @@ func deliverReceipt(db *gorm.DB, id uint, attemptHash string) error {
 			}
 			return nil
 		}
-		if c.State != backupstate.Submitted || c.SubmittedAt == nil || !sha256Hex(c.RequestSHA256) || !sha256Hex(c.ConnectionSHA256) || attemptHash != c.RequestSHA256 || root.DeletedAt != nil || order.DeletedAt != nil || root.RefundedAmount.IsPositive() || order.RefundedAmount.IsPositive() || (order.Status != constants.OrderStatusPaid && order.Status != constants.OrderStatusFulfilling) {
+		if c.State != backupstate.Submitted || c.SubmittedAt == nil || !sha256Hex(c.RequestSHA256) || !sha256Hex(c.ConnectionSHA256) || attemptHash != c.RequestSHA256 || root.DeletedAt != nil || order.DeletedAt != nil || root.RefundedAmount.IsPositive() || order.RefundedAmount.IsPositive() || (order.Status != constants.OrderStatusPaid && order.Status != constants.OrderStatusFulfilling) || (root.Status != constants.OrderStatusPaid && root.Status != constants.OrderStatusFulfilling && root.Status != constants.OrderStatusPartiallyDelivered && root.Status != constants.OrderStatusPartiallyRefunded) {
 			return errReceipt
 		}
 		raw, status, err := receiptstore.ReadPurchaseReceipt(context.Background(), tx, "backup_claim", c.ID, attemptHash)
@@ -83,7 +83,7 @@ func deliverReceipt(db *gorm.DB, id uint, attemptHash string) error {
 		if json.Unmarshal([]byte(c.SnapshotJSON), &snap) != nil || snap.Version != 1 || snap.ClaimID != c.ID || snap.Quantity != 1 {
 			return errDeliveryPolicy
 		}
-		payload, err := parseVerifiedDeliveryPayload(c.Product, snap.UpstreamProductID, snap.Quantity, raw)
+		payload, err := parseVerifiedDeliveryPayload(c.Product, snap.UpstreamProductID, snap.Quantity, snap.PreflightMaxUSD, raw)
 		if err != nil {
 			return errDeliveryPolicy
 		}

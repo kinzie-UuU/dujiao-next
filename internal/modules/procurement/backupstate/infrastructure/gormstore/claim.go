@@ -14,13 +14,6 @@ import (
 
 var errDenied = errors.New("backup procurement claim denied")
 
-const (
-	localMuseProductID = 37
-	localMuseSKUID     = 70
-	localPlusProductID = 41
-	localPlusSKUID     = 74
-)
-
 type claimInput struct {
 	orderID   uint
 	product   backupstate.Product
@@ -32,12 +25,12 @@ type claimInput struct {
 
 // ClaimPlus creates a durable Plus backup claim for an authorized admin trigger.
 func ClaimPlus(db *gorm.DB, orderID, adminID uint) (*backupstate.Claim, error) {
-	return claim(db, claimInput{orderID: orderID, product: backupstate.Plus, trigger: backupstate.Manual, productID: localPlusProductID, skuID: localPlusSKUID, adminID: adminID})
+	return claim(db, claimInput{orderID: orderID, product: backupstate.Plus, trigger: backupstate.Manual, productID: backupstate.LocalPlusProductID, skuID: backupstate.LocalPlusSKUID, adminID: adminID})
 }
 
 // ClaimMuse creates a durable Muse backup claim after primary never-sent evidence.
 func ClaimMuse(db *gorm.DB, orderID uint) (*backupstate.Claim, error) {
-	return claim(db, claimInput{orderID: orderID, product: backupstate.Muse, trigger: backupstate.Automatic, productID: localMuseProductID, skuID: localMuseSKUID})
+	return claim(db, claimInput{orderID: orderID, product: backupstate.Muse, trigger: backupstate.Automatic, productID: backupstate.LocalMuseProductID, skuID: backupstate.LocalMuseSKUID})
 }
 
 // claim is the durable fence used by exported claim helpers.

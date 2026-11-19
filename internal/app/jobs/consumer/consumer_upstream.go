@@ -3,6 +3,8 @@ package consumer
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 
 	"github.com/dujiao-next/internal/logger"
 	backupservice "github.com/dujiao-next/internal/modules/procurement/backupservice"
@@ -138,7 +140,11 @@ func (c *Consumer) handleBackupProcurementSubmit(ctx context.Context, task *asyn
 	}
 	if err := (backupservice.Worker{Store: store}).Run(ctx, payload.ClaimID); err != nil {
 		logger.Warnw("worker_backup_procurement_submit_failed", "claim_id", payload.ClaimID, "error", err)
-		return err
+		if errors.Is(err, backupservice.ErrDeferred) {
+			return err
+		}
+		// After Begin submits (or permanently denies), never replay PurchaseOnce.
+		return fmt.Errorf("backup procurement terminal: %w", asynq.SkipRetry)
 	}
 	return nil
 }

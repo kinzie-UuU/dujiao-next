@@ -12,6 +12,13 @@ import (
 
 var ErrReconcile = errors.New("backup purchase requires reconciliation")
 
+// ErrDeferred means the claim is still Claimed (e.g. gate closed) and the queue
+// may retry without contacting the supplier.
+var ErrDeferred = errors.New("backup purchase deferred")
+
+// ErrDenied is a terminal pre-submit refusal; the consumer must not retry it.
+var ErrDenied = errors.New("backup purchase denied")
+
 // Attempt contains a durable request snapshot; it must not contain a buyer key.
 type Attempt struct {
 	ClaimID     uint
@@ -47,7 +54,10 @@ func (w Worker) Run(ctx context.Context, claimID uint) error {
 	}
 	attempt, started, err := w.Store.Begin(ctx, claimID)
 	if err != nil {
-		return err
+		if errors.Is(err, ErrDeferred) {
+			return ErrDeferred
+		}
+		return ErrDenied
 	}
 	if !started {
 		return nil
@@ -71,7 +81,7 @@ func (w Worker) Run(ctx context.Context, claimID uint) error {
 	}
 	if err := w.Store.DeliverSaved(ctx, attempt); err != nil {
 		// Durable response remains available to a delivery-only recovery task.
-		return errors.New("saved backup delivery requires recovery")
+		return ErrReconcile
 	}
 	return nil
 }

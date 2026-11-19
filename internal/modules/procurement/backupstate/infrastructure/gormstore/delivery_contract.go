@@ -16,8 +16,12 @@ var totpSecret = regexp.MustCompile(`^[A-Z2-7]{16,64}$`)
 // parseVerifiedDeliveryPayload checks the immutable purchase body against the
 // customer-facing Muse/Plus delivery contract and returns the shop payload.
 // Unknown or incomplete account fields fail closed.
-func parseVerifiedDeliveryPayload(product backupstate.Product, upstreamProductID string, quantity int, raw []byte) (string, error) {
-	if quantity != 1 || len(raw) == 0 {
+func parseVerifiedDeliveryPayload(product backupstate.Product, upstreamProductID string, quantity int, preflightMaxUSD string, raw []byte) (string, error) {
+	if quantity != 1 || len(raw) == 0 || strings.TrimSpace(preflightMaxUSD) != preflightMaxUSD || preflightMaxUSD == "" {
+		return "", errDeliveryPolicy
+	}
+	limit, err := decimal.NewFromString(preflightMaxUSD)
+	if err != nil || !limit.IsPositive() {
 		return "", errDeliveryPolicy
 	}
 	var out struct {
@@ -45,7 +49,8 @@ func parseVerifiedDeliveryPayload(product backupstate.Product, upstreamProductID
 		len(out.Delivery.Accounts) != out.Order.Final || out.Payment.Currency != "USD" || strings.TrimSpace(out.Order.Code) == "" {
 		return "", errDeliveryPolicy
 	}
-	if _, err := decimal.NewFromString(string(out.Payment.Amount)); err != nil {
+	amount, err := decimal.NewFromString(string(out.Payment.Amount))
+	if err != nil || amount.GreaterThan(limit) {
 		return "", errDeliveryPolicy
 	}
 	lines := make([]string, 0, len(out.Delivery.Accounts))

@@ -35,7 +35,14 @@ func (c *Controller) Begin(ctx context.Context, claimID uint) (backupservice.Att
 	if now.IsZero() {
 		return backupservice.Attempt{}, false, errSnapshotUnavailable
 	}
-	return claimstore.BeginBound(ctx, c.DB, claimID, c.Decrypt, c.Policy, now)
+	attempt, started, err := claimstore.BeginBound(ctx, c.DB, claimID, c.Decrypt, c.Policy, now)
+	if err != nil {
+		if errors.Is(err, claimstore.ErrGateClosed) {
+			return backupservice.Attempt{}, false, backupservice.ErrDeferred
+		}
+		return backupservice.Attempt{}, false, backupservice.ErrDenied
+	}
+	return attempt, started, nil
 }
 
 func (c *Controller) MarkUncertain(ctx context.Context, attempt backupservice.Attempt) error {

@@ -25,7 +25,7 @@ func TestBackupProcurementTaskContainsOnlyClaimID(t *testing.T) {
 	}
 }
 
-func TestBackupProcurementQueueRejectsDisabledAndEnqueuesWithoutRetries(t *testing.T) {
+func TestBackupProcurementQueueRejectsDisabledAndEnqueuesWithLimitedRetries(t *testing.T) {
 	var disabled *Client
 	if err := disabled.EnqueueBackupProcurementSubmit(BackupProcurementSubmitPayload{ClaimID: 1}); err == nil {
 		t.Fatal("disabled queue accepted backup claim")
@@ -53,7 +53,7 @@ func TestBackupProcurementQueueRejectsDisabledAndEnqueuesWithoutRetries(t *testi
 	if err != nil || len(items) != 1 {
 		t.Fatalf("pending tasks=%d err=%v", len(items), err)
 	}
-	if items[0].Type != TaskBackupProcurementSubmit || items[0].MaxRetry != 0 || string(items[0].Payload) != `{"claim_id":42}` {
+	if items[0].Type != TaskBackupProcurementSubmit || items[0].MaxRetry != 10 || string(items[0].Payload) != `{"claim_id":42}` {
 		t.Fatalf("unexpected queued task: %+v", items[0])
 	}
 }
