@@ -268,8 +268,8 @@ func (h *Handler) GetOrder(c *gin.Context) {
 		resp["fulfillment"] = gin.H{
 			"type":          sourceFulfillment.Type,
 			"status":        sourceFulfillment.Status,
-			"payload":       sourceFulfillment.Payload,
-			"delivery_data": sourceFulfillment.LogisticsJSON,
+			"payload":       sourceFulfillment.CustomerPayload(),
+			"delivery_data": sourceFulfillment.CustomerDeliveryData(),
 			"delivered_at":  sourceFulfillment.DeliveredAt,
 		}
 	}

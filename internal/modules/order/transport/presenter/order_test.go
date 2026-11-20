@@ -238,3 +238,42 @@ func TestNewOrderDetailNilSafety(t *testing.T) {
 		t.Error("expected nil items")
 	}
 }
+
+func TestCustomerDetailFiltersHistoricalManualAndUpstreamReferences(t *testing.T) {
+	for _, typ := range []string{"manual", "upstream"} {
+		f := &fulfillmentdomain.Fulfillment{Type: typ, Payload: "account----password\n上游订单：PRIVATE", LogisticsJSON: jsonmap.JSON{"upstream_order_id": "PRIVATE", "account_id": "KEEP"}}
+		o := &orderdomain.Order{Fulfillment: f, Children: []orderdomain.Order{{Fulfillment: f}}}
+		for _, detail := range []OrderDetail{NewOrderDetail(o), NewOrderDetailTruncated(o)} {
+			b, _ := json.Marshal(detail)
+			if strings.Contains(string(b), "PRIVATE") {
+				t.Fatalf("private reference leaked: %s", b)
+			}
+			if detail.Fulfillment.Payload != "account----password" || detail.Children[0].Fulfillment.DeliveryData["account_id"] != "KEEP" {
+				t.Fatal("customer delivery lost")
+			}
+		}
+		if !strings.Contains(f.Payload, "PRIVATE") {
+			t.Fatal("stored receipt changed")
+		}
+	}
+}
+
+func TestCustomerDeliveryOmitsUpstreamReference(t *testing.T) {
+	f := &fulfillmentdomain.Fulfillment{Type: "manual", Payload: "credential\n上游订单：PRIVATE"}
+	for _, o := range []*orderdomain.Order{{Fulfillment: f}, {Children: []orderdomain.Order{{OrderNo: "DJLOCAL", Fulfillment: f}}}} {
+		got := CustomerFulfillmentPayload(o)
+		if strings.Contains(got, "PRIVATE") || !strings.Contains(got, "credential") {
+			t.Fatalf("customer output=%q", got)
+		}
+	}
+	if !strings.Contains(f.Payload, "PRIVATE") {
+		t.Fatal("stored receipt mutated")
+	}
+}
+
+func TestCustomerDownloadFallsBackFromInternalOnlyParent(t *testing.T) {
+	o := &orderdomain.Order{Fulfillment: &fulfillmentdomain.Fulfillment{Payload: "上游订单：PRIVATE"}, Children: []orderdomain.Order{{Fulfillment: &fulfillmentdomain.Fulfillment{Payload: "credential"}}}}
+	if got := CustomerFulfillmentPayload(o); got != "credential" {
+		t.Fatalf("download=%q", got)
+	}
+}

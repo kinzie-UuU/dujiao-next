@@ -221,9 +221,9 @@ func newFulfillmentResp(f *fulfillmentdomain.Fulfillment) FulfillmentResp {
 	return FulfillmentResp{
 		Type:             typ,
 		Status:           f.Status,
-		Payload:          f.Payload,
+		Payload:          f.CustomerPayload(),
 		PayloadLineCount: f.PayloadLineCount,
-		DeliveryData:     f.LogisticsJSON,
+		DeliveryData:     f.CustomerDeliveryData(),
 		DeliveredAt:      f.DeliveredAt,
 	}
 	// 注意：OrderID、DeliveredBy、CreatedAt、UpdatedAt 不在 DTO 中
@@ -238,4 +238,19 @@ func (fr *FulfillmentResp) truncatePayload(maxLines int) {
 	if len(lines) > maxLines {
 		fr.Payload = strings.Join(lines[:maxLines], "\n")
 	}
+}
+
+// CustomerFulfillmentPayload returns full customer download content, preserving
+// the receipt for administrative access and falling back to child deliveries.
+func CustomerFulfillmentPayload(order *orderdomain.Order) string {
+	if payload := order.Fulfillment.CustomerPayload(); strings.TrimSpace(payload) != "" {
+		return payload
+	}
+	var parts []string
+	for _, child := range order.Children {
+		if payload := child.Fulfillment.CustomerPayload(); strings.TrimSpace(payload) != "" {
+			parts = append(parts, payload)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
