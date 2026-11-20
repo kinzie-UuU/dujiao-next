@@ -47,3 +47,17 @@ func TestGmailDeliveryRecoveryOrTOTP(t *testing.T) {
 		}
 	}
 }
+
+func TestGmailPackedReceiptDelivery(t *testing.T) {
+	raw := []byte(`{"success":true,"order":{"orderCode":"ORDER_GMAIL_PACKED","status":"completed","productId":"6ae37dc5ed8e0e40e4de28b7","productType":"account","quantity":1,"bonusQuantity":0,"finalQuantity":1},"payment":{"amount":1.49,"currency":"USD"},"delivery":{"accounts":[{"user":"aged.account@gmail.com|syntheticPass|recovery@example.net|JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP\t\t\t\t\t\tThành phố Huế","password":"","verifyEmail":null,"otherInfo":null,"expiryText":null}]}}`)
+	got, err := parseVerifiedDeliveryPayload(backupstate.Gmail, backupstate.UpstreamGmailProductID, 1, backupstate.GmailPreflightMaxUSD, raw)
+	if err != nil || got != "aged.account@gmail.com----syntheticPass----recovery@example.net----JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP Thành phố Huế" {
+		t.Fatalf("packed Gmail delivery failed: %v", err)
+	}
+	if _, err := parseVerifiedDeliveryPayload(backupstate.Plus, backupstate.UpstreamGmailProductID, 1, backupstate.GmailPreflightMaxUSD, raw); err == nil {
+		t.Fatal("packed format changed Plus contract")
+	}
+	if _, err := parseVerifiedDeliveryPayload(backupstate.Muse, backupstate.UpstreamGmailProductID, 1, backupstate.GmailPreflightMaxUSD, raw); err == nil {
+		t.Fatal("packed format changed Muse contract")
+	}
+}

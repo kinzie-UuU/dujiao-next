@@ -141,6 +141,14 @@ func (c *FangfangPurchaseClient) PurchaseOnce(ctx context.Context, in FangfangPu
 	}
 	seen := map[string]bool{}
 	for _, account := range out.Delivery.Accounts {
+		if in.ProductID == FangfangGmailProductID {
+			_, key, err := FormatFangfangGmailAccount(account)
+			if err != nil || seen[key] {
+				return result, uncertain
+			}
+			seen[key] = true
+			continue
+		}
 		var a struct {
 			User     string `json:"user"`
 			Password string `json:"password"`

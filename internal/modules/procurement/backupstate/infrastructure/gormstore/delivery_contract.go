@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	backupstate "github.com/dujiao-next/internal/modules/procurement/backupstate"
+	"github.com/dujiao-next/internal/upstream"
 	"github.com/shopspring/decimal"
 )
 
@@ -70,6 +71,13 @@ func parseVerifiedDeliveryPayload(product backupstate.Product, upstreamProductID
 }
 
 func formatAccountLine(product backupstate.Product, raw json.RawMessage) (string, string, error) {
+	if product == backupstate.Gmail {
+		line, key, err := upstream.FormatFangfangGmailAccount(raw)
+		if err != nil {
+			return "", "", errDeliveryPolicy
+		}
+		return line, key, nil
+	}
 	var a struct {
 		User        string `json:"user"`
 		Password    string `json:"password"`
@@ -104,33 +112,6 @@ func formatAccountLine(product backupstate.Product, raw json.RawMessage) (string
 		}
 		// Muse customer contract: email | mailbox access link.
 		return user + "----" + link, key, nil
-	case backupstate.Gmail:
-		// Supplier contract: Gmail, password, recovery email and/or a TOTP secret.
-		if !strings.HasSuffix(strings.ToLower(user), "@gmail.com") || strings.ContainsAny(password+verify+other+expiry, "\r\n") {
-			return "", "", errDeliveryPolicy
-		}
-		twoFA := strings.ToUpper(strings.ReplaceAll(other, " ", ""))
-		if twoFA != "" && !totpSecret.MatchString(twoFA) {
-			return "", "", errDeliveryPolicy
-		}
-		if verify != "" {
-			if address, err := mail.ParseAddress(verify); err != nil || address.Address != verify {
-				// The supplier can use verifyEmail for the optional 2FA field.
-				candidate := strings.ToUpper(strings.ReplaceAll(verify, " ", ""))
-				if !totpSecret.MatchString(candidate) || (twoFA != "" && twoFA != candidate) {
-					return "", "", errDeliveryPolicy
-				}
-				twoFA, verify = candidate, ""
-			}
-		}
-		if verify == "" && twoFA == "" {
-			return "", "", errDeliveryPolicy
-		}
-		line := user + "----" + password + "----" + verify
-		if twoFA != "" {
-			line += "----" + twoFA
-		}
-		return line, key, nil
 	case backupstate.Plus:
 		twoFA := other
 		if twoFA == "" || !totpSecret.MatchString(strings.ToUpper(strings.ReplaceAll(twoFA, " ", ""))) {
