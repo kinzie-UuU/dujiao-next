@@ -43,7 +43,7 @@ func TestSnapshotUsesPersistedBindingWithoutStoringSecret(t *testing.T) {
 	if err := json.Unmarshal([]byte(stored.SnapshotJSON), &snap); err != nil {
 		t.Fatal(err)
 	}
-	if snap.ConnectionID != 4 || snap.UpstreamProductID != b.UpstreamSKUCode || snap.Quantity != 1 || snap.PreflightMaxUSD != "7.00" || snap.IdempotencyKey == "" || !sha256Hex(snap.ConnectionSHA256) {
+	if snap.ConnectionID != 4 || snap.UpstreamProductID != b.UpstreamSKUCode || snap.Quantity != 1 || snap.PreflightMaxUSD != "5.29" || snap.IdempotencyKey == "" || !sha256Hex(snap.ConnectionSHA256) {
 		t.Fatalf("invalid snapshot %+v", snap)
 	}
 	if err := prepareSnapshot(db, c.ID, time.Now()); err == nil {

@@ -1059,66 +1059,68 @@ type gmailPaidRecorder struct{ ids []uint }
 func (r *gmailPaidRecorder) OnOrderPaid(id uint) error { r.ids = append(r.ids, id); return nil }
 
 func TestGmailDispatchAfterManualConfirmationAndCallback(t *testing.T) {
-	for _, manual := range []bool{true, false} {
-		for _, child := range []bool{true, false} {
-			t.Run(fmt.Sprintf("manual_%t_child_%t", manual, child), func(t *testing.T) {
-				svc, db := setupPaymentServiceWalletTest(t)
-				queue := &receiptQueue{}
-				recorder := &gmailPaidRecorder{}
-				notices := &manualPurchaseNotices{}
-				svc.queue, svc.notificationSvc = queue, notices
-				svc.SetBackupPaidTrigger(recorder)
-				root := createUnderpaidOrder(t, db, "GMAIL-PAID-ROOT", 0, 38)
-				target := root
-				if child {
-					target = createUnderpaidOrder(t, db, "GMAIL-PAID-CHILD", 0, 38)
-					if err := db.Model(target).Update("parent_id", root.ID).Error; err != nil {
+	for _, pin := range [][2]uint{{51, 86}, {41, 74}} {
+		for _, manual := range []bool{true, false} {
+			for _, child := range []bool{true, false} {
+				t.Run(fmt.Sprintf("product_%d_manual_%t_child_%t", pin[0], manual, child), func(t *testing.T) {
+					svc, db := setupPaymentServiceWalletTest(t)
+					queue := &receiptQueue{}
+					recorder := &gmailPaidRecorder{}
+					notices := &manualPurchaseNotices{}
+					svc.queue, svc.notificationSvc = queue, notices
+					svc.SetBackupPaidTrigger(recorder)
+					root := createUnderpaidOrder(t, db, "GMAIL-PAID-ROOT", 0, 38)
+					target := root
+					if child {
+						target = createUnderpaidOrder(t, db, "GMAIL-PAID-CHILD", 0, 38)
+						if err := db.Model(target).Update("parent_id", root.ID).Error; err != nil {
+							t.Fatal(err)
+						}
+					}
+					if err := db.Create(&orderdomain.OrderItem{OrderID: target.ID, ProductID: pin[0], SKUID: pin[1], Quantity: 1, TitleJSON: jsonmap.JSON{"zh-CN": "Gmail老号"}, FulfillmentType: constants.FulfillmentTypeManual}).Error; err != nil {
 						t.Fatal(err)
 					}
-				}
-				if err := db.Create(&orderdomain.OrderItem{OrderID: target.ID, ProductID: 51, SKUID: 86, Quantity: 1, TitleJSON: jsonmap.JSON{"zh-CN": "Gmail老号"}, FulfillmentType: constants.FulfillmentTypeManual}).Error; err != nil {
-					t.Fatal(err)
-				}
-				payment := paymentdomain.Payment{OrderID: root.ID, ChannelID: 1, ProviderType: manualQRProviderType, ChannelType: "wechat", Amount: money.FromDecimal(decimal.NewFromInt(38)), Currency: "CNY", Status: constants.PaymentStatusPending}
-				if !manual {
-					payment.ProviderType = "mock"
-				}
-				if err := db.Create(&payment).Error; err != nil {
-					t.Fatal(err)
-				}
-				if manual {
-					proof := receiptEvidence(t, db, payment.ID)
-					for i := 0; i < 2; i++ {
-						if _, err := svc.ConfirmManualPayment(payment.ID, proof); err != nil {
-							t.Fatal(err)
+					payment := paymentdomain.Payment{OrderID: root.ID, ChannelID: 1, ProviderType: manualQRProviderType, ChannelType: "wechat", Amount: money.FromDecimal(decimal.NewFromInt(38)), Currency: "CNY", Status: constants.PaymentStatusPending}
+					if !manual {
+						payment.ProviderType = "mock"
+					}
+					if err := db.Create(&payment).Error; err != nil {
+						t.Fatal(err)
+					}
+					if manual {
+						proof := receiptEvidence(t, db, payment.ID)
+						for i := 0; i < 2; i++ {
+							if _, err := svc.ConfirmManualPayment(payment.ID, proof); err != nil {
+								t.Fatal(err)
+							}
+						}
+					} else {
+						input := PaymentCallbackInput{PaymentID: payment.ID, OrderNo: root.OrderNo, ChannelID: 1, Status: constants.PaymentStatusSuccess, Amount: payment.Amount, Currency: "CNY", ProviderRef: "synthetic-gmail-callback"}
+						for i := 0; i < 2; i++ {
+							if _, err := svc.HandleCallback(input); err != nil {
+								t.Fatal(err)
+							}
 						}
 					}
-				} else {
-					input := PaymentCallbackInput{PaymentID: payment.ID, OrderNo: root.OrderNo, ChannelID: 1, Status: constants.PaymentStatusSuccess, Amount: payment.Amount, Currency: "CNY", ProviderRef: "synthetic-gmail-callback"}
-					for i := 0; i < 2; i++ {
-						if _, err := svc.HandleCallback(input); err != nil {
-							t.Fatal(err)
+					if len(recorder.ids) != 1 || recorder.ids[0] != target.ID {
+						t.Fatalf("Gmail trigger missing or duplicate: %+v", recorder.ids)
+					}
+					for _, event := range notices.events {
+						if event.EventType == constants.NotificationEventManualFulfillmentPending {
+							t.Fatal("Gmail fell back to manual fulfillment")
 						}
 					}
-				}
-				if len(recorder.ids) != 1 || recorder.ids[0] != target.ID {
-					t.Fatalf("Gmail trigger missing or duplicate: %+v", recorder.ids)
-				}
-				for _, event := range notices.events {
-					if event.EventType == constants.NotificationEventManualFulfillmentPending {
-						t.Fatal("Gmail fell back to manual fulfillment")
-					}
-				}
-			})
+				})
+			}
 		}
 	}
 }
 
-func TestGmailDispatchPinsDoNotIncludeLegacyPlus(t *testing.T) {
+func TestBackupDispatchPinsExcludeCrossProductSKUs(t *testing.T) {
 	for _, tc := range []struct {
 		product, sku uint
 		want         bool
-	}{{51, 86, true}, {50, 85, true}, {41, 74, false}, {51, 74, false}, {41, 86, false}} {
+	}{{51, 86, true}, {50, 85, true}, {41, 74, true}, {51, 74, false}, {41, 86, false}} {
 		got := isFangFangBackupPinOrder(&orderdomain.Order{Items: []orderdomain.OrderItem{{ProductID: tc.product, SKUID: tc.sku}}})
 		if got != tc.want {
 			t.Fatalf("pin %d/%d=%v", tc.product, tc.sku, got)

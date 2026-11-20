@@ -33,7 +33,7 @@ func (t *PlusTrigger) TriggerPlusBackup(_ context.Context, orderID, adminID uint
 	return 0, errTriggerUnavailable
 }
 
-// PaidTrigger claims a paid Muse/Gmail pin order after payment confirmation,
+// PaidTrigger claims a paid Muse/Gmail/Plus pin order after payment confirmation,
 // persists the immutable snapshot, then enqueues the bound worker.
 type PaidTrigger struct {
 	DB    *gorm.DB
@@ -59,6 +59,15 @@ func (t *PaidTrigger) OnOrderPaid(orderID uint) error {
 		product = backupstate.Muse
 	case item.ProductID == backupstate.LocalGmailProductID && item.SKUID == backupstate.LocalGmailSKUID:
 		product = backupstate.Gmail
+	case item.ProductID == backupstate.LocalPlusProductID && item.SKUID == backupstate.LocalPlusSKUID:
+		eligible, err := plusPaymentAfterBinding(t.DB, orderID)
+		if err != nil {
+			return errTriggerUnavailable
+		}
+		if !eligible {
+			return nil
+		}
+		product = backupstate.Plus
 	default:
 		return nil
 	}
@@ -77,6 +86,12 @@ func (t *PlusTrigger) claimSnapshotEnqueue(orderID uint, product backupstate.Pro
 	}
 	var claimID uint
 	err := t.DB.Transaction(func(tx *gorm.DB) error {
+		if product == backupstate.Plus {
+			eligible, err := plusPaymentAfterBinding(tx, orderID)
+			if err != nil || !eligible {
+				return errTriggerUnavailable
+			}
+		}
 		var existing backupstate.Claim
 		findErr := tx.Where("local_order_id = ? AND product = ?", orderID, product).First(&existing).Error
 		if findErr == nil {

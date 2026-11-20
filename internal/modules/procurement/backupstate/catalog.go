@@ -7,7 +7,7 @@ const (
 	LocalMuseSKUID      = 85
 	LocalGmailProductID = 51
 	LocalGmailSKUID     = 86
-	// Historical Plus identities are retained only for receipt interpretation.
+	// Plus accounts have their own local pin; old Gmail misbindings remain invalid.
 	LocalPlusProductID = 41
 	LocalPlusSKUID     = 74
 
@@ -17,7 +17,7 @@ const (
 
 	GmailPreflightMaxUSD = "1.49"
 	MusePreflightMaxUSD  = "1.20"
-	PlusPreflightMaxUSD  = "7.00"
+	PlusPreflightMaxUSD  = "5.29"
 
 	LocalMuseSlug = "muse-31b-first-login"
 	LocalPlusSlug = "gpt-plus-account-preorder"

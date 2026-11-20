@@ -1,6 +1,7 @@
 package gormstore
 
 import (
+	"encoding/json"
 	"testing"
 
 	backupstate "github.com/dujiao-next/internal/modules/procurement/backupstate"
@@ -12,15 +13,15 @@ func TestParseVerifiedDeliveryPayloadMuseAndPlus(t *testing.T) {
 	if err != nil || got != "muse@example.com----https://mail.example/access/abc" {
 		t.Fatalf("muse: %q %v", got, err)
 	}
-	plus := []byte(`{"success":true,"order":{"orderCode":"ORDER2","status":"completed","productId":"6a4b4d7d1827db4ca39bb8be","productType":"account","quantity":1,"bonusQuantity":0,"finalQuantity":1},"payment":{"amount":"6.51","currency":"USD"},"delivery":{"accounts":[{"user":"plus@example.com","password":"secret-pass","otherInfo":"JBSWY3DPEHPK3PXP","expiryText":"2026-12-18"}]}}`)
+	plus := []byte(`{"success":true,"order":{"orderCode":"ORDER2","status":"completed","productId":"6a4b4d7d1827db4ca39bb8be","productType":"account","quantity":1,"bonusQuantity":0,"finalQuantity":1},"payment":{"amount":"5.29","currency":"USD"},"delivery":{"accounts":[{"user":"plus@example.com","password":"secret-pass","otherInfo":"JBSWY3DPEHPK3PXP","expiryText":"2026-12-18"}]}}`)
 	got, err = parseVerifiedDeliveryPayload(backupstate.Plus, backupstate.UpstreamPlusProductID, 1, backupstate.PlusPreflightMaxUSD, plus)
 	if err != nil || got != "plus@example.com----secret-pass----JBSWY3DPEHPK3PXP----2026-12-18" {
 		t.Fatalf("plus: %q %v", got, err)
 	}
-	if _, err := parseVerifiedDeliveryPayload(backupstate.Plus, backupstate.UpstreamPlusProductID, 1, backupstate.PlusPreflightMaxUSD, []byte(`{"success":true,"order":{"orderCode":"ORDER3","status":"completed","productId":"6a4b4d7d1827db4ca39bb8be","productType":"account","quantity":1,"bonusQuantity":0,"finalQuantity":1},"payment":{"amount":"6.51","currency":"USD"},"delivery":{"accounts":[{"user":"plus@example.com","password":"secret-pass"}]}}`)); err == nil {
+	if _, err := parseVerifiedDeliveryPayload(backupstate.Plus, backupstate.UpstreamPlusProductID, 1, backupstate.PlusPreflightMaxUSD, []byte(`{"success":true,"order":{"orderCode":"ORDER3","status":"completed","productId":"6a4b4d7d1827db4ca39bb8be","productType":"account","quantity":1,"bonusQuantity":0,"finalQuantity":1},"payment":{"amount":"5.29","currency":"USD"},"delivery":{"accounts":[{"user":"plus@example.com","password":"secret-pass"}]}}`)); err == nil {
 		t.Fatal("plus without 2FA accepted")
 	}
-	over := []byte(`{"success":true,"order":{"orderCode":"ORDER4","status":"completed","productId":"6a4b4d7d1827db4ca39bb8be","productType":"account","quantity":1,"bonusQuantity":0,"finalQuantity":1},"payment":{"amount":"7.01","currency":"USD"},"delivery":{"accounts":[{"user":"plus@example.com","password":"secret-pass","otherInfo":"JBSWY3DPEHPK3PXP"}]}}`)
+	over := []byte(`{"success":true,"order":{"orderCode":"ORDER4","status":"completed","productId":"6a4b4d7d1827db4ca39bb8be","productType":"account","quantity":1,"bonusQuantity":0,"finalQuantity":1},"payment":{"amount":"5.30","currency":"USD"},"delivery":{"accounts":[{"user":"plus@example.com","password":"secret-pass","otherInfo":"JBSWY3DPEHPK3PXP"}]}}`)
 	if _, err := parseVerifiedDeliveryPayload(backupstate.Plus, backupstate.UpstreamPlusProductID, 1, backupstate.PlusPreflightMaxUSD, over); err == nil {
 		t.Fatal("over-cap delivery accepted")
 	}
@@ -59,5 +60,21 @@ func TestGmailPackedReceiptDelivery(t *testing.T) {
 	}
 	if _, err := parseVerifiedDeliveryPayload(backupstate.Muse, backupstate.UpstreamGmailProductID, 1, backupstate.GmailPreflightMaxUSD, raw); err == nil {
 		t.Fatal("packed format changed Muse contract")
+	}
+}
+
+func TestPlusDeliveryUsesSupplierVerifyEmailTOTP(t *testing.T) {
+	for _, tc := range []struct {
+		verify, other string
+		ok            bool
+	}{{"JBSWY3DPEHPK3PXP", "", true}, {"recovery@example.com", "", false}, {"invalid", "", false}, {"JBSWY3DPEHPK3PXP", "invalid", false}} {
+		raw, _ := json.Marshal(map[string]interface{}{"user": "plus@example.com", "password": "secret-pass", "verifyEmail": tc.verify, "otherInfo": tc.other, "expiryText": nil})
+		got, _, err := formatAccountLine(backupstate.Plus, raw)
+		if (err == nil) != tc.ok {
+			t.Fatalf("validation=%v expected=%v", err, tc.ok)
+		}
+		if tc.ok && got != "plus@example.com----secret-pass----JBSWY3DPEHPK3PXP" {
+			t.Fatal("Plus delivery incomplete")
+		}
 	}
 }

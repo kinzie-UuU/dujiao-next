@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 
+	mappingdomain "github.com/dujiao-next/internal/modules/catalog/mapping/domain"
+	orderdomain "github.com/dujiao-next/internal/modules/order/domain"
 	backupstate "github.com/dujiao-next/internal/modules/procurement/backupstate"
 	"gorm.io/gorm"
 )
@@ -38,10 +40,33 @@ func StructuralPolicy(tx *gorm.DB, claimID uint) error {
 			return errors.New("backup purchase policy unavailable")
 		}
 	case backupstate.Plus:
-		// Historical Plus receipts remain readable, but no new Plus submission is authorized.
-		return errors.New("backup purchase policy unavailable")
+		if c.ProductID != backupstate.LocalPlusProductID || c.SKUID != backupstate.LocalPlusSKUID || snap.LocalProductID != backupstate.LocalPlusProductID || snap.LocalSKUID != backupstate.LocalPlusSKUID || snap.UpstreamProductID != backupstate.UpstreamPlusProductID {
+			return errors.New("backup purchase policy unavailable")
+		}
+		eligible, err := plusPaymentAfterBinding(tx, c.LocalOrderID)
+		if err != nil || !eligible {
+			return errors.New("backup purchase policy unavailable")
+		}
 	default:
 		return errors.New("backup purchase policy unavailable")
 	}
 	return nil
+}
+
+// A new Plus binding is the activation boundary. Old paid orders must never
+// become purchases when callbacks, queued jobs, or recovery are replayed.
+// Receipt recovery bypasses Begin and retains the original submitted purchase.
+func plusPaymentAfterBinding(db *gorm.DB, orderID uint) (bool, error) {
+	var order orderdomain.Order
+	if err := db.First(&order, orderID).Error; err != nil {
+		return false, err
+	}
+	var bindings []mappingdomain.ReadOnlyBinding
+	if err := db.Where("local_product_id = ? AND local_sku_id = ?", backupstate.LocalPlusProductID, backupstate.LocalPlusSKUID).Find(&bindings).Error; err != nil {
+		return false, err
+	}
+	if len(bindings) != 1 || bindings[0].UpstreamProductID != 2 || bindings[0].UpstreamSKUCode != backupstate.UpstreamPlusProductID || bindings[0].CreatedAt.IsZero() || order.PaidAt == nil {
+		return false, nil
+	}
+	return order.PaidAt.After(bindings[0].CreatedAt), nil
 }

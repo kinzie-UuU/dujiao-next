@@ -98,7 +98,7 @@ func Evaluate(s Snapshot) Decision {
 	case Plus:
 		switch s.Trigger {
 		case Automatic:
-			// Paid auto-buy for the pinned Gmail/Plus SKU; no admin required.
+			// Paid auto-buy for the separate Plus SKU; no admin required.
 		case Manual:
 			if !s.AdminAuthorized {
 				return RejectTrigger

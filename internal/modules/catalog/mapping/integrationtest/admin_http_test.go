@@ -535,3 +535,21 @@ func TestReadOnlyBindingCannotRetargetExistingAssociation(t *testing.T) {
 		t.Fatalf("association changed: %+v %v", rows, err)
 	}
 }
+
+func TestPlusBindingPreservesManualFulfillmentAndActivationTime(t *testing.T) {
+	service, db, adapter := readonlyBindingFixture(t)
+	before := snapshotReadOnlyProtected(t, db)
+	adapter.price = "5.29"
+	input := mappingapp.ReadOnlyBindingInput{ConnectionID: 1, LocalProductID: 41, LocalSKUID: 74, UpstreamProductID: 2}
+	binding, err := service.BindReadOnlySupplier(context.Background(), input)
+	if err != nil || binding.CreatedAt.IsZero() || binding.UpstreamSKUCode != "6a4b4d7d1827db4ca39bb8be" {
+		t.Fatalf("binding=%v err=%v", binding, err)
+	}
+	refreshed, err := service.RefreshReadOnlyBinding(context.Background(), binding.ID)
+	if err != nil || !refreshed.CreatedAt.Equal(binding.CreatedAt) {
+		t.Fatal("refresh changed activation time")
+	}
+	if snapshotReadOnlyProtected(t, db) != before {
+		t.Fatal("binding changed fulfillment or catalog")
+	}
+}

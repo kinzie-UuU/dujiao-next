@@ -114,6 +114,11 @@ func formatAccountLine(product backupstate.Product, raw json.RawMessage) (string
 		return user + "----" + link, key, nil
 	case backupstate.Plus:
 		twoFA := other
+		// The account supplier returns the Plus TOTP in verifyEmail when
+		// otherInfo is absent; accept only a strictly valid Base32 secret.
+		if twoFA == "" {
+			twoFA = verify
+		}
 		if twoFA == "" || !totpSecret.MatchString(strings.ToUpper(strings.ReplaceAll(twoFA, " ", ""))) {
 			return "", "", errDeliveryPolicy
 		}

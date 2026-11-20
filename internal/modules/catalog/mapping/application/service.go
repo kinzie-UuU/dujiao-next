@@ -171,6 +171,11 @@ func (s *Service) BindReadOnlySupplier(ctx context.Context, input ReadOnlyBindin
 			return nil, mappingcontract.ErrReadOnlyBindingInvalid
 		}
 		slug, nativeID = "muse-31b-first-login", "6aeedc6cadf360530f5faf80"
+	case 2:
+		if input.LocalProductID != 41 || input.LocalSKUID != 74 {
+			return nil, mappingcontract.ErrReadOnlyBindingInvalid
+		}
+		slug, nativeID = "gpt-plus-account-preorder", "6a4b4d7d1827db4ca39bb8be"
 	case 3:
 		if input.LocalProductID != 51 || input.LocalSKUID != 86 {
 			return nil, mappingcontract.ErrReadOnlyBindingInvalid

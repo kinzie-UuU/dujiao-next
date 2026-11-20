@@ -113,3 +113,84 @@ func TestPaidGmailUsesDistinctSnapshotAndBlocksOldPlus(t *testing.T) {
 		t.Fatal("historical Plus allowed new submission")
 	}
 }
+
+func TestPlusAutomaticOnlyForPaymentsAfterBinding(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		offset   time.Duration
+		missing  bool
+		quantity int
+		eligible bool
+	}{{"old-paid", -time.Hour, false, 1, false}, {"exact-cutoff", 0, false, 1, false}, {"no-paid-time", time.Hour, true, 1, false}, {"new-paid", time.Hour, false, 1, true}, {"quantity-two", time.Hour, false, 2, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := triggerDB(t)
+			if err := db.AutoMigrate(&mappingdomain.ReadOnlyBinding{}, &siteconnectiondomain.Connection{}, &fulfillmentdomain.Fulfillment{}, &procurementdomain.Order{}, &backupstate.Gate{}); err != nil {
+				t.Fatal(err)
+			}
+			cutoff := time.Date(2026, 11, 20, 10, 0, 0, 0, time.FixedZone("CST", 8*3600))
+			paid := cutoff.Add(tc.offset).UTC()
+			order := orderdomain.Order{OrderNo: "PLUS-" + tc.name, Status: "paid", Currency: "CNY", PaidAt: &paid}
+			if tc.missing {
+				order.PaidAt = nil
+			}
+			if err := db.Create(&order).Error; err != nil {
+				t.Fatal(err)
+			}
+			for _, row := range []any{
+				&orderdomain.OrderItem{OrderID: order.ID, ProductID: 41, SKUID: 74, Quantity: tc.quantity, FulfillmentType: "manual", TitleJSON: map[string]interface{}{"zh-CN": "Plus"}},
+				&siteconnectiondomain.Connection{ID: 4, Name: "Fang", BaseURL: "https://canboso.com", Protocol: constants.ConnectionProtocolFangfang, Status: constants.ConnectionStatusActive, ApiKey: "marker", ApiSecret: "cipher"},
+				&mappingdomain.ReadOnlyBinding{ConnectionID: 4, LocalProductID: 41, LocalSKUID: 74, UpstreamProductID: 2, UpstreamSKUCode: backupstate.UpstreamPlusProductID, Currency: "USD", CreatedAt: cutoff},
+				&backupstate.Gate{ID: 1, Enabled: true},
+			} {
+				if err := db.Create(row).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			queue := &enqueueStub{}
+			trigger := &PaidTrigger{DB: db, Queue: queue}
+			for i := 0; i < 2; i++ {
+				err := trigger.OnOrderPaid(order.ID)
+				if tc.eligible && err != nil {
+					t.Fatal(err)
+				}
+			}
+			var claims []backupstate.Claim
+			if err := db.Find(&claims).Error; err != nil {
+				t.Fatal(err)
+			}
+			if !tc.eligible {
+				if len(claims) != 0 || len(queue.payloads) != 0 {
+					t.Fatal("historical/invalid order purchased")
+				}
+				return
+			}
+			if len(claims) != 1 || claims[0].Product != backupstate.Plus {
+				t.Fatal("wrong or duplicate Plus claim")
+			}
+			var snap struct {
+				UpstreamProductID string `json:"upstream_product_id"`
+				PreflightMaxUSD   string `json:"preflight_max_usd"`
+			}
+			if json.Unmarshal([]byte(claims[0].SnapshotJSON), &snap) != nil || snap.UpstreamProductID != backupstate.UpstreamPlusProductID || snap.PreflightMaxUSD != "5.29" {
+				t.Fatal("wrong Plus snapshot")
+			}
+			// A stale queued claim must also fail at Begin if paid-time eligibility is lost.
+			if err := db.Model(&order).Update("paid_at", cutoff).Error; err != nil {
+				t.Fatal(err)
+			}
+			if _, started, err := claimstore.BeginBound(context.Background(), db, claims[0].ID, func(string) (string, error) { t.Fatal("old payment reached decrypt"); return "", nil }, StructuralPolicy, time.Now()); err == nil || started {
+				t.Fatal("old queued payment accepted")
+			}
+			if err := db.Model(&order).Update("paid_at", cutoff.Add(tc.offset).UTC()).Error; err != nil {
+				t.Fatal(err)
+			}
+			attempt, started, err := claimstore.BeginBound(context.Background(), db, claims[0].ID, func(string) (string, error) { return "synthetic", nil }, StructuralPolicy, time.Now())
+			if err != nil || !started || attempt.Request.ProductID != backupstate.UpstreamPlusProductID {
+				t.Fatalf("Plus Begin=%v", err)
+			}
+			if _, started, err := claimstore.BeginBound(context.Background(), db, claims[0].ID, func(string) (string, error) { t.Fatal("repeat decrypt"); return "", nil }, StructuralPolicy, time.Now()); err == nil || started {
+				t.Fatal("repeat purchase")
+			}
+		})
+	}
+}
