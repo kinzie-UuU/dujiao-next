@@ -33,10 +33,13 @@ func StructuralPolicy(tx *gorm.DB, claimID uint) error {
 		if c.ProductID != backupstate.LocalMuseProductID || c.SKUID != backupstate.LocalMuseSKUID || snap.LocalProductID != backupstate.LocalMuseProductID || snap.LocalSKUID != backupstate.LocalMuseSKUID || snap.UpstreamProductID != backupstate.UpstreamMuseProductID {
 			return errors.New("backup purchase policy unavailable")
 		}
-	case backupstate.Plus:
-		if c.ProductID != backupstate.LocalPlusProductID || c.SKUID != backupstate.LocalPlusSKUID || snap.LocalProductID != backupstate.LocalPlusProductID || snap.LocalSKUID != backupstate.LocalPlusSKUID || snap.UpstreamProductID != backupstate.UpstreamPlusProductID {
+	case backupstate.Gmail:
+		if c.ProductID != backupstate.LocalGmailProductID || c.SKUID != backupstate.LocalGmailSKUID || snap.LocalProductID != backupstate.LocalGmailProductID || snap.LocalSKUID != backupstate.LocalGmailSKUID || snap.UpstreamProductID != backupstate.UpstreamGmailProductID {
 			return errors.New("backup purchase policy unavailable")
 		}
+	case backupstate.Plus:
+		// Historical Plus receipts remain readable, but no new Plus submission is authorized.
+		return errors.New("backup purchase policy unavailable")
 	default:
 		return errors.New("backup purchase policy unavailable")
 	}

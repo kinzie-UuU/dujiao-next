@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dujiao-next/internal/constants"
+	mappingdomain "github.com/dujiao-next/internal/modules/catalog/mapping/domain"
 	fulfillmentdomain "github.com/dujiao-next/internal/modules/fulfillment/domain"
 	backupservice "github.com/dujiao-next/internal/modules/procurement/backupservice"
 	backupstate "github.com/dujiao-next/internal/modules/procurement/backupstate"
@@ -65,7 +66,12 @@ func beginBound(ctx context.Context, db *gorm.DB, claimID uint, decrypt func(str
 		if err != nil || !limit.IsPositive() || strings.TrimSpace(snap.PreflightMaxUSD) != snap.PreflightMaxUSD {
 			return denied
 		}
-		if (claim.Product == backupstate.Muse && snap.UpstreamProductID != backupstate.UpstreamMuseProductID) || (claim.Product == backupstate.Plus && snap.UpstreamProductID != backupstate.UpstreamPlusProductID) || (claim.Product != backupstate.Muse && claim.Product != backupstate.Plus) {
+		if (claim.Product == backupstate.Muse && snap.UpstreamProductID != backupstate.UpstreamMuseProductID) || (claim.Product == backupstate.Plus && snap.UpstreamProductID != backupstate.UpstreamPlusProductID) || (claim.Product == backupstate.Gmail && snap.UpstreamProductID != backupstate.UpstreamGmailProductID) || (claim.Product != backupstate.Muse && claim.Product != backupstate.Plus && claim.Product != backupstate.Gmail) {
+			return denied
+		}
+		// Rebinding after snapshot creation must invalidate a pending supplier POST.
+		var bindings []mappingdomain.ReadOnlyBinding
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("local_product_id = ? AND local_sku_id = ?", claim.ProductID, claim.SKUID).Find(&bindings).Error; err != nil || len(bindings) != 1 || bindings[0].ConnectionID != snap.ConnectionID || bindings[0].UpstreamSKUCode != snap.UpstreamProductID || bindings[0].Currency != "USD" {
 			return denied
 		}
 		if err := policy(tx, claim.ID); err != nil {

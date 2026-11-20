@@ -75,6 +75,11 @@ func deliverReceipt(db *gorm.DB, id uint, attemptHash string) error {
 		if c.State != backupstate.Submitted || c.SubmittedAt == nil || !sha256Hex(c.RequestSHA256) || !sha256Hex(c.ConnectionSHA256) || attemptHash != c.RequestSHA256 || root.DeletedAt != nil || order.DeletedAt != nil || root.RefundedAmount.IsPositive() || order.RefundedAmount.IsPositive() || (order.Status != constants.OrderStatusPaid && order.Status != constants.OrderStatusFulfilling) || (root.Status != constants.OrderStatusPaid && root.Status != constants.OrderStatusFulfilling && root.Status != constants.OrderStatusPartiallyDelivered && root.Status != constants.OrderStatusPartiallyRefunded) {
 			return errReceipt
 		}
+		// The historical misbound Plus purchase is not a Gmail fulfillment.
+		// Keep its immutable receipt for reconciliation without delivering it to this order.
+		if c.Product == backupstate.Plus && (c.ProductID == backupstate.LocalGmailProductID || c.SKUID == backupstate.LocalGmailSKUID) {
+			return errDeliveryPolicy
+		}
 		raw, status, err := receiptstore.ReadPurchaseReceipt(context.Background(), tx, "backup_claim", c.ID, attemptHash)
 		if err != nil || status != 200 || len(raw) == 0 {
 			return errReceipt

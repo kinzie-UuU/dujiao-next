@@ -37,6 +37,9 @@ func seedClaim(t *testing.T, db *gorm.DB, product backupstate.Product) claimInpu
 	if product == backupstate.Plus {
 		productID, skuID = backupstate.LocalPlusProductID, backupstate.LocalPlusSKUID
 	}
+	if product == backupstate.Gmail {
+		productID, skuID = backupstate.LocalGmailProductID, backupstate.LocalGmailSKUID
+	}
 	item := orderdomain.OrderItem{OrderID: order.ID, ProductID: productID, SKUID: skuID, Quantity: 1, FulfillmentType: "upstream", TitleJSON: map[string]interface{}{"zh-CN": "test"}}
 	if err := db.Create(&item).Error; err != nil {
 		t.Fatal(err)
@@ -47,7 +50,7 @@ func seedClaim(t *testing.T, db *gorm.DB, product backupstate.Product) claimInpu
 		if err := db.Create(&proc).Error; err != nil {
 			t.Fatal(err)
 		}
-	} else {
+	} else if product == backupstate.Plus {
 		in.trigger = backupstate.Manual
 		in.adminID = 1
 	}

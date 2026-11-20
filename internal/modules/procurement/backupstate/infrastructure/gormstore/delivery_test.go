@@ -98,3 +98,31 @@ func TestDeliveryCompletesVerifiedPlusContract(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestHistoricalMisboundPlusNeverFulfillsGmail(t *testing.T) {
+	db := claimDB(t)
+	in := seedClaim(t, db, backupstate.Gmail)
+	c, err := claim(db, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := strings.Repeat("a", 64)
+	if err := transition(db, c.ID, backupstate.Claimed, backupstate.Submitted, h, h, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&backupstate.Claim{}).Where("id = ?", c.ID).Update("product", backupstate.Plus).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := deliverReceipt(db, c.ID, h); !errors.Is(err, errDeliveryPolicy) {
+		t.Fatalf("misbound Plus was not blocked: %v", err)
+	}
+	var stored backupstate.Claim
+	if err := db.First(&stored, c.ID).Error; err != nil || stored.State != backupstate.Submitted {
+		t.Fatal("historical claim changed")
+	}
+	var count int64
+	db.Model(&fulfillmentdomain.Fulfillment{}).Count(&count)
+	if count != 0 {
+		t.Fatal("wrong product delivered")
+	}
+}

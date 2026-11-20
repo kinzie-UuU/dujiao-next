@@ -22,6 +22,7 @@ const fangfangResponseLimit = 8 << 20
 // These stable adapter IDs are not truncated supplier IDs. Never reassign one:
 // existing product/SKU mappings persist these values in the local database.
 var fangfangReviewedProducts = map[string]uint{
+	"6ae37dc5ed8e0e40e4de28b7": 3, // Aged Gmail, random 2010–2022; recovery email and/or 2FA.
 	"6aeedc6cadf360530f5faf80": 1, // Muse 31B, first-login warranty only.
 	"6a4b4d7d1827db4ca39bb8be": 2, // ChatGPT Plus Apple Pay Gmail 30 days, full warranty.
 }

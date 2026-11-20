@@ -375,7 +375,7 @@ type readonlyQuoteAdapter struct {
 func (a *readonlyQuoteAdapter) GetProduct(_ context.Context, id uint) (*upstream.UpstreamProduct, error) {
 	a.reads++
 	a.observedAt = time.Now().UTC()
-	native := map[uint]string{1: "6aeedc6cadf360530f5faf80", 2: "6a4b4d7d1827db4ca39bb8be"}[id]
+	native := map[uint]string{1: "6aeedc6cadf360530f5faf80", 2: "6a4b4d7d1827db4ca39bb8be", 3: "6ae37dc5ed8e0e40e4de28b7"}[id]
 	return &upstream.UpstreamProduct{ID: id, Currency: "USD", IsActive: true, SKUs: []upstream.UpstreamSKU{{ID: id, SKUCode: native, PriceAmount: a.price, StockQuantity: a.stock, IsActive: true}}}, nil
 }
 
@@ -459,9 +459,9 @@ func TestReadOnlyBindingsPreserveExistingFulfillment(t *testing.T) {
 	if again.ID != first.ID || again.UpstreamPrice != "1.02" || again.UpstreamStock != 8 || again.PurchaseEnabled {
 		t.Fatalf("incorrect refresh: %+v", again)
 	}
-	plus, err := service.BindReadOnlySupplier(context.Background(), mappingapp.ReadOnlyBindingInput{ConnectionID: 1, LocalProductID: 51, LocalSKUID: 86, UpstreamProductID: 2})
-	if err != nil || plus.PurchaseEnabled {
-		t.Fatalf("plus bind: %+v %v", plus, err)
+	gmail, err := service.BindReadOnlySupplier(context.Background(), mappingapp.ReadOnlyBindingInput{ConnectionID: 1, LocalProductID: 51, LocalSKUID: 86, UpstreamProductID: 3})
+	if err != nil || gmail.PurchaseEnabled {
+		t.Fatalf("gmail bind: %+v %v", gmail, err)
 	}
 	rows, err := service.ListReadOnlyBindings(1)
 	if err != nil || len(rows) != 2 {
@@ -481,8 +481,8 @@ func TestReadOnlyBindingsRejectWrongProductAndProtocol(t *testing.T) {
 		{ConnectionID: 1, LocalProductID: 50, LocalSKUID: 74, UpstreamProductID: 1},
 		{ConnectionID: 1, LocalProductID: 37, LocalSKUID: 70, UpstreamProductID: 1},
 		{ConnectionID: 1, LocalProductID: 51, LocalSKUID: 86, UpstreamProductID: 1},
-		{ConnectionID: 2, LocalProductID: 51, LocalSKUID: 86, UpstreamProductID: 2},
-		{ConnectionID: 1, LocalProductID: 51, LocalSKUID: 86, UpstreamProductID: 3},
+		{ConnectionID: 2, LocalProductID: 51, LocalSKUID: 86, UpstreamProductID: 3},
+		{ConnectionID: 1, LocalProductID: 51, LocalSKUID: 86, UpstreamProductID: 2},
 	} {
 		if _, err := service.BindReadOnlySupplier(context.Background(), input); !errors.Is(err, mappingcontract.ErrReadOnlyBindingInvalid) {
 			t.Fatalf("unexpected result: %v", err)
@@ -500,7 +500,7 @@ func TestReadOnlyBindingAdminRoutes(t *testing.T) {
 	router := gin.New()
 	mappinghttp.RegisterAdminRoutes(router, mappinghttp.NewAdminHandler(service))
 	w := httptest.NewRecorder()
-	router.ServeHTTP(w, httptest.NewRequest("POST", "/supplier-readonly-bindings", strings.NewReader(`{"connection_id":1,"local_product_id":51,"local_sku_id":86,"upstream_product_id":2,"purchase_enabled":true}`)))
+	router.ServeHTTP(w, httptest.NewRequest("POST", "/supplier-readonly-bindings", strings.NewReader(`{"connection_id":1,"local_product_id":51,"local_sku_id":86,"upstream_product_id":3,"purchase_enabled":true}`)))
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"purchase_enabled":false`) {
 		t.Fatalf("bind %d %s", w.Code, w.Body.String())
 	}
@@ -518,7 +518,7 @@ func TestReadOnlyBindingAdminRoutes(t *testing.T) {
 
 func TestReadOnlyBindingCannotRetargetExistingAssociation(t *testing.T) {
 	service, db, _ := readonlyBindingFixture(t)
-	input := mappingapp.ReadOnlyBindingInput{ConnectionID: 1, LocalProductID: 51, LocalSKUID: 86, UpstreamProductID: 2}
+	input := mappingapp.ReadOnlyBindingInput{ConnectionID: 1, LocalProductID: 51, LocalSKUID: 86, UpstreamProductID: 3}
 	original, err := service.BindReadOnlySupplier(context.Background(), input)
 	if err != nil {
 		t.Fatal(err)

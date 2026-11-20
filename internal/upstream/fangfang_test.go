@@ -211,3 +211,15 @@ func TestFangfangReviewedPlus(t *testing.T) {
 		t.Fatalf("Plus mapping or currency incorrect: %+v %v", p, err)
 	}
 }
+
+func TestFangfangGmailHasNewStableID(t *testing.T) {
+	body := fangfangCatalog(`{"productId":"6ae37dc5ed8e0e40e4de28b7","name":"Gmail 古老随机 2010~2022-双重验证","description":"Gmail|密码|恢复邮箱|或者有2FA","productType":"account","price":{"amount":1.49,"currency":"USD"},"availability":{"available":470}}`)
+	a := fangfangTestClient(t, func(*http.Request) (*http.Response, error) { return fangfangTestResponse(200, body), nil })
+	p, err := a.GetProduct(context.Background(), 3)
+	if err != nil || p.ID != 3 || p.SKUs[0].SKUCode != "6ae37dc5ed8e0e40e4de28b7" || p.PriceAmount != "1.49" {
+		t.Fatalf("wrong Gmail catalog mapping %+v %v", p, err)
+	}
+	if fangfangReviewedProducts["6a4b4d7d1827db4ca39bb8be"] != 2 {
+		t.Fatal("historical Plus ID reassigned")
+	}
+}

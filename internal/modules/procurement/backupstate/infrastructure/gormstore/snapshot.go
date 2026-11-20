@@ -60,6 +60,8 @@ func prepareSnapshot(db *gorm.DB, id uint, now time.Time) error {
 		switch c.Product {
 		case backupstate.Muse:
 			expected, limit = backupstate.UpstreamMuseProductID, backupstate.MusePreflightMaxUSD
+		case backupstate.Gmail:
+			expected, limit = backupstate.UpstreamGmailProductID, backupstate.GmailPreflightMaxUSD
 		case backupstate.Plus:
 			expected, limit = backupstate.UpstreamPlusProductID, backupstate.PlusPreflightMaxUSD
 		default:

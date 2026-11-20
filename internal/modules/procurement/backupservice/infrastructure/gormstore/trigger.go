@@ -28,13 +28,12 @@ type PlusTrigger struct {
 }
 
 func (t *PlusTrigger) TriggerPlusBackup(_ context.Context, orderID, adminID uint) (uint, error) {
-	if t == nil || t.DB == nil || t.Queue == nil || orderID == 0 || adminID == 0 {
-		return 0, errTriggerUnavailable
-	}
-	return t.claimSnapshotEnqueue(orderID, backupstate.Plus, adminID)
+	// Keep the historical route fail-closed. Its old pin referred to a Gmail
+	// product and must not authorize another Plus purchase after rebinding.
+	return 0, errTriggerUnavailable
 }
 
-// PaidTrigger claims a paid Muse/Plus pin order after payment confirmation,
+// PaidTrigger claims a paid Muse/Gmail pin order after payment confirmation,
 // persists the immutable snapshot, then enqueues the bound worker.
 type PaidTrigger struct {
 	DB    *gorm.DB
@@ -58,8 +57,8 @@ func (t *PaidTrigger) OnOrderPaid(orderID uint) error {
 	switch {
 	case item.ProductID == backupstate.LocalMuseProductID && item.SKUID == backupstate.LocalMuseSKUID:
 		product = backupstate.Muse
-	case item.ProductID == backupstate.LocalPlusProductID && item.SKUID == backupstate.LocalPlusSKUID:
-		product = backupstate.Plus
+	case item.ProductID == backupstate.LocalGmailProductID && item.SKUID == backupstate.LocalGmailSKUID:
+		product = backupstate.Gmail
 	default:
 		return nil
 	}
@@ -100,6 +99,8 @@ func (t *PlusTrigger) claimSnapshotEnqueue(orderID uint, product backupstate.Pro
 		switch product {
 		case backupstate.Muse:
 			claim, err = claimstore.ClaimMuse(tx, orderID)
+		case backupstate.Gmail:
+			claim, err = claimstore.ClaimGmail(tx, orderID)
 		case backupstate.Plus:
 			if adminID != 0 {
 				claim, err = claimstore.ClaimPlus(tx, orderID, adminID)

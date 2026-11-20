@@ -33,6 +33,11 @@ func ClaimPlusAutomatic(db *gorm.DB, orderID uint) (*backupstate.Claim, error) {
 	return claim(db, claimInput{orderID: orderID, product: backupstate.Plus, trigger: backupstate.Automatic, productID: backupstate.LocalPlusProductID, skuID: backupstate.LocalPlusSKUID})
 }
 
+// ClaimGmail creates a new Gmail-only claim after payment confirmation.
+func ClaimGmail(db *gorm.DB, orderID uint) (*backupstate.Claim, error) {
+	return claim(db, claimInput{orderID: orderID, product: backupstate.Gmail, trigger: backupstate.Automatic, productID: backupstate.LocalGmailProductID, skuID: backupstate.LocalGmailSKUID})
+}
+
 // ClaimMuse creates a durable Muse backup claim for paid auto-buy (no primary)
 // or after verified primary never-sent / no-purchase evidence.
 func ClaimMuse(db *gorm.DB, orderID uint) (*backupstate.Claim, error) {

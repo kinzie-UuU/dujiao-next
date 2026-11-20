@@ -82,6 +82,15 @@ func TestBoundBeginRejectsDriftAndReplay(t *testing.T) {
 	if err := db.Exec("UPDATE site_connections SET api_secret = ? WHERE id = ?", "cipher-original", 4).Error; err != nil {
 		t.Fatal(err)
 	}
+	if err := db.Model(&mappingdomain.ReadOnlyBinding{}).Where("local_sku_id = ?", in.skuID).Update("upstream_sku_code", backupstate.UpstreamGmailProductID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, started, err := beginBound(context.Background(), db, c.ID, decrypt, policy, time.Now()); err == nil || started || decryptCalls != 0 {
+		t.Fatal("rebound supplier accepted old snapshot")
+	}
+	if err := db.Model(&mappingdomain.ReadOnlyBinding{}).Where("local_sku_id = ?", in.skuID).Update("upstream_sku_code", backupstate.UpstreamPlusProductID).Error; err != nil {
+		t.Fatal(err)
+	}
 	attempt, started, err := beginBound(context.Background(), db, c.ID, decrypt, policy, time.Now())
 	if err != nil || !started || attempt.Client == nil || attempt.ClaimID != c.ID || decryptCalls != 1 {
 		t.Fatalf("valid bound begin failed: %v", err)

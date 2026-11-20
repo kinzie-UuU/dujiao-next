@@ -7,8 +7,9 @@ package backupstate
 type Product string
 
 const (
-	Muse Product = "muse"
-	Plus Product = "plus"
+	Muse  Product = "muse"
+	Plus  Product = "plus"
+	Gmail Product = "gmail"
 )
 
 type Trigger string
@@ -85,6 +86,13 @@ func Evaluate(s Snapshot) Decision {
 			return RejectTrigger
 		}
 		if s.PrimaryEvidence != NeverSent && s.PrimaryEvidence != NoPurchaseConfirmed && s.PrimaryEvidence != NoPrimary {
+			return RejectPrimary
+		}
+	case Gmail:
+		if s.Trigger != Automatic {
+			return RejectTrigger
+		}
+		if s.PrimaryEvidence != NoPrimary {
 			return RejectPrimary
 		}
 	case Plus:

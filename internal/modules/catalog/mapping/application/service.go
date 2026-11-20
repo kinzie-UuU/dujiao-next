@@ -171,11 +171,11 @@ func (s *Service) BindReadOnlySupplier(ctx context.Context, input ReadOnlyBindin
 			return nil, mappingcontract.ErrReadOnlyBindingInvalid
 		}
 		slug, nativeID = "muse-31b-first-login", "6aeedc6cadf360530f5faf80"
-	case 2:
+	case 3:
 		if input.LocalProductID != 51 || input.LocalSKUID != 86 {
 			return nil, mappingcontract.ErrReadOnlyBindingInvalid
 		}
-		slug, nativeID = "gmail-aged-2010-2022", "6a4b4d7d1827db4ca39bb8be"
+		slug, nativeID = "gmail-aged-2010-2022", "6ae37dc5ed8e0e40e4de28b7"
 	default:
 		return nil, mappingcontract.ErrReadOnlyBindingInvalid
 	}

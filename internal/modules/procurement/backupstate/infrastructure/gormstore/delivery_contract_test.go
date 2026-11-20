@@ -25,3 +25,25 @@ func TestParseVerifiedDeliveryPayloadMuseAndPlus(t *testing.T) {
 		t.Fatal("over-cap delivery accepted")
 	}
 }
+
+func TestGmailDeliveryRecoveryOrTOTP(t *testing.T) {
+	for _, tc := range []struct{ account, want string }{
+		{`{"user":"aged@gmail.com","password":"secret","verifyEmail":"recovery@example.com"}`, "aged@gmail.com----secret----recovery@example.com"},
+		{`{"user":"aged@gmail.com","password":"secret","otherInfo":"JBSWY3DPEHPK3PXP"}`, "aged@gmail.com----secret--------JBSWY3DPEHPK3PXP"},
+		{`{"user":"aged@gmail.com","password":"secret","verifyEmail":"JBSWY3DPEHPK3PXP"}`, "aged@gmail.com----secret--------JBSWY3DPEHPK3PXP"},
+		{`{"user":"aged@gmail.com","password":"secret"}`, ""},
+		{`{"user":"aged@example.com","password":"secret","verifyEmail":"recovery@example.com"}`, ""},
+		{`{"user":"aged@gmail.com","password":"secret","verifyEmail":"invalid"}`, ""},
+	} {
+		got, _, err := formatAccountLine(backupstate.Gmail, []byte(tc.account))
+		if tc.want == "" {
+			if err == nil {
+				t.Fatal("incomplete Gmail accepted")
+			}
+			continue
+		}
+		if err != nil || got != tc.want {
+			t.Fatalf("Gmail format: %q %v", got, err)
+		}
+	}
+}
