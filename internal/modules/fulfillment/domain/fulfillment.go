@@ -109,8 +109,6 @@ func customerDeliveryMap(data map[string]interface{}) jsonmap.JSON {
 
 func customerDeliveryValue(value interface{}) interface{} {
 	switch v := value.(type) {
-	case string:
-		return customerPayload(v)
 	case jsonmap.JSON:
 		return customerDeliveryMap(v)
 	case map[string]interface{}:

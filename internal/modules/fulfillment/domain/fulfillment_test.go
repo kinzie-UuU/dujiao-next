@@ -21,7 +21,7 @@ func TestCustomerDeliveryPreservesAccountsAndStoredReceipt(t *testing.T) {
 		t.Fatal("customer identifiers lost")
 	}
 	nested := data["nested"].([]interface{})[0].(jsonmap.JSON)
-	if !reflect.DeepEqual(nested, jsonmap.JSON{"content": "credential"}) {
+	if !reflect.DeepEqual(nested, jsonmap.JSON{"content": "credential\nUpstream Order ID: PRIVATE"}) {
 		t.Fatalf("nested=%v", nested)
 	}
 	nested["content"] = "changed"
@@ -48,5 +48,19 @@ func TestCustomerPayloadUsesFirstDelimiter(t *testing.T) {
 	f := &Fulfillment{Payload: "credential\n上游订单：https://supplier.example/order"}
 	if got := f.CustomerPayload(); got != "credential" {
 		t.Fatalf("output=%q", got)
+	}
+}
+
+func TestStructuredCustomerCredentialsAreNeverParsedAsMetadata(t *testing.T) {
+	data := jsonmap.JSON{"password": "upstream_order_id:secret", "account_id": "上游订单：account", "tracking_no": "supplier_order_id:tracking", "content": "upstream_order_id:literal", "upstream_order_id": "PRIVATE"}
+	f := &Fulfillment{LogisticsJSON: data}
+	got := f.CustomerDeliveryData()
+	for _, key := range []string{"password", "account_id", "tracking_no", "content"} {
+		if got[key] != data[key] {
+			t.Fatalf("credential %s changed", key)
+		}
+	}
+	if _, exists := got["upstream_order_id"]; exists {
+		t.Fatal("explicit metadata escaped")
 	}
 }
