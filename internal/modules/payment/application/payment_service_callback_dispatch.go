@@ -138,7 +138,7 @@ func isFangFangBackupPinOrder(order *orderdomain.Order) bool {
 	}
 	item := order.Items[0]
 	return (item.ProductID == backupstate.LocalMuseProductID && item.SKUID == backupstate.LocalMuseSKUID) ||
-		(item.ProductID == backupstate.LocalPlusProductID && item.SKUID == backupstate.LocalPlusSKUID)
+		(item.ProductID == backupstate.LocalGmailProductID && item.SKUID == backupstate.LocalGmailSKUID)
 }
 
 // enqueueBackupPaidAsync claims Fang Fang backup procurement after payment confirmation.

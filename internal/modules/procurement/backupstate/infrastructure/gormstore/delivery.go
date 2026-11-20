@@ -8,9 +8,11 @@ import (
 
 	backupstate "github.com/dujiao-next/internal/modules/procurement/backupstate"
 
+	"github.com/dujiao-next/internal/config"
 	"github.com/dujiao-next/internal/constants"
 	fulfillmentdomain "github.com/dujiao-next/internal/modules/fulfillment/domain"
 	orderdomain "github.com/dujiao-next/internal/modules/order/domain"
+	procurementstore "github.com/dujiao-next/internal/modules/procurement/infrastructure/gormstore"
 	receiptstore "github.com/dujiao-next/internal/modules/procurement/receipts/infrastructure/gormstore"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -70,6 +72,10 @@ func deliverReceipt(db *gorm.DB, id uint, attemptHash string) error {
 			if err := tx.Unscoped().Model(&fulfillmentdomain.Fulfillment{}).Where("order_id = ?", order.ID).Count(&count).Error; err != nil || count != 1 {
 				return errReceipt
 			}
+			if order.ParentID != nil {
+				_, err := procurementstore.NewLifecycle(tx, nil, nil, config.EmailConfig{}).SyncParentStatus(*order.ParentID, time.Now())
+				return err
+			}
 			return nil
 		}
 		if c.State != backupstate.Submitted || c.SubmittedAt == nil || !sha256Hex(c.RequestSHA256) || !sha256Hex(c.ConnectionSHA256) || attemptHash != c.RequestSHA256 || root.DeletedAt != nil || order.DeletedAt != nil || root.RefundedAmount.IsPositive() || order.RefundedAmount.IsPositive() || (order.Status != constants.OrderStatusPaid && order.Status != constants.OrderStatusFulfilling) || (root.Status != constants.OrderStatusPaid && root.Status != constants.OrderStatusFulfilling && root.Status != constants.OrderStatusPartiallyDelivered && root.Status != constants.OrderStatusPartiallyRefunded) {
@@ -116,6 +122,12 @@ func deliverReceipt(db *gorm.DB, id uint, attemptHash string) error {
 		claimUpdate := tx.Model(&backupstate.Claim{}).Where("id = ? AND state = ? AND request_sha256 = ?", c.ID, backupstate.Submitted, attemptHash).Updates(map[string]interface{}{"state": backupstate.Completed, "updated_at": now})
 		if claimUpdate.Error != nil || claimUpdate.RowsAffected != 1 {
 			return errReceipt
+		}
+		if order.ParentID != nil {
+			// Reuse procurement's refund-aware aggregate in the same transaction.
+			// This does not enqueue another status email or supplier request.
+			_, err := procurementstore.NewLifecycle(tx, nil, nil, config.EmailConfig{}).SyncParentStatus(*order.ParentID, now)
+			return err
 		}
 		return nil
 	})
