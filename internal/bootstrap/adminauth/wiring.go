@@ -16,7 +16,7 @@ type Handlers struct {
 
 func New(c *container.Container) Handlers {
 	recorder := adminLoginRecorderAdapter{logs: c.AdminLoginLogService}
-	notifier := adminLoginNotifierAdapter{notifications: c.NotificationService, slots: make(chan struct{}, 32), prefix: c.Config.Redis.Prefix}
+	notifier := adminLoginNotifierAdapter{notifications: c.NotificationService, slots: make(chan struct{}, 32), aggregateSlots: make(chan struct{}, 32), prefix: c.Config.Redis.Prefix}
 	return Handlers{
 		Login: adminauthtransport.NewAdminLoginHandler(
 			adminLoginAuthTransportAdapter{auth: c.AuthService},

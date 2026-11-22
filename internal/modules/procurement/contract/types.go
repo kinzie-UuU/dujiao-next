@@ -38,14 +38,16 @@ type CreateOrderRequest struct {
 }
 
 type CreateOrderResult struct {
-	OK           bool
-	OrderID      uint
-	OrderNo      string
-	Status       string
-	Amount       string
-	Currency     string
-	ErrorCode    string
-	ErrorMessage string
+	RequiresReconciliation bool
+	Fulfillment            *Fulfillment
+	OK                     bool
+	OrderID                uint
+	OrderNo                string
+	Status                 string
+	Amount                 string
+	Currency               string
+	ErrorCode              string
+	ErrorMessage           string
 }
 
 type UpstreamOrder struct {
@@ -60,6 +62,7 @@ type UpstreamOrder struct {
 }
 
 type UpstreamConnection interface {
+	IdentitySHA256() string
 	CallbackURL() string
 	RetryMax() int
 	RetryIntervals() string
@@ -74,6 +77,7 @@ type UseCase interface {
 	SubmitToUpstream(procurementOrderID uint) error
 	PollUpstreamStatus(procurementOrderID uint) error
 	SyncAcceptedOrders()
+	RetryPendingSubmissions() error
 	HandleUpstreamCallback(procurementOrderID uint, upstreamStatus string, fulfillment *Fulfillment) error
 	GetByID(id uint) (*procurementdomain.Order, error)
 	GetByLocalOrderNo(localOrderNo string) (*procurementdomain.Order, error)

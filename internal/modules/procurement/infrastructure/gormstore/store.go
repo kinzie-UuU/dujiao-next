@@ -6,8 +6,11 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/dujiao-next/internal/constants"
+
 	orderdomain "github.com/dujiao-next/internal/modules/order/domain"
 
+	backupstate "github.com/dujiao-next/internal/modules/procurement/backupstate"
 	procurementcontract "github.com/dujiao-next/internal/modules/procurement/contract"
 	procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
 	"github.com/dujiao-next/internal/modules/procurement/infrastructure/orderreader"
@@ -41,7 +44,15 @@ func (s *Store) GetByID(id uint) (*procurementdomain.Order, error) {
 }
 
 func (s *Store) GetByLocalOrderID(localOrderID uint) (*procurementdomain.Order, error) {
-	return s.first("local_order_id = ?", localOrderID)
+	// Include soft-deleted history: deleting visibility never licenses a new purchase.
+	var order procurementdomain.Order
+	if err := s.db.Unscoped().Where("local_order_id = ?", localOrderID).First(&order).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &order, nil
 }
 
 func (s *Store) GetByLocalOrderNo(localOrderNo string) (*procurementdomain.Order, error) {
@@ -67,12 +78,51 @@ func (s *Store) Create(order *procurementdomain.Order) error {
 }
 
 func (s *Store) UpdateStatus(id uint, fromStatus, toStatus string, updates map[string]interface{}) (bool, error) {
+	if _, receipt := updates["upstream_order_no"]; receipt {
+		var changed bool
+		err := s.db.Transaction(func(tx *gorm.DB) error {
+			var proc procurementdomain.Order
+			if err := tx.First(&proc, id).Error; err != nil {
+				return err
+			}
+			// Serialize every receipt binding by supplier connection, including normal
+			// responses and administrator reconciliation, before checking uniqueness.
+			if err := tx.Table("site_connections").Where("id = ?", proc.ConnectionID).UpdateColumn("updated_at", gorm.Expr("updated_at")).Error; err != nil {
+				return err
+			}
+			var connection struct{ ID uint }
+			if err := tx.Table("site_connections").Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("id = ?", proc.ConnectionID).Take(&connection).Error; err != nil {
+				return err
+			}
+			var count int64
+			number, _ := updates["upstream_order_no"].(string)
+			upstreamID, _ := updates["upstream_order_id"].(uint)
+			if err := tx.Model(&procurementdomain.Order{}).Where("connection_id = ? AND id <> ? AND ((upstream_order_no <> '' AND upstream_order_no = ?) OR (upstream_order_id > 0 AND upstream_order_id = ?))", proc.ConnectionID, id, number, upstreamID).Count(&count).Error; err != nil {
+				return err
+			}
+			if count != 0 {
+				return errors.New("supplier receipt already belongs to another procurement")
+			}
+			var err error
+			changed, err = (&Store{db: tx}).updateStatus(id, fromStatus, toStatus, updates)
+			return err
+		})
+		return changed, err
+	}
+	return s.updateStatus(id, fromStatus, toStatus, updates)
+}
+
+func (s *Store) updateStatus(id uint, fromStatus, toStatus string, updates map[string]interface{}) (bool, error) {
 	if updates == nil {
 		updates = map[string]interface{}{}
 	}
 	// Map updates bypass GORM field serializers. Serialize the fulfillment material
 	// before it reaches the SQL driver (including refund callback updates).
-	if payload, ok := updates["upstream_payload"]; ok {
+	for _, field := range []string{"upstream_payload", "submission_fulfillment"} {
+		payload, ok := updates[field]
+		if !ok {
+			continue
+		}
 		updates = maps.Clone(updates)
 		codec, registered := schema.GetSerializer(securestoreserializer.StringSerializerName)
 		if !registered {
@@ -82,7 +132,7 @@ func (s *Store) UpdateStatus(id uint, fromStatus, toStatus string, updates map[s
 		if err != nil {
 			return false, err
 		}
-		updates["upstream_payload"] = value
+		updates[field] = value
 	}
 	updates["status"] = toStatus
 	result := s.db.Model(&procurementdomain.Order{}).
@@ -224,4 +274,82 @@ func (s *Store) attachLocalOrders(orders []procurementdomain.Order) error {
 		}
 	}
 	return nil
+}
+
+// BeginSubmission durably claims the only permitted outbound attempt while holding
+// the same parent/order fence as refunds. No network I/O occurs in this transaction.
+func (s *Store) BeginSubmission(id uint, fromStatus, requestSHA256, connectionSHA256 string, at time.Time) (bool, error) {
+	claimed := false
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var proc procurementdomain.Order
+		if err := tx.First(&proc, id).Error; err != nil {
+			return err
+		}
+		var snapshot orderdomain.Order
+		if err := tx.First(&snapshot, proc.LocalOrderID).Error; err != nil {
+			return err
+		}
+		rootID := snapshot.ID
+		if snapshot.ParentID != nil {
+			rootID = *snapshot.ParentID
+		}
+		if tx.Dialector.Name() == "sqlite" {
+			if err := tx.Model(&orderdomain.Order{}).Where("id = ?", rootID).UpdateColumn("updated_at", gorm.Expr("updated_at")).Error; err != nil {
+				return err
+			}
+		}
+		var parent orderdomain.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&parent, rootID).Error; err != nil {
+			return err
+		}
+		var order orderdomain.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&order, proc.LocalOrderID).Error; err != nil {
+			return err
+		}
+		if order.DeletedAt != nil || parent.DeletedAt != nil || (order.Status != constants.OrderStatusPaid && order.Status != constants.OrderStatusFulfilling) || (parent.Status != constants.OrderStatusPaid && parent.Status != constants.OrderStatusFulfilling && parent.Status != constants.OrderStatusPartiallyDelivered && parent.Status != constants.OrderStatusPartiallyRefunded) || order.RefundedAmount.IsPositive() {
+			return procurementcontract.ErrStatusInvalid
+		}
+		// The backup reservation shares the root-order lock. Once any backup
+		// claim exists, the primary may never submit for the same local order.
+		// A durable not_sent terminal record proves no POST was permitted.
+		var backupCount int64
+		if err := tx.Model(&backupstate.Claim{}).Where("local_order_id = ? AND NOT (state = ? AND submitted_at IS NULL AND request_sha256 = '' AND connection_sha256 = '')", proc.LocalOrderID, backupstate.NotSent).Count(&backupCount).Error; err != nil {
+			return err
+		}
+		if backupCount != 0 {
+			return procurementcontract.ErrStatusInvalid
+		}
+		result := tx.Model(&procurementdomain.Order{}).Where("id = ? AND deleted_at IS NULL AND status = ? AND submission_version = 1 AND submission_request_sha256 = '' AND submitted_at IS NULL", id, fromStatus).Updates(map[string]interface{}{"status": constants.ProcurementStatusSubmitted, "submission_request_sha256": requestSHA256, "submission_connection_sha256": connectionSHA256, "submitted_at": at, "next_retry_at": nil, "error_message": "Upstream submission in progress; reconcile if receipt is unavailable", "updated_at": at})
+		claimed = result.RowsAffected == 1
+		return result.Error
+	})
+	return claimed, err
+}
+
+// Only durable, never-submitted purchases may be dispatched again. The same
+// predicate is evaluated during the claim, not just when taking the snapshot.
+func (s *Store) dispatchable(at time.Time) *gorm.DB {
+	return s.db.Model(&procurementdomain.Order{}).
+		Where("procurement_orders.deleted_at IS NULL AND submission_version = 1 AND status IN ?", []string{"pending", "failed"}).
+		Where("submitted_at IS NULL AND submission_request_sha256 = '' AND submission_connection_sha256 = '' AND upstream_order_id = 0 AND upstream_order_no = ''").
+		Where("(next_retry_at <= ?) OR (next_retry_at IS NULL AND updated_at <= ?)", at, at.Add(-time.Minute)).
+		Where(`EXISTS (SELECT 1 FROM orders o WHERE o.id = procurement_orders.local_order_id AND o.deleted_at IS NULL
+   AND o.status IN ('paid','fulfilling') AND o.refunded_amount = 0
+   AND (o.parent_id IS NULL OR EXISTS (SELECT 1 FROM orders p WHERE p.id = o.parent_id AND p.deleted_at IS NULL
+     AND p.status IN ('paid','fulfilling','partially_delivered','partially_refunded'))))`)
+}
+
+func (s *Store) ListDispatchable(at time.Time, limit int) ([]procurementdomain.Order, error) {
+	var orders []procurementdomain.Order
+	err := s.dispatchable(at).Order("id ASC").Limit(limit).Find(&orders).Error
+	return orders, err
+}
+
+// A five-minute lease survives worker crashes, Redis loss and an ambiguous
+// enqueue response. Duplicate queue tasks remain fenced by BeginSubmission.
+func (s *Store) ClaimDispatch(id uint, at time.Time) (bool, error) {
+	result := s.dispatchable(at).Where("procurement_orders.id = ?", id).Updates(map[string]interface{}{
+		"next_retry_at": at.Add(5 * time.Minute), "updated_at": at,
+	})
+	return result.RowsAffected == 1, result.Error
 }

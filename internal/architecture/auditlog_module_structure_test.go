@@ -41,11 +41,11 @@ func TestAuditLogImplementationLivesInBoundedContextDirectories(t *testing.T) {
 	if production != 0 || total != 0 {
 		t.Fatalf("auditlog module root must remain structural only, got production=%d total=%d", production, total)
 	}
-	assertDirectoryGoFileBudget(t, domainRoot, 3)
+	assertDirectoryGoFileBudget(t, domainRoot, 4)
 	assertDirectoryGoFileBudget(t, contractRoot, 1)
 	assertDirectoryGoFileBudget(t, applicationRoot, 4)
-	assertDirectoryGoFileBudget(t, storeRoot, 5)
-	assertDirectoryGoFileBudget(t, transportRoot, 5)
+	assertDirectoryGoFileBudget(t, storeRoot, 6)
+	assertDirectoryGoFileBudget(t, transportRoot, 7)
 }
 
 func TestAuditLogLegacyFlatFilesStayRemoved(t *testing.T) {

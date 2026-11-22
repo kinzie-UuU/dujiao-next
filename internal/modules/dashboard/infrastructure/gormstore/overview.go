@@ -130,11 +130,29 @@ func (r *Store) GetPaymentOrderAlertCounts(startAt, endAt time.Time) (dashboard.
 		return result, err
 	}
 
+	// Keep failed attempts for diagnostics, but stop alerting once their business
+	// has been paid. OrderID zero is used by all recharges, so never correlate
+	// those rows through order_id; recharge ownership is payment_id only.
 	if err := onlinePaymentBase(r.db, startAt, endAt).
-		Where("status = ?", constants.PaymentStatusFailed).
-		Count(&result.PaymentsFailed).Error; err != nil {
+		Where("payments.status = ?", constants.PaymentStatusFailed).
+		Where(`NOT EXISTS (SELECT 1 FROM orders resolved_order
+			WHERE payments.order_id > 0 AND resolved_order.id = payments.order_id
+			AND (resolved_order.paid_at IS NOT NULL OR resolved_order.status IN ?))`, []string{
+			constants.OrderStatusPaid, constants.OrderStatusFulfilling,
+			constants.OrderStatusPartiallyDelivered, constants.OrderStatusDelivered,
+			constants.OrderStatusCompleted, constants.OrderStatusPartiallyRefunded,
+			constants.OrderStatusRefunded,
+		}).
+		Where(`NOT EXISTS (SELECT 1 FROM payments successful_payment
+			WHERE payments.order_id > 0 AND successful_payment.order_id = payments.order_id
+			AND successful_payment.status = ? AND successful_payment.deleted_at IS NULL)`, constants.PaymentStatusSuccess).
+		Where(`NOT EXISTS (SELECT 1 FROM wallet_recharge_orders recharge
+			WHERE payments.order_id = 0 AND recharge.payment_id = payments.id
+			AND (recharge.paid_at IS NOT NULL OR recharge.status = ?))`, constants.WalletRechargeStatusSuccess).
+		Order("payments.id").Pluck("payments.id", &result.FailedPaymentIDs).Error; err != nil {
 		return result, err
 	}
+	result.PaymentsFailed = int64(len(result.FailedPaymentIDs))
 
 	return result, nil
 }

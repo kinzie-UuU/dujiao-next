@@ -6,6 +6,7 @@ import (
 	"github.com/dujiao-next/internal/logger"
 	apicredentialapp "github.com/dujiao-next/internal/modules/apicredential/application"
 	auditlogapp "github.com/dujiao-next/internal/modules/auditlog/application"
+	mappinggormstore "github.com/dujiao-next/internal/modules/catalog/mapping/infrastructure/gormstore"
 	channelclientapp "github.com/dujiao-next/internal/modules/channelclient/application"
 	contentapp "github.com/dujiao-next/internal/modules/content/application"
 	localfilestore "github.com/dujiao-next/internal/modules/content/infrastructure/filestore/local"
@@ -64,13 +65,14 @@ func (c *Container) initIntegrationServices() {
 	)
 	c.ContentMediaService = mediaCore
 	productMappingService, err := catalogmappingbootstrap.New(catalogmappingbootstrap.Dependencies{
-		Mappings:    c.ProductMappingRepo,
-		SKUMappings: c.SKUMappingRepo,
-		Products:    c.ProductRepo,
-		SKUs:        c.ProductSKURepo,
-		Categories:  c.CategoryRepo,
-		Connections: c.SiteConnectionService,
-		Media:       mediaCore,
+		Mappings:         c.ProductMappingRepo,
+		ReadOnlyBindings: mappinggormstore.NewReadOnlyBindingStore(gormdb.DB),
+		SKUMappings:      c.SKUMappingRepo,
+		Products:         c.ProductRepo,
+		SKUs:             c.ProductSKURepo,
+		Categories:       c.CategoryRepo,
+		Connections:      c.SiteConnectionService,
+		Media:            mediaCore,
 	})
 	if err != nil {
 		logger.Errorw("provider_init_product_mapping_failed", "error", err)

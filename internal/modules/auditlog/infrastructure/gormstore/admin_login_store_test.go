@@ -64,3 +64,22 @@ func TestAdminLoginLogRepository_CreateAndList(t *testing.T) {
 		t.Fatalf("expected 1 failed record, got %d/%d", total, len(failed))
 	}
 }
+
+func TestOperationAuditPersistsMetadataAndBeforeAfter(t *testing.T) {
+	db := setupAdminLoginLogTestDB(t)
+	if err := db.AutoMigrate(&domain.AdminOperationLog{}); err != nil {
+		t.Fatal(err)
+	}
+	store := auditloggormstore.NewOperationStore(db)
+	row := &domain.AdminOperationLog{OperatorAdminID: 9, RequestID: "req-9", Action: "order.status", Target: "21", Result: "success", BeforeJSON: map[string]interface{}{"status": "pending"}, AfterJSON: map[string]interface{}{"status": "paid"}}
+	if err := store.RecordOperation(row); err != nil {
+		t.Fatal(err)
+	}
+	var got domain.AdminOperationLog
+	if err := db.First(&got, row.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.BeforeJSON["status"] != "pending" || got.AfterJSON["status"] != "paid" || got.OperatorAdminID != 9 || got.RequestID != "req-9" || got.CreatedAt.IsZero() {
+		t.Fatalf("incorrect persisted event: %+v", got)
+	}
+}

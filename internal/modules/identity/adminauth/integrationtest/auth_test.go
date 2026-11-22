@@ -102,6 +102,9 @@ func TestLoginInvalidCredentials(t *testing.T) {
 	if _, err := auth.Login("nosuch", "x"); err != adminauthapp.ErrInvalidCredentials {
 		t.Fatalf("expected invalid creds for missing user, got %v", err)
 	}
+	if _, err := auth.Login("nosuch", "dummy-sentinel-not-a-secret"); err != adminauthapp.ErrInvalidCredentials {
+		t.Fatalf("dummy comparison must never authenticate missing user, got %v", err)
+	}
 }
 
 func TestParseChallengeRejectsWrongPurpose(t *testing.T) {

@@ -1,6 +1,9 @@
 package gormstore
 
 import (
+	"fmt"
+	walletdomain "github.com/dujiao-next/internal/modules/wallet/domain"
+	"reflect"
 	"testing"
 	"time"
 
@@ -227,5 +230,72 @@ func TestGetPaymentOrderAlertCountsExcludesChildOrdersAndWalletPayments(t *testi
 	}
 	if counts.PaymentsFailed != 1 {
 		t.Fatalf("payments failed want 1 got %d", counts.PaymentsFailed)
+	}
+}
+
+func TestPaymentFailureAlertsExcludeResolvedBusiness(t *testing.T) {
+	repo, db := setupDashboardRepositoryTest(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	var want []uint
+	statuses := []string{constants.OrderStatusPaid, constants.OrderStatusDelivered, constants.OrderStatusFulfilling,
+		constants.OrderStatusPartiallyDelivered, constants.OrderStatusCompleted, constants.OrderStatusPartiallyRefunded, constants.OrderStatusRefunded,
+		constants.OrderStatusCanceled, constants.OrderStatusPendingPayment}
+	for i, status := range statuses {
+		order := orderdomain.Order{OrderNo: fmt.Sprintf("resolved-%d", i), Status: status, CreatedAt: now}
+		if err := db.Create(&order).Error; err != nil {
+			t.Fatal(err)
+		}
+		p := paymentdomain.Payment{OrderID: order.ID, Status: constants.PaymentStatusFailed, ProviderType: "manual_qr", CreatedAt: now}
+		if err := db.Create(&p).Error; err != nil {
+			t.Fatal(err)
+		}
+		if status == constants.OrderStatusCanceled || status == constants.OrderStatusPendingPayment {
+			want = append(want, p.ID)
+		}
+	}
+	for i, resolution := range []string{"success-outside-window", "paid-at"} {
+		order := orderdomain.Order{OrderNo: fmt.Sprintf("other-resolution-%d", i), Status: constants.OrderStatusCanceled, CreatedAt: now}
+		if resolution == "paid-at" {
+			order.PaidAt = &now
+		}
+		if err := db.Create(&order).Error; err != nil {
+			t.Fatal(err)
+		}
+		p := paymentdomain.Payment{OrderID: order.ID, Status: constants.PaymentStatusFailed, ProviderType: "manual_qr", CreatedAt: now}
+		if err := db.Create(&p).Error; err != nil {
+			t.Fatal(err)
+		}
+		if resolution == "success-outside-window" {
+			success := paymentdomain.Payment{OrderID: order.ID, Status: constants.PaymentStatusSuccess, ProviderType: "manual_qr", CreatedAt: now.Add(-48 * time.Hour)}
+			if err := db.Create(&success).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// Recharges share order_id=0. One successful recharge must not hide an
+	// unrelated failure; stale failed payments whose recharge succeeded resolve.
+	for i, status := range []string{constants.WalletRechargeStatusSuccess, constants.WalletRechargeStatusFailed} {
+		p := paymentdomain.Payment{OrderID: 0, Status: constants.PaymentStatusFailed, ProviderType: "manual_qr", CreatedAt: now}
+		if err := db.Create(&p).Error; err != nil {
+			t.Fatal(err)
+		}
+		r := walletdomain.RechargeOrder{RechargeNo: fmt.Sprintf("recharge-%d", i), PaymentID: p.ID, Status: status, CreatedAt: now}
+		if err := db.Create(&r).Error; err != nil {
+			t.Fatal(err)
+		}
+		if status == constants.WalletRechargeStatusFailed {
+			want = append(want, p.ID)
+		}
+	}
+	success := paymentdomain.Payment{OrderID: 0, Status: constants.PaymentStatusSuccess, ProviderType: "manual_qr", CreatedAt: now}
+	if err := db.Create(&success).Error; err != nil {
+		t.Fatal(err)
+	}
+	counts, err := repo.GetPaymentOrderAlertCounts(now.Add(-time.Hour), now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts.PaymentsFailed != int64(len(want)) || !reflect.DeepEqual(counts.FailedPaymentIDs, want) {
+		t.Fatalf("got count=%d ids=%v; want ids=%v", counts.PaymentsFailed, counts.FailedPaymentIDs, want)
 	}
 }

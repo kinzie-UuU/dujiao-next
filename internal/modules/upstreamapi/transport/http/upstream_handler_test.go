@@ -9,10 +9,12 @@ import (
 	productdomain "github.com/dujiao-next/internal/modules/catalog/product/domain"
 	downstreamcontract "github.com/dujiao-next/internal/modules/downstreamcallback/contract"
 	downstreamdomain "github.com/dujiao-next/internal/modules/downstreamcallback/domain"
+	fulfillmentdomain "github.com/dujiao-next/internal/modules/fulfillment/domain"
 	orderdomain "github.com/dujiao-next/internal/modules/order/domain"
 	procurementcontract "github.com/dujiao-next/internal/modules/procurement/contract"
 	procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
 	siteconnectiondomain "github.com/dujiao-next/internal/modules/siteconnection/domain"
+	"github.com/dujiao-next/internal/shared/jsonmap"
 	"github.com/dujiao-next/internal/shared/money"
 	upstreamadapter "github.com/dujiao-next/internal/upstream"
 	"github.com/gin-gonic/gin"
@@ -247,4 +249,35 @@ func TestUpstreamOrderNeverDebitsWithoutDurableReference(t *testing.T) {
 			}
 		})
 	}
+}
+
+type customerDeliveryOrders struct {
+	Orders
+	order *orderdomain.Order
+}
+
+func (s customerDeliveryOrders) GetOrderByUser(uint, uint) (*orderdomain.Order, error) {
+	return s.order, nil
+}
+func TestGetOrderFiltersInternalDeliveryReferences(t *testing.T) {
+	f := &fulfillmentdomain.Fulfillment{Status: constants.FulfillmentStatusDelivered, Payload: "credential\n上游订单：PRIVATE", LogisticsJSON: jsonmap.JSON{"upstream_order_id": "PRIVATE", "account_id": "KEEP"}}
+	for _, order := range []*orderdomain.Order{{Fulfillment: f}, {Children: []orderdomain.Order{{Fulfillment: f}}}} {
+		h := &Handler{Dependencies: Dependencies{Orders: customerDeliveryOrders{order: order}}}
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Set(upstreamUserIDKey, uint(3))
+		c.Params = gin.Params{{Key: "id", Value: "50"}}
+		h.GetOrder(c)
+		body := rec.Body.String()
+		if rec.Code != 200 || strings.Contains(body, "PRIVATE") || !strings.Contains(body, "credential") || !strings.Contains(body, "KEEP") {
+			t.Fatalf("response=%s", body)
+		}
+	}
+	if f.LogisticsJSON["upstream_order_id"] != "PRIVATE" {
+		t.Fatal("stored metadata changed")
+	}
+}
+
+func (s customerDeliveryOrders) BuildLocalRefundRecordsForOrder(*orderdomain.Order) ([]jsonmap.JSON, error) {
+	return nil, nil
 }

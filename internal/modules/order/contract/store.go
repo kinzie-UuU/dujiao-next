@@ -50,6 +50,7 @@ type Store interface {
 	UpdateFields(id uint, updates map[string]interface{}) error
 	UpdateChildrenStatus(parentID uint, targetStatus string, now time.Time) (int64, error)
 	UpdateFieldsWhereWalletPaid(id uint, updates map[string]interface{}) (int64, error)
+	AssertNoUncertainProcurement(rootID uint) error
 	GetByIDForUpdate(id uint) (*orderdomain.Order, error)
 	GetByIDForUpdateWithChildren(id uint) (*orderdomain.Order, error)
 

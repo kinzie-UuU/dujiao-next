@@ -102,7 +102,7 @@ func (l *Lifecycle) CompleteUpstreamDelivery(order *procurementdomain.Order, ful
 		if local.RowsAffected != 1 {
 			return stale
 		}
-		updates := map[string]interface{}{"updated_at": now}
+		updates := map[string]interface{}{"updated_at": now, "submission_fulfillment": ""}
 		if fulfillment != nil {
 			updates["upstream_payload"] = fulfillment.Payload
 		}
@@ -120,10 +120,17 @@ func (l *Lifecycle) CompleteUpstreamDelivery(order *procurementdomain.Order, ful
 		if deliveredAt == nil {
 			deliveredAt = &now
 		}
-		return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "order_id"}}, DoNothing: true}).Create(&lifecycleFulfillmentRecord{
+		insert := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "order_id"}}, DoNothing: true}).Create(&lifecycleFulfillmentRecord{
 			OrderID: order.LocalOrderID, Type: constants.FulfillmentTypeUpstream, Status: constants.FulfillmentStatusDelivered, Payload: fulfillment.Payload,
 			LogisticsJSON: fulfillment.DeliveryData, DeliveredAt: deliveredAt, CreatedAt: now, UpdatedAt: now,
-		}).Error
+		})
+		if insert.Error != nil {
+			return insert.Error
+		}
+		if insert.RowsAffected != 1 {
+			return errors.New("existing fulfillment conflicts with supplier delivery; reconciliation required")
+		}
+		return nil
 	})
 	if errors.Is(err, stale) {
 		return false, nil

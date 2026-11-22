@@ -66,15 +66,29 @@ func (r *Store) Create(user *userdomain.User) error {
 }
 
 // Update 更新用户
-func (r *Store) Update(user *userdomain.User) error {
+func (r *Store) Update(user *userdomain.User, expectedVersion ...uint64) error {
 	if user == nil || user.ID == 0 {
 		return nil
 	}
-	return r.db.Model(&userdomain.User{}).
-		Where("id = ? AND deleted_at IS NULL", user.ID).
+	previous := user.TokenVersion
+	if len(expectedVersion) > 0 {
+		previous = expectedVersion[0]
+	}
+	if user.TokenVersion != previous && user.TokenVersion != previous+1 {
+		return errors.New("invalid user token version")
+	}
+	result := r.db.Model(&userdomain.User{}).
+		Where("id = ? AND deleted_at IS NULL AND token_version = ?", user.ID, previous).
 		Select("*").
-		Omit("id", "deleted_at").
-		Updates(user).Error
+		Omit("id", "deleted_at", "totp_secret", "totp_enabled_at", "totp_pending_secret", "totp_pending_expires_at", "recovery_codes").
+		Updates(user)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("stale user update rejected")
+	}
+	return nil
 }
 
 // IncrementTotalRecharged 原子累加用户累计充值金额。
@@ -287,4 +301,17 @@ func applyPagination(query *gorm.DB, page, pageSize int) *gorm.DB {
 		page = 1
 	}
 	return query.Offset((page - 1) * pageSize).Limit(pageSize)
+}
+
+func (r *Store) CompareAndSwapRecoveryCodes(id uint, previous, next string) (bool, error) {
+	if id == 0 || previous == "" || next == "" {
+		return false, errors.New("invalid recovery update")
+	}
+	result := r.db.Model(&userdomain.User{}).Where("id = ? AND deleted_at IS NULL AND totp_enabled_at IS NOT NULL AND recovery_codes = ?", id, previous).Update("recovery_codes", next)
+	return result.RowsAffected == 1, result.Error
+}
+
+func (r *Store) UpdateLastLogin(id uint, version uint64, at time.Time) (bool, error) {
+	result := r.db.Model(&userdomain.User{}).Where("id = ? AND deleted_at IS NULL AND token_version = ? AND status = ?", id, version, constants.UserStatusActive).Updates(map[string]interface{}{"last_login_at": at, "updated_at": at})
+	return result.RowsAffected == 1, result.Error
 }

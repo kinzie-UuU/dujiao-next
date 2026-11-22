@@ -2,6 +2,8 @@ package settingshttp
 
 import (
 	"errors"
+	"github.com/dujiao-next/internal/shared/operationaudit"
+	"reflect"
 
 	ginutil "github.com/dujiao-next/internal/platform/http/ginutil"
 
@@ -50,6 +52,13 @@ func (h *CaptchaHandler) UpdateCaptcha(c *gin.Context) {
 		return
 	}
 
+	old, readErr := h.captcha.GetCaptchaSetting()
+	before := operationaudit.Fields{"snapshot_available": readErr == nil}
+	if readErr == nil {
+		before["provider"] = old.Provider
+	}
+	audit := operationaudit.New("settings.captcha", "captcha_config", before)
+	defer ginutil.RecordOperation(c, audit)
 	setting, err := h.captcha.PatchCaptchaSetting(req)
 	if err != nil {
 		switch {
@@ -61,6 +70,11 @@ func (h *CaptchaHandler) UpdateCaptcha(c *gin.Context) {
 		return
 	}
 
+	after := operationaudit.Fields{"provider": setting.Provider}
+	if readErr == nil {
+		after["configuration_changed"] = !reflect.DeepEqual(old, setting)
+	}
+	audit.Success(after)
 	h.captcha.ApplyRuntime(setting)
 	_ = cache.DelAllPublicConfig(c.Request.Context())
 	response.Success(c, settingssecurity.MaskCaptchaSettingForAdmin(setting))

@@ -398,7 +398,7 @@ func (s *inventorySwitchDashboardSpy) GetInventoryAlertItems(context.Context, in
 }
 func (s *inventorySwitchDashboardSpy) GetPaymentOrderAlertCounts(context.Context, time.Time, time.Time) (dashboard.PaymentOrderAlertCountsRow, error) {
 	s.paymentCalls++
-	return dashboard.PaymentOrderAlertCountsRow{PendingPaymentOrders: 2, PaymentsFailed: 2}, nil
+	return dashboard.PaymentOrderAlertCountsRow{PendingPaymentOrders: 2, PaymentsFailed: 2, FailedPaymentIDs: []uint{1, 2}}, nil
 }
 func TestDisabledInventoryKeepsPaymentInspectionAndStopsBuilder(t *testing.T) {
 	setting := settingsmessaging.NotificationCenterDefaultSetting()
@@ -422,5 +422,234 @@ func TestDisabledInventoryKeepsPaymentInspectionAndStopsBuilder(t *testing.T) {
 	}
 	if reader.inventoryCalls != 0 || reader.paymentCalls != 1 || len(tg.messages) != 2 {
 		t.Fatalf("inventory=%d payment=%d sent=%d", reader.inventoryCalls, reader.paymentCalls, len(tg.messages))
+	}
+}
+
+func TestSecurityEventTimeUsesOriginalInstantNotDelayedDispatch(t *testing.T) {
+	for _, raw := range []string{"2026-11-04T12:34:56Z", "2026-11-04T20:34:56+08:00", "2026-11-04T07:34:56-05:00"} {
+		p := queue.NotificationDispatchPayload{EventType: constants.NotificationEventAdminLoginFailed, Data: map[string]interface{}{"occurred_at": raw}}
+		got := format.BuildTemplateVariables(p)["occurred_at"]
+		if got != "2026-11-04T12:34:56Z" {
+			t.Fatalf("%q: got %v", raw, got)
+		}
+		body := format.RenderTemplate(format.AdminSecurityTemplate(p.EventType, constants.LocaleEnUS).Body, format.BuildTemplateVariables(p))
+		if !strings.Contains(body, "Time (UTC): 2026-11-04T12:34:56Z") {
+			t.Fatalf("fixed template lost event time: %q", body)
+		}
+	}
+}
+
+func TestSecurityEventTimeMissingOrAmbiguousIsUnknown(t *testing.T) {
+	for _, raw := range []interface{}{nil, "", "2026-11-04 12:34:56", "bad", 42} {
+		p := queue.NotificationDispatchPayload{EventType: constants.NotificationEventAdminPaymentConfigChanged, Data: map[string]interface{}{"occurred_at": raw}}
+		if got := format.BuildTemplateVariables(p)["occurred_at"]; got != "—" {
+			t.Fatalf("%v: got %v", raw, got)
+		}
+	}
+	p := queue.NotificationDispatchPayload{EventType: constants.NotificationEventAdminLoginFailed}
+	if got := format.BuildTemplateVariables(p)["occurred_at"]; got != "—" {
+		t.Fatalf("missing: got %v", got)
+	}
+}
+
+func TestOtherTemplatesRetainDispatchTimeSemantics(t *testing.T) {
+	p := queue.NotificationDispatchPayload{EventType: constants.NotificationEventOrderPaidSuccess, Data: map[string]interface{}{"occurred_at": "2000-01-01T00:00:00Z", "custom": "preserved"}}
+	got := format.BuildTemplateVariables(p)
+	if got["custom"] != "preserved" || strings.Contains(got["occurred_at"].(string), "2000-") {
+		t.Fatalf("ordinary template changed: %+v", got)
+	}
+	if _, err := time.ParseInLocation("2006-01-02 15:04:05", got["occurred_at"].(string), time.Local); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPaymentFailureAlertsOnlySendForNewUnresolvedAttempts(t *testing.T) {
+	redis := miniredis.RunT(t)
+	port, _ := strconv.Atoi(redis.Port())
+	if err := cache.InitRedis(&config.RedisConfig{Enabled: true, Host: redis.Host(), Port: port, Prefix: "payment-failure-test"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cache.Client().Close(); _ = cache.InitRedis(nil) })
+	setting := settingsmessaging.NotificationCenterDefaultSetting()
+	setting.PaymentOrderAlertIntervalSeconds = 1800
+	setting.PaymentOrderAlertCheckSeconds = 86400
+	setting.Channels.Telegram = settingsmessaging.NotificationChannelSetting{Enabled: true, Recipients: []string{"123"}}
+	tg := &loginTelegramSpy{}
+	svc := NewService(notificationSettingsStub{notification: setting}, nil, nil, nil, nil, tg)
+	payload := queue.NotificationDispatchPayload{EventType: constants.NotificationEventExceptionAlert, Data: map[string]interface{}{"alert_type_key": constants.NotificationAlertTypePaymentsFailed}}
+	send := func(ids []uint, want int) {
+		t.Helper()
+		if err := svc.dispatchPaymentFailureAlert(context.Background(), setting, payload, ids); err != nil {
+			t.Fatal(err)
+		}
+		if len(tg.messages) != want {
+			t.Fatalf("ids %v: sent %d want %d", ids, len(tg.messages), want)
+		}
+	}
+	disabled := setting
+	disabled.Channels.Telegram.Enabled = false
+	if err := svc.dispatchPaymentFailureAlert(context.Background(), disabled, payload, []uint{1, 2, 3}); err != nil {
+		t.Fatal(err)
+	}
+	if len(redis.Keys()) != 0 {
+		t.Fatal("disabled delivery consumed failure identity")
+	}
+	send([]uint{1, 2, 3}, 1)
+	send([]uint{1, 2, 3, 4}, 1) // normal interval still applies
+	redis.FastForward(31 * time.Minute)
+	send([]uint{1, 2, 3}, 1) // unchanged
+	send([]uint{1, 2}, 1)    // resolved/aged-out attempts alone must not trigger
+	send([]uint{1, 2, 4}, 2) // equal count, different failure is new
+	redis.FastForward(31 * time.Minute)
+	send([]uint{2, 4}, 2)
+	tg.err = errors.New("temporary send failure")
+	if err := svc.dispatchPaymentFailureAlert(context.Background(), setting, payload, []uint{2, 4, 5}); err == nil {
+		t.Fatal("send failure swallowed")
+	}
+	tg.err = nil
+	send([]uint{2, 4, 5}, 4) // failed send did not consume dedupe/interval
+	redis.FastForward(31 * time.Minute)
+	send([]uint{2, 4, 5}, 4)
+}
+
+type failureAlertSenderFunc func() error
+
+func (f failureAlertSenderFunc) SendMessage(context.Context, string, string) error { return f() }
+
+func TestPaymentFailureAlertCacheErrorsAreRetryable(t *testing.T) {
+	redis := miniredis.RunT(t)
+	port, _ := strconv.Atoi(redis.Port())
+	if err := cache.InitRedis(&config.RedisConfig{Enabled: true, Host: redis.Host(), Port: port, Prefix: "failure-cache-test"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cache.Client().Close(); _ = cache.InitRedis(nil) })
+	setting := settingsmessaging.NotificationCenterDefaultSetting()
+	setting.PaymentOrderAlertIntervalSeconds = 1800
+	setting.Channels.Telegram = settingsmessaging.NotificationChannelSetting{Enabled: true, Recipients: []string{"123"}}
+	sends := 0
+	failWrite := false
+	sender := failureAlertSenderFunc(func() error {
+		sends++
+		if failWrite {
+			redis.SetError("ERR cache write unavailable")
+		}
+		return nil
+	})
+	svc := NewService(notificationSettingsStub{notification: setting}, nil, nil, nil, nil, sender)
+	payload := queue.NotificationDispatchPayload{EventType: constants.NotificationEventExceptionAlert, Data: map[string]interface{}{"alert_type_key": constants.NotificationAlertTypePaymentsFailed}}
+	// A malformed/unreadable cache value must not be treated as an empty seen set.
+	redis.Set("failure-cache-test:notification:payment_failures:seen", "not-json")
+	if err := svc.dispatchPaymentFailureAlert(context.Background(), setting, payload, []uint{1}); err == nil {
+		t.Fatal("cache read error swallowed")
+	}
+	if sends != 0 {
+		t.Fatal("read failure sent a notification")
+	}
+	redis.Del("failure-cache-test:notification:payment_failures:seen")
+	failWrite = true
+	if err := svc.dispatchPaymentFailureAlert(context.Background(), setting, payload, []uint{1}); err == nil {
+		t.Fatal("cache write error swallowed")
+	}
+	if sends != 1 {
+		t.Fatalf("expected one send before cache write failed, got %d", sends)
+	}
+	redis.SetError("")
+	failWrite = false
+	// Redis was also unavailable during cleanup; bounded interval expiry allows retry.
+	redis.FastForward(31 * time.Minute)
+	if err := svc.dispatchPaymentFailureAlert(context.Background(), setting, payload, []uint{1}); err != nil {
+		t.Fatal(err)
+	}
+	if sends != 2 {
+		t.Fatal("cache write failure consumed retry")
+	}
+	redis.FastForward(31 * time.Minute)
+	if err := svc.dispatchPaymentFailureAlert(context.Background(), setting, payload, []uint{1}); err != nil {
+		t.Fatal(err)
+	}
+	if sends != 2 {
+		t.Fatal("successful retry was not remembered")
+	}
+}
+
+type ignoredPaymentDashboardSpy struct {
+	inventorySwitchDashboardSpy
+	counts dashboard.PaymentOrderAlertCountsRow
+}
+
+func (s *ignoredPaymentDashboardSpy) GetPaymentOrderAlertCounts(context.Context, time.Time, time.Time) (dashboard.PaymentOrderAlertCountsRow, error) {
+	return s.counts, nil
+}
+
+func TestIgnoredPaymentFailuresFilterBeforeThresholdAndPreserveNewAlerts(t *testing.T) {
+	redis := miniredis.RunT(t)
+	port, _ := strconv.Atoi(redis.Port())
+	if err := cache.InitRedis(&config.RedisConfig{Enabled: true, Host: redis.Host(), Port: port, Prefix: "ignored-payment-test"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cache.Client().Close(); _ = cache.InitRedis(nil) })
+	counts := dashboard.PaymentOrderAlertCountsRow{PendingPaymentOrders: 7, PaymentsFailed: 3, FailedPaymentIDs: []uint{660, 673, 677}}
+	filtered := excludeIgnoredPaymentFailures(counts, []uint{660, 677})
+	if filtered.PaymentsFailed != 1 || !reflect.DeepEqual(filtered.FailedPaymentIDs, []uint{673}) || filtered.PendingPaymentOrders != 7 {
+		t.Fatalf("incorrect filtered counters: %+v", filtered)
+	}
+	if !reflect.DeepEqual(counts.FailedPaymentIDs, []uint{660, 673, 677}) || counts.PaymentsFailed != 3 {
+		t.Fatal("filter mutated original statistics")
+	}
+	setting := settingsmessaging.NotificationCenterDefaultSetting()
+	setting.InventoryAlertEnabled = false
+	setting.IgnoredPaymentIDs = []uint{660, 677}
+	setting.Channels.Telegram = settingsmessaging.NotificationChannelSetting{Enabled: true, Recipients: []string{"123"}}
+	ds := settingsstorefront.DashboardSetting{Alert: settingsstorefront.DashboardAlertSetting{PendingPaymentOrdersThreshold: 100, PaymentsFailedThreshold: 2}}
+	reader := &ignoredPaymentDashboardSpy{counts: counts}
+	tg := &loginTelegramSpy{}
+	svc := NewService(notificationSettingsStub{notification: setting, dashboard: ds}, nil, nil, reader, nil, tg)
+	payload := queue.NotificationDispatchPayload{EventType: constants.NotificationEventExceptionAlertCheck}
+	if err := svc.Dispatch(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(tg.messages) != 0 {
+		t.Fatal("unfiltered count triggered threshold")
+	}
+	// Lowering the threshold to one includes the unresolved 673, not the excluded attempts.
+	ds.Alert.PaymentsFailedThreshold = 1
+	svc = NewService(notificationSettingsStub{notification: setting, dashboard: ds}, nil, nil, reader, nil, tg)
+	if err := svc.Dispatch(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(tg.messages) != 1 || !strings.Contains(tg.messages[0], "失败记录 1 笔") {
+		t.Fatalf("remaining failure not notified: %v", tg.messages)
+	}
+	var seen []uint
+	if _, err := cache.GetJSON(context.Background(), "notification:payment_failures:seen", &seen); err != nil || !reflect.DeepEqual(seen, []uint{673}) {
+		t.Fatalf("dedupe contains excluded IDs: %v %v", seen, err)
+	}
+	redis.FastForward(31 * time.Minute)
+	if err := svc.Dispatch(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(tg.messages) != 1 {
+		t.Fatal("excluded historical attempts retriggered alert")
+	}
+	reader.counts.FailedPaymentIDs = []uint{660, 673, 677, 678}
+	reader.counts.PaymentsFailed = 4
+	if err := svc.Dispatch(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(tg.messages) != 2 || !strings.Contains(tg.messages[1], "失败记录 2 笔") {
+		t.Fatalf("new real failure suppressed: %v", tg.messages)
+	}
+	if _, err := cache.GetJSON(context.Background(), "notification:payment_failures:seen", &seen); err != nil || !reflect.DeepEqual(seen, []uint{673, 678}) {
+		t.Fatalf("new failure identity lost: %v %v", seen, err)
+	}
+	// The unrelated pending-order alert still uses its original count.
+	redis.FastForward(31 * time.Minute)
+	ds.Alert.PendingPaymentOrdersThreshold = 7
+	svc = NewService(notificationSettingsStub{notification: setting, dashboard: ds}, nil, nil, reader, nil, tg)
+	if err := svc.Dispatch(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(tg.messages) != 3 || !strings.Contains(tg.messages[2], "待支付订单 7 笔") {
+		t.Fatal("payment exclusions altered pending-order alert")
 	}
 }

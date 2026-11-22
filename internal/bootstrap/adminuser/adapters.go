@@ -53,8 +53,8 @@ func (a adminUserDirectoryAdapter) GetByEmail(email string) (*userdomain.User, e
 	return a.users.GetByEmail(email)
 }
 
-func (a adminUserDirectoryAdapter) Update(user *userdomain.User) error {
-	return a.users.Update(user)
+func (a adminUserDirectoryAdapter) Update(user *userdomain.User, expectedVersion ...uint64) error {
+	return a.users.Update(user, expectedVersion...)
 }
 
 func (a adminUserDirectoryAdapter) BatchUpdateStatus(ids []uint, status string) error {

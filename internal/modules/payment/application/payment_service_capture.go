@@ -28,6 +28,117 @@ type CapturePaymentInput struct {
 
 const manualQRProviderType = "manual_qr"
 
+const (
+	manualReceivedAmountKey    = "verified_settlement_amount"
+	manualReceivedCurrencyKey  = "verified_settlement_currency"
+	manualExpectedAmountKey    = "manual_expected_settlement_amount"
+	manualOverpaymentAmountKey = "manual_overpayment_amount"
+)
+
+var manualCNYAmountPattern = regexp.MustCompile(`^[0-9]{1,18}(?:\.[0-9]{1,2})?$`)
+
+func allowsManualOverpayment(payment *paymentdomain.Payment) bool {
+	return payment != nil && payment.ProviderType == manualQRProviderType && payment.Currency == "CNY" &&
+		(payment.ChannelType == "wechat" || payment.ChannelType == "alipay")
+}
+
+func parseManualReceivedAmount(payment *paymentdomain.Payment, raw string) (decimal.Decimal, error) {
+	// The old equality check implicitly rejected fractional cents. Keep an explicit
+	// bounded decimal grammar when allowing CNY overpayment; never round a receipt.
+	if allowsManualOverpayment(payment) && !manualCNYAmountPattern.MatchString(raw) {
+		return decimal.Zero, ErrPaymentAmountMismatch
+	}
+	amount, err := decimal.NewFromString(raw)
+	if err != nil {
+		return decimal.Zero, ErrPaymentAmountMismatch
+	}
+	return amount, nil
+}
+
+func manualReceivedAmountAllowed(payment *paymentdomain.Payment, received, expected decimal.Decimal) bool {
+	if allowsManualOverpayment(payment) {
+		return expected.IsPositive() && received.IsPositive() && !received.LessThan(expected)
+	}
+	return received.Equal(expected)
+}
+
+// Existing claims bind the real receipt, not just the quoted minimum. Old claims
+// without a receipt snapshot could only have been created by exact matching.
+func verifyReservedManualReceipt(payment *paymentdomain.Payment, received, expected decimal.Decimal, currency string) error {
+	if payment.ManualReceiptKey == nil {
+		return nil
+	}
+	rawAmount, hasAmount := payment.ProviderPayload[manualReceivedAmountKey]
+	rawCurrency, hasCurrency := payment.ProviderPayload[manualReceivedCurrencyKey]
+	if !hasAmount && !hasCurrency {
+		if !received.Equal(expected) {
+			return ErrPaymentInvalid
+		}
+		return nil
+	}
+	amountText, amountOK := rawAmount.(string)
+	storedCurrency, currencyOK := rawCurrency.(string)
+	amount, err := decimal.NewFromString(amountText)
+	if !hasAmount || !hasCurrency || !amountOK || !currencyOK || err != nil || !amount.Equal(received) || storedCurrency != currency {
+		return ErrPaymentInvalid
+	}
+	if rawExpected, exists := payment.ProviderPayload[manualExpectedAmountKey]; exists {
+		text, ok := rawExpected.(string)
+		quoted, err := decimal.NewFromString(text)
+		if !ok || err != nil || !quoted.Equal(expected) {
+			return ErrPaymentInvalid
+		}
+	}
+	return nil
+}
+
+func recordManualReceipt(payment *paymentdomain.Payment, received, expected decimal.Decimal, currency string) {
+	if payment.ProviderPayload == nil {
+		payment.ProviderPayload = jsonmap.JSON{}
+	}
+	format := func(amount decimal.Decimal) string {
+		if currency == "CNY" {
+			return amount.StringFixed(2)
+		}
+		return amount.String()
+	}
+	payment.ProviderPayload[manualReceivedAmountKey] = format(received)
+	payment.ProviderPayload[manualReceivedCurrencyKey] = currency
+	payment.ProviderPayload[manualExpectedAmountKey] = format(expected)
+	payment.ProviderPayload[manualOverpaymentAmountKey] = format(received.Sub(expected))
+}
+
+// Receipt proof remains bound during the second transaction, including a racing
+// successful callback. Ledger amount stays the quote; surplus is audit data only.
+func verifyCapturedManualReceipt(payment *paymentdomain.Payment, input PaymentCallbackInput) error {
+	if _, bound := payment.ProviderPayload[manualExpectedAmountKey]; !bound {
+		return nil // Existing pre-snapshot claims retain their original rules.
+	}
+	amount, ok := input.Payload[manualReceivedAmountKey].(string)
+	currency, currencyOK := input.Payload[manualReceivedCurrencyKey].(string)
+	if !ok || !currencyOK || strings.TrimSpace(currency) != currency {
+		return ErrPaymentInvalid
+	}
+	received, err := parseManualReceivedAmount(payment, amount)
+	if err != nil {
+		return err
+	}
+	expected, expectedCurrency, err := manualSettlement(payment)
+	if err != nil {
+		return err
+	}
+	if currency != expectedCurrency || !manualReceivedAmountAllowed(payment, received, expected) {
+		return ErrPaymentInvalid
+	}
+	for _, key := range []string{manualExpectedAmountKey, manualOverpaymentAmountKey} {
+		value, ok := input.Payload[key].(string)
+		if !ok || value != payment.ProviderPayload[key] {
+			return ErrPaymentInvalid
+		}
+	}
+	return verifyReservedManualReceipt(payment, received, expected, currency)
+}
+
 // ConfirmManualPayment 由管理员在核实到账后确认人工二维码支付。
 func (s *PaymentService) ConfirmManualPayment(paymentID uint, evidence ...paymentdomain.ManualPaymentEvidence) (*paymentdomain.Payment, error) {
 	payment, err := s.paymentRepo.GetByID(paymentID)
@@ -45,23 +156,23 @@ func (s *PaymentService) ConfirmManualPayment(paymentID uint, evidence ...paymen
 	}
 	proof := evidence[0]
 	transactionID := strings.TrimSpace(proof.TransactionID)
-	if !proof.PayerVerified || !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{9,127}$`).MatchString(transactionID) {
+	if !proof.PayerVerified || (transactionID != "" && !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{9,127}$`).MatchString(transactionID)) {
 		return nil, ErrPaymentInvalid
 	}
 	expectedAmount, expectedCurrency, settlementErr := manualSettlement(payment)
 	if settlementErr != nil {
 		return nil, settlementErr
 	}
-	received, amountErr := decimal.NewFromString(proof.Amount)
-	if amountErr != nil || !received.Equal(expectedAmount) {
+	received, amountErr := parseManualReceivedAmount(payment, proof.Amount)
+	if amountErr != nil || !manualReceivedAmountAllowed(payment, received, expectedAmount) {
 		return nil, ErrPaymentAmountMismatch
 	}
 	if proof.Currency != expectedCurrency {
 		return nil, ErrPaymentCurrencyMismatch
 	}
 	receiptKey := strings.ToLower(strings.TrimSpace(payment.ChannelType)) + ":" + strings.ToLower(transactionID)
-	// Claim the real platform receipt before capture. The nullable unique index
-	// prevents concurrent reuse across payment records; failed captures retain it.
+	// Supplied platform receipts retain cross-payment uniqueness. Without one,
+	// reserve an internal confirmation key only; never invent a platform reference.
 	if err := s.paymentRepo.WithinTransaction(func(tx paymentcontract.Transaction) error {
 		locked, err := tx.Payments().GetByIDForUpdate(paymentID)
 		if err != nil || locked == nil {
@@ -74,7 +185,7 @@ func (s *PaymentService) ConfirmManualPayment(paymentID uint, evidence ...paymen
 		if err != nil {
 			return err
 		}
-		if !received.Equal(lockedAmount) {
+		if !manualReceivedAmountAllowed(locked, received, lockedAmount) {
 			return ErrPaymentAmountMismatch
 		}
 		if proof.Currency != lockedCurrency {
@@ -82,6 +193,19 @@ func (s *PaymentService) ConfirmManualPayment(paymentID uint, evidence ...paymen
 		}
 		if locked.Status != constants.PaymentStatusSuccess && locked.Status != constants.PaymentStatusPending && locked.Status != constants.PaymentStatusInitiated && locked.Status != constants.PaymentStatusExpired {
 			return ErrPaymentStatusInvalid
+		}
+		if strings.TrimSpace(proof.TransactionID) == "" {
+			// Preserve a previous claim on retries, including legacy receipt claims.
+			transactionID = locked.ProviderRef
+			receiptKey = fmt.Sprintf("admin-confirm:%d", paymentID)
+			if locked.ManualReceiptKey != nil {
+				receiptKey = *locked.ManualReceiptKey
+			} else {
+				transactionID = ""
+			}
+		}
+		if err := verifyReservedManualReceipt(locked, received, lockedAmount, proof.Currency); err != nil {
+			return err
 		}
 		payment = locked
 		if locked.Status == constants.PaymentStatusSuccess {
@@ -104,20 +228,29 @@ func (s *PaymentService) ConfirmManualPayment(paymentID uint, evidence ...paymen
 			if *locked.ManualReceiptKey != receiptKey {
 				return ErrPaymentInvalid
 			}
+			if _, bound := locked.ProviderPayload[manualExpectedAmountKey]; !bound {
+				recordManualReceipt(locked, received, lockedAmount, proof.Currency)
+				if err := tx.Payments().Update(locked); err != nil {
+					return ErrPaymentUpdateFailed
+				}
+			}
 			return nil
 		}
 		if locked.Status == constants.PaymentStatusSuccess {
 			return ErrPaymentStatusInvalid
 		}
-		previous, err := tx.Payments().GetLatestByProviderRef(transactionID)
-		if err != nil {
-			return ErrPaymentUpdateFailed
-		}
-		if previous != nil && previous.ID != paymentID {
-			return ErrPaymentInvalid
+		if transactionID != "" {
+			previous, err := tx.Payments().GetLatestByProviderRef(transactionID)
+			if err != nil {
+				return ErrPaymentUpdateFailed
+			}
+			if previous != nil && previous.ID != paymentID {
+				return ErrPaymentInvalid
+			}
 		}
 		locked.ManualReceiptKey = &receiptKey
 		locked.ProviderRef = transactionID
+		recordManualReceipt(locked, received, lockedAmount, proof.Currency)
 		if err := tx.Payments().Update(locked); err != nil {
 			return ErrPaymentInvalid
 		}
@@ -133,6 +266,10 @@ func (s *PaymentService) ConfirmManualPayment(paymentID uint, evidence ...paymen
 		return nil, ErrPaymentStatusInvalid
 	}
 
+	verification := "manual_platform_record_review"
+	if strings.TrimSpace(proof.TransactionID) == "" {
+		verification = "admin_attestation"
+	}
 	paidAt := time.Now()
 	return s.HandleCallback(PaymentCallbackInput{
 		PaymentID:   payment.ID,
@@ -143,12 +280,14 @@ func (s *PaymentService) ConfirmManualPayment(paymentID uint, evidence ...paymen
 		Currency:    payment.Currency,
 		PaidAt:      &paidAt,
 		Payload: jsonmap.JSON{
-			"manual_confirmed_by_admin":    true,
-			"manual_confirmed_at":          paidAt.Format(time.RFC3339),
-			"payer_verified_by_admin":      true,
-			"receipt_verification":         "manual_platform_record_review",
-			"verified_settlement_amount":   proof.Amount,
-			"verified_settlement_currency": proof.Currency,
+			"manual_confirmed_by_admin": true,
+			"manual_confirmed_at":       paidAt.Format(time.RFC3339),
+			"payer_verified_by_admin":   true,
+			"receipt_verification":      verification,
+			manualReceivedAmountKey:     payment.ProviderPayload[manualReceivedAmountKey],
+			manualReceivedCurrencyKey:   payment.ProviderPayload[manualReceivedCurrencyKey],
+			manualExpectedAmountKey:     payment.ProviderPayload[manualExpectedAmountKey],
+			manualOverpaymentAmountKey:  payment.ProviderPayload[manualOverpaymentAmountKey],
 		},
 	})
 }
@@ -290,7 +429,13 @@ func mapProviderErrorToService(err error) error {
 // verifyManualCapture runs under the capture transaction, closing the gap between
 // receipt reservation and delivery/wallet credit and blocking alternate callbacks.
 func verifyManualCapture(store paymentcontract.Store, payment *paymentdomain.Payment, status string, input PaymentCallbackInput) error {
-	if payment == nil || payment.ProviderType != manualQRProviderType || status != constants.PaymentStatusSuccess || payment.Status == constants.PaymentStatusSuccess {
+	if payment == nil || payment.ProviderType != manualQRProviderType || status != constants.PaymentStatusSuccess {
+		return nil
+	}
+	if err := verifyCapturedManualReceipt(payment, input); err != nil {
+		return err
+	}
+	if payment.Status == constants.PaymentStatusSuccess {
 		return nil
 	}
 	if payment.ManualReceiptKey == nil || input.ProviderRef != payment.ProviderRef || input.Payload["payer_verified_by_admin"] != true {
@@ -356,4 +501,17 @@ func manualSettlement(payment *paymentdomain.Payment) (decimal.Decimal, string, 
 		return decimal.Zero, "", ErrPaymentAmountMismatch
 	}
 	return amount, currency, nil
+}
+
+// populateManualSettlement exposes only validated quote totals to the admin UI.
+// Raw gateway payloads remain redacted by the HTTP layer.
+func populateManualSettlement(payment *paymentdomain.Payment) {
+	payment.SettlementAmount, payment.SettlementCurrency = "", ""
+	if payment.ProviderType != manualQRProviderType {
+		return
+	}
+	amount, currency, err := manualSettlement(payment)
+	if err == nil {
+		payment.SettlementAmount, payment.SettlementCurrency = amount.String(), currency
+	}
 }

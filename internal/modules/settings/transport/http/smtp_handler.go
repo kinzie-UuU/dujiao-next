@@ -2,6 +2,7 @@ package settingshttp
 
 import (
 	"errors"
+	"github.com/dujiao-next/internal/shared/operationaudit"
 	"strings"
 
 	ginutil "github.com/dujiao-next/internal/platform/http/ginutil"
@@ -63,6 +64,13 @@ func (h *SMTPHandler) UpdateSMTP(c *gin.Context) {
 		return
 	}
 
+	old, readErr := h.smtp.GetSMTPSetting()
+	before := operationaudit.Fields{"snapshot_available": false}
+	if readErr == nil {
+		before = smtpAuditFields(old)
+	}
+	audit := operationaudit.New("settings.smtp", "smtp_config", before)
+	defer ginutil.RecordOperation(c, audit)
 	setting, err := h.smtp.PatchSMTPSetting(req)
 	if err != nil {
 		switch {
@@ -74,6 +82,14 @@ func (h *SMTPHandler) UpdateSMTP(c *gin.Context) {
 		return
 	}
 
+	after := smtpAuditFields(setting)
+	if readErr == nil {
+		after["password_changed"] = old.Password != setting.Password
+		after["username_changed"] = old.Username != setting.Username
+		after["host_changed"] = old.Host != setting.Host
+		after["from_changed"] = old.From != setting.From || old.FromName != setting.FromName
+	}
+	audit.Success(after)
 	h.smtp.ApplyRuntime(setting)
 	response.Success(c, settingsmessaging.MaskSMTPSettingForAdmin(setting))
 }
@@ -114,4 +130,9 @@ func (h *SMTPHandler) TestSMTP(c *gin.Context) {
 	}
 
 	response.Success(c, gin.H{"sent": true})
+}
+
+func smtpAuditFields(s settingsmessaging.SMTPSetting) operationaudit.Fields {
+	return operationaudit.Fields{"enabled": s.Enabled, "port": s.Port, "use_tls": s.UseTLS, "use_ssl": s.UseSSL, "order_notification_enabled": s.OrderNotificationEnabled,
+		"verify_expire_minutes": s.VerifyCode.ExpireMinutes, "verify_send_interval_seconds": s.VerifyCode.SendIntervalSeconds, "verify_max_attempts": s.VerifyCode.MaxAttempts, "verify_length": s.VerifyCode.Length}
 }

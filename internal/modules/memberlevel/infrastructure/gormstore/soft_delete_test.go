@@ -2,6 +2,7 @@ package gormstore
 
 import (
 	"fmt"
+	userdomain "github.com/dujiao-next/internal/modules/identity/user/domain"
 	"testing"
 	"time"
 
@@ -121,5 +122,30 @@ func TestPriceStoreSoftDeleteHidesPriceFromEveryReadPath(t *testing.T) {
 	}
 	if raw.DeletedAt == nil {
 		t.Fatal("deleted price must retain a non-nil deleted_at marker")
+	}
+}
+
+func TestMembershipWriteCannotRestoreAuthenticationSnapshot(t *testing.T) {
+	db := newMemberLevelStoreTestDB(t)
+	if err := db.AutoMigrate(&userdomain.User{}); err != nil {
+		t.Fatal(err)
+	}
+	user := &userdomain.User{Email: "membership@example.invalid", PasswordHash: "old", Status: "active"}
+	if err := db.Create(user).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&userdomain.User{}).Where("id = ?", user.ID).Updates(map[string]interface{}{"password_hash": "new", "token_version": 1, "recovery_codes": "consumed"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	user.MemberLevelID = 7
+	if err := NewUserStore(db).Update(user); err != nil {
+		t.Fatal(err)
+	}
+	var current userdomain.User
+	if err := db.First(&current, user.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if current.PasswordHash != "new" || current.TokenVersion != 1 || current.RecoveryCodes != "consumed" || current.MemberLevelID != 7 {
+		t.Fatal("membership update overwrote authentication state")
 	}
 }

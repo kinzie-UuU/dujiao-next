@@ -377,6 +377,22 @@ func TestConfirmAdminManualPayment(t *testing.T) {
 		t.Fatalf("confirmed payment id want %d got %d", fixture.OrderPaymentID, got)
 	}
 }
+func TestConfirmAdminManualPaymentWithoutTransaction(t *testing.T) {
+	h, fixture := setupAdminPaymentHandlerTest(t)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(fixture.OrderPaymentID), 10)}}
+	c.Request = httptest.NewRequest(http.MethodPost, "/admin/payments/11/manual-confirm", strings.NewReader(`{"payer_verified":true,"amount":"100.00","currency":"CNY"}`))
+
+	h.ConfirmAdminManualPayment(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status want 200 got %d: %s", w.Code, w.Body.String())
+	}
+	if got := h.payments.(*fakeAdminPaymentQuery).confirmedID; got != fixture.OrderPaymentID {
+		t.Fatalf("confirmed payment id want %d got %d", fixture.OrderPaymentID, got)
+	}
+}
 
 func TestGetAdminPaymentsFiltersByUserID(t *testing.T) {
 	h, fixture := setupAdminPaymentHandlerTest(t)
@@ -717,5 +733,13 @@ func TestMissingChannelSecurityCannotWrite(t *testing.T) {
 	h.DeletePaymentChannel(c)
 	if catalog.writes != 0 {
 		t.Fatal("missing guard allowed mutation")
+	}
+}
+
+func TestAdminPaymentRedactionPreservesOnlySafeSettlement(t *testing.T) {
+	p := paymentdomain.Payment{SettlementAmount: "450", SettlementCurrency: "TWD", ProviderPayload: jsonmap.JSON{"secret": "hidden"}, PayURL: "secret", QRCode: "secret"}
+	safe := redactAdminPayment(p)
+	if safe.SettlementAmount != "450" || safe.SettlementCurrency != "TWD" || safe.ProviderPayload != nil || safe.PayURL != "" || safe.QRCode != "" {
+		t.Fatal("safe settlement redaction failed")
 	}
 }

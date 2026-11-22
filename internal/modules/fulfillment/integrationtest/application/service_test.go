@@ -11,6 +11,7 @@ import (
 	fulfillmentgormstore "github.com/dujiao-next/internal/modules/fulfillment/infrastructure/gormstore"
 	orderdomain "github.com/dujiao-next/internal/modules/order/domain"
 	ordergormstore "github.com/dujiao-next/internal/modules/order/infrastructure/gormstore"
+	"github.com/dujiao-next/internal/modules/procurement/backupstate"
 
 	"github.com/dujiao-next/internal/constants"
 	cardsecretdomain "github.com/dujiao-next/internal/modules/cardsecret/domain"
@@ -36,6 +37,7 @@ func setupFulfillmentServiceTestDB(t *testing.T) *gorm.DB {
 		&orderdomain.Order{},
 		&orderdomain.OrderItem{},
 		&fulfillmentdomain.Fulfillment{},
+		&backupstate.Claim{},
 		&cardsecretdomain.Secret{},
 		&cardsecretdomain.Batch{},
 	); err != nil {

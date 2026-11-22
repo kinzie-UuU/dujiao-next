@@ -550,6 +550,20 @@ export interface AdminSiteConnection {
   updated_at: string
 }
 
+export interface AdminReadOnlySupplierBinding {
+  id: number
+  connection_id: number
+  local_product_id: number
+  local_sku_id: number
+  upstream_product_id: number
+  upstream_sku_code: string
+  upstream_price: string
+  currency: string
+  upstream_stock: number
+  quoted_at: string
+  purchase_enabled: false
+}
+
 // --- ProductMapping ---
 export type UpstreamProductStatus = 'active' | 'inactive' | 'deleted'
 

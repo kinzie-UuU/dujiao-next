@@ -3,6 +3,7 @@ package orderhttp
 import (
 	"errors"
 	"fmt"
+	"github.com/dujiao-next/internal/shared/operationaudit"
 	"strings"
 	"time"
 
@@ -49,6 +50,7 @@ type OrderListFilter struct {
 type OrderQuery interface {
 	ListOrdersForAdmin(filter OrderListFilter) ([]orderdomain.Order, int64, error)
 	GetOrderForAdmin(orderID uint) (*orderdomain.Order, error)
+	ReadOrderAuditStatus(orderID uint) (string, error)
 	UpdateOrderStatus(orderID uint, status string) (*orderdomain.Order, error)
 }
 
@@ -417,6 +419,12 @@ func (h *AdminHandler) AdminUpdateOrderStatus(c *gin.Context) {
 		return
 	}
 
+	before := operationaudit.Fields{"snapshot_available": false}
+	if status, readErr := h.orders.ReadOrderAuditStatus(orderID); readErr == nil {
+		before = operationaudit.Fields{"status": status}
+	}
+	audit := operationaudit.New("order.status", fmt.Sprint(orderID), before)
+	defer ginutil.RecordOperation(c, audit)
 	order, err := h.orders.UpdateOrderStatus(orderID, req.Status)
 	if err != nil {
 		switch {
@@ -430,5 +438,6 @@ func (h *AdminHandler) AdminUpdateOrderStatus(c *gin.Context) {
 		return
 	}
 
+	audit.Success(operationaudit.Fields{"status": order.Status})
 	response.Success(c, order)
 }

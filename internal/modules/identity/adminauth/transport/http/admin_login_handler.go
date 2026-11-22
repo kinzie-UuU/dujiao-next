@@ -53,6 +53,7 @@ type CaptchaVerifier interface {
 type LoginAuthService interface {
 	Login(username, password string) (*AuthLoginResult, error)
 	ChangePassword(adminID uint, oldPassword, newPassword string) error
+	Logout(adminID uint, version uint64) error
 }
 
 // AdminLoginHandler 处理管理员登录与改密 HTTP 请求。
@@ -247,4 +248,23 @@ func notifyAdminLoginFailure(c *gin.Context, notifier AdminLoginNotifier, method
 	if n, ok := notifier.(AdminLoginFailureNotifier); ok {
 		n.NotifyAdminLoginFailure(AdminLoginFailureNotification{ClientIP: c.ClientIP(), Method: method})
 	}
+}
+
+// Logout revokes the caller's session version, including other devices.
+func (h *AdminLoginHandler) Logout(c *gin.Context) {
+	id, ok := ginutil.GetAdminID(c)
+	if !ok {
+		return
+	}
+	value, exists := c.Get("admin_token_version")
+	version, valid := value.(uint64)
+	if !exists || !valid {
+		ginutil.RespondError(c, response.CodeUnauthorized, "error.token_invalid", nil)
+		return
+	}
+	if err := h.auth.Logout(id, version); err != nil {
+		ginutil.RespondError(c, response.CodeInternal, "error.save_failed", err)
+		return
+	}
+	response.Success(c, nil)
 }

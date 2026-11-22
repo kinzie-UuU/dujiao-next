@@ -58,14 +58,13 @@ func TestProcurementUsesCompleteVerticalLayout(t *testing.T) {
 
 	expected := map[string][]string{
 		"service.go": {"NewService"},
-		"create.go":  {"CreateForOrder", "createProcurementForSingleOrder", "enqueuePending", "hasUpstreamItems"},
+		"create.go":  {"CreateForOrder", "createProcurementForSingleOrder", "enqueuePending", "hasUpstreamItems", "RetryPendingSubmissions"},
 		"submit.go": {
 			"SubmitToUpstream", "markProcurementError", "rejectProcurement",
-			"rollbackLocalOrderOnProcurementFailure", "notifyProcurementFailure", "handleSubmitFailure",
-			"isRetryableErrorCode", "parseRetryIntervals",
+			"rollbackLocalOrderOnProcurementFailure", "notifyProcurementFailure", "markSubmissionUncertain",
 		},
 		"callback.go": {"HandleUpstreamCallback", "isUpstreamTransitionAllowed"},
-		"poll.go":     {"PollUpstreamStatus", "requeuePoll", "SyncAcceptedOrders", "mapProcurementUpstreamStatus"},
+		"poll.go":     {"PollUpstreamStatus", "requeuePoll", "SyncAcceptedOrders", "mapProcurementUpstreamStatus", "deliverSubmissionReceipt"},
 		"query.go": {
 			"GetByID", "GetByLocalOrderNo", "List", "StatsByStatus", "FillParentOrderNo", "fillParentOrderNos",
 			"applyProcurementLocalRefundedAmountFallback", "shouldSyncUpstreamRefundStatus",

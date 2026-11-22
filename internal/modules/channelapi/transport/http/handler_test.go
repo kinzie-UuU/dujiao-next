@@ -494,3 +494,11 @@ func TestBuildChannelPaymentResponse_USDTQRExposesWalletFields(t *testing.T) {
 		t.Fatalf("interaction_mode: got %v want qr", got)
 	}
 }
+
+func TestChannelDeliveryFiltersInternalReferences(t *testing.T) {
+	f := &fulfillmentdomain.Fulfillment{Payload: "credential\n上游订单：PRIVATE"}
+	response := buildChannelOrderDetailResponse(&orderdomain.Order{Fulfillment: f, Children: []orderdomain.Order{{Fulfillment: f}}}, "zh-CN")
+	if response["fulfillment_result"] != "credential" || response["children"].([]gin.H)[0]["fulfillment"].(gin.H)["payload"] != "credential" {
+		t.Fatalf("delivery not filtered")
+	}
+}

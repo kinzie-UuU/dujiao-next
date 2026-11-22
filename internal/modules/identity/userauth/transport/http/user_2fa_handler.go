@@ -14,10 +14,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const (
-	userChallengeMaxFailures = 5
-)
-
 var (
 	ErrTOTPAlreadyEnabled  = errors.New("totp already enabled")
 	ErrTOTPNotEnabled      = errors.New("totp not enabled")
@@ -52,18 +48,18 @@ type UserTOTPEnableResult struct {
 
 // UserChallengeClaims 是 transport 层挑战 token 视图。
 type UserChallengeClaims struct {
-	ResellerID  uint
-	UserID      uint
-	JTI         string
-	RememberMe  bool
-	LoginSource string
+	TokenVersion uint64
+	ResellerID   uint
+	UserID       uint
+	JTI          string
+	RememberMe   bool
+	LoginSource  string
 }
 
-// User2FAChallengeStore 管理挑战失败计数与撤销。
+// User2FAChallengeStore atomically bounds attempts and consumes each challenge.
 type User2FAChallengeStore interface {
-	IsRevoked(ctx context.Context, jti string) bool
-	BumpFails(ctx context.Context, jti string) int64
-	Revoke(ctx context.Context, jti string)
+	Reserve(ctx context.Context, jti string) (bool, error)
+	Consume(ctx context.Context, jti string) (bool, error)
 }
 
 // User2FATOTPService 是 2FA 绑定管理端口。
@@ -80,7 +76,7 @@ type User2FATOTPService interface {
 // User2FAAuthService 是 2FA 登录完成端口。
 type User2FAAuthService interface {
 	ParseUserChallengeToken(tokenString string) (*UserChallengeClaims, error)
-	CompleteLoginAfter2FA(ctx context.Context, userID uint, rememberMe bool) (*AuthLoginResult, error)
+	CompleteLoginAfter2FA(ctx context.Context, userID uint, rememberMe bool, expectedVersion ...uint64) (*AuthLoginResult, error)
 	GetUserEmail(userID uint) (string, error)
 }
 
@@ -287,8 +283,17 @@ func (h *User2FAHandler) VerifyUser2FA(c *gin.Context) {
 		ginutil.RespondError(c, response.CodeUnauthorized, "error.totp_challenge_invalid", nil)
 		return
 	}
-	ctx := context.Background()
-	if h.challenges != nil && h.challenges.IsRevoked(ctx, claims.JTI) {
+	if claims.JTI == "" || claims.UserID == 0 || h.challenges == nil {
+		ginutil.RespondError(c, response.CodeInternal, "error.login_failed", nil)
+		return
+	}
+	ctx := c.Request.Context()
+	allowed, storeErr := h.challenges.Reserve(ctx, claims.JTI)
+	if storeErr != nil {
+		ginutil.RespondError(c, response.CodeInternal, "error.login_failed", storeErr)
+		return
+	}
+	if !allowed {
 		h.recordLogin(c, "", claims.UserID, constants.LoginLogStatusFailed, constants.LoginLogFailReasonChallengeInvalid, resolvedChallengeLoginSource(claims))
 		ginutil.RespondError(c, response.CodeUnauthorized, "error.totp_challenge_invalid", nil)
 		return
@@ -297,10 +302,6 @@ func (h *User2FAHandler) VerifyUser2FA(c *gin.Context) {
 	verifyErr := h.verifyUserChallengeAttempt(claims.UserID, req.Code, req.RecoveryCode)
 	email, _ := h.auth.GetUserEmail(claims.UserID)
 	if verifyErr != nil {
-		failCnt := int64(0)
-		if h.challenges != nil {
-			failCnt = h.challenges.BumpFails(ctx, claims.JTI)
-		}
 		var failReason string
 		switch {
 		case errors.Is(verifyErr, ErrTOTPRecoveryInvalid):
@@ -311,13 +312,6 @@ func (h *User2FAHandler) VerifyUser2FA(c *gin.Context) {
 			failReason = constants.LoginLogFailReasonInternalError
 		}
 		h.recordLogin(c, email, claims.UserID, constants.LoginLogStatusFailed, failReason, resolvedChallengeLoginSource(claims))
-		if failCnt >= userChallengeMaxFailures {
-			if h.challenges != nil {
-				h.challenges.Revoke(ctx, claims.JTI)
-			}
-			ginutil.RespondError(c, response.CodeUnauthorized, "error.totp_too_many_attempts", nil)
-			return
-		}
 		switch {
 		case errors.Is(verifyErr, ErrTOTPCodeInvalid):
 			ginutil.RespondError(c, response.CodeUnauthorized, "error.totp_code_invalid", nil)
@@ -328,10 +322,16 @@ func (h *User2FAHandler) VerifyUser2FA(c *gin.Context) {
 		}
 		return
 	}
-	if h.challenges != nil {
-		h.challenges.Revoke(ctx, claims.JTI)
+	consumed, storeErr := h.challenges.Consume(ctx, claims.JTI)
+	if storeErr != nil {
+		ginutil.RespondError(c, response.CodeInternal, "error.login_failed", storeErr)
+		return
 	}
-	loginRes, err := h.auth.CompleteLoginAfter2FA(c.Request.Context(), claims.UserID, claims.RememberMe)
+	if !consumed {
+		ginutil.RespondError(c, response.CodeUnauthorized, "error.totp_challenge_invalid", nil)
+		return
+	}
+	loginRes, err := h.auth.CompleteLoginAfter2FA(c.Request.Context(), claims.UserID, claims.RememberMe, claims.TokenVersion)
 	if err != nil {
 		ginutil.RespondError(c, response.CodeInternal, "error.login_failed", err)
 		return

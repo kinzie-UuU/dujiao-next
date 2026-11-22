@@ -20,11 +20,15 @@ func (s *Service) RetryManual(id uint) error {
 		return procurementcontract.ErrNotFound
 	}
 
+	if procOrder.Status == constants.ProcurementStatusSubmitted || procOrder.Status == constants.ProcurementStatusUncertain || (procOrder.SubmissionVersion == 0 && (procOrder.Status == "pending" || procOrder.Status == "failed" || procOrder.Status == "rejected")) {
+		return procurementcontract.ErrStatusInvalid
+	}
+
 	if procOrder.UpstreamOrderID == 0 && procOrder.UpstreamOrderNo != "" {
 		// This supplier has already accepted and charged this order.
 		return procurementcontract.ErrStatusInvalid
 	}
-	if procOrder.Status != "failed" && procOrder.Status != "rejected" {
+	if procOrder.SubmissionVersion != 1 || procOrder.SubmittedAt != nil || procOrder.SubmissionRequestSHA256 != "" || (procOrder.Status != "failed" && procOrder.Status != "rejected") {
 		return procurementcontract.ErrStatusInvalid
 	}
 
@@ -58,6 +62,10 @@ func (s *Service) CancelManual(id uint) error {
 	}
 	if procOrder == nil {
 		return procurementcontract.ErrNotFound
+	}
+
+	if procOrder.Status == constants.ProcurementStatusSubmitted || procOrder.Status == constants.ProcurementStatusUncertain || (procOrder.SubmissionVersion == 0 && (procOrder.Status == "pending" || procOrder.Status == "failed" || procOrder.Status == "rejected")) {
+		return procurementcontract.ErrStatusInvalid
 	}
 
 	// 已交付/已退款的不能取消

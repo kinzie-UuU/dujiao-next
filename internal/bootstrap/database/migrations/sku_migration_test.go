@@ -13,6 +13,7 @@ import (
 
 	productdomain "github.com/dujiao-next/internal/modules/catalog/product/domain"
 	orderdomain "github.com/dujiao-next/internal/modules/order/domain"
+	backupstate "github.com/dujiao-next/internal/modules/procurement/backupstate"
 	procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
 	resellerdomain "github.com/dujiao-next/internal/modules/reseller/domain"
 	settingsstore "github.com/dujiao-next/internal/modules/settings/infrastructure/gormstore"
@@ -452,6 +453,26 @@ func TestAutoMigrateOwnsResellerSchemaAndCrossModuleConstraints(t *testing.T) {
 	}
 }
 
+func TestBackupGateMigrationStartsClosedAndDoesNotOverwriteState(t *testing.T) {
+	db := setupRegistryMigrationTestDB(t)
+	if err := AutoMigrate(); err != nil {
+		t.Fatal(err)
+	}
+	var gate backupstate.Gate
+	if err := db.First(&gate, 1).Error; err != nil || gate.Enabled {
+		t.Fatalf("new gate not closed: %v", err)
+	}
+	if err := db.Model(&backupstate.Gate{}).Where("id = 1").Update("enabled", true).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := AutoMigrate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&gate, 1).Error; err != nil || !gate.Enabled {
+		t.Fatalf("existing gate overwritten: %v", err)
+	}
+}
+
 func TestEnsureCartForeignKeyConstraintsPreservesRowsAndEnforcesReferences(t *testing.T) {
 	db := setupRegistryMigrationTestDB(t)
 	for _, statement := range []string{
@@ -568,7 +589,7 @@ func TestAutoMigrateReplacesSupersededProcurementConstraintName(t *testing.T) {
 	if err := db.AutoMigrate(&procurementOrderIndexSchema{}); err != nil {
 		t.Fatalf("create indexed superseded procurement schema failed: %v", err)
 	}
-	assertModelIndexesExist(t, db, &procurementdomain.Order{})
+	assertModelIndexesExist(t, db, &procurementOrderIndexSchema{})
 	if !db.Migrator().HasConstraint(&supersededProcurementOrderSchema{}, supersededProcurementOrderForeignKeyConstraint) {
 		t.Fatalf("test setup did not create superseded procurement constraint")
 	}
@@ -591,5 +612,27 @@ func TestAutoMigrateReplacesSupersededProcurementConstraintName(t *testing.T) {
 	assertModelIndexesExist(t, db, &procurementdomain.Order{})
 	if !db.Migrator().HasConstraint(&procurementdomain.Order{}, procurementOrderForeignKeyConstraint) {
 		t.Errorf("procurement index repair removed canonical constraint %s", procurementOrderForeignKeyConstraint)
+	}
+}
+
+func TestProcurementUniquenessMigrationRejectsDuplicateHistoryBeforeWrites(t *testing.T) {
+	db := setupSKUMigrationTestDB(t)
+	if err := db.Exec("CREATE TABLE procurement_orders (id INTEGER PRIMARY KEY, local_order_id INTEGER NOT NULL, deleted_at TEXT)").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("INSERT INTO procurement_orders VALUES (1,7,NULL),(2,7,'2026-01-01')").Error; err != nil {
+		t.Fatal(err)
+	}
+	err := AutoMigrate()
+	if err == nil || !strings.Contains(err.Error(), "duplicate history requires review") {
+		t.Fatalf("wrong migration result: %v", err)
+	}
+	var count int64
+	db.Table("procurement_orders").Count(&count)
+	if count != 2 {
+		t.Fatalf("history changed: %d", count)
+	}
+	if db.Migrator().HasColumn("procurement_orders", "submission_version") {
+		t.Fatal("schema mutated before rejecting duplicates")
 	}
 }

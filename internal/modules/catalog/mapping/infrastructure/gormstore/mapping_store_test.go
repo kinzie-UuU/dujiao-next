@@ -52,6 +52,36 @@ func setupMappingStoreTest(t *testing.T) (*MappingStore, *SKUMappingStore, *gorm
 	return NewMappingStore(db), NewSKUMappingStore(db), db
 }
 
+func TestReadOnlyQuoteDoesNotOverwriteNewerRequest(t *testing.T) {
+	_, _, db := setupMappingStoreTest(t)
+	if err := db.AutoMigrate(&mappingdomain.ReadOnlyBinding{}); err != nil {
+		t.Fatal(err)
+	}
+	store := NewReadOnlyBindingStore(db)
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	quote := func(at time.Time, price string, stock int) *mappingdomain.ReadOnlyBinding {
+		return &mappingdomain.ReadOnlyBinding{ConnectionID: 4, LocalProductID: 50, LocalSKUID: 85, UpstreamProductID: 1, UpstreamSKUCode: "supplier-item", Currency: "USD", UpstreamPrice: price, UpstreamStock: stock, QuotedAt: at}
+	}
+	newer := quote(now, "1.50", 2)
+	if err := store.StoreReadOnlyQuote(newer); err != nil {
+		t.Fatal(err)
+	}
+	older := quote(now.Add(-time.Second), "0.96", 10)
+	if err := store.StoreReadOnlyQuote(older); err != nil {
+		t.Fatal(err)
+	}
+	if older.UpstreamPrice != "1.50" || older.UpstreamStock != 2 || !older.QuotedAt.Equal(now) {
+		t.Fatalf("stale quote overwrote latest: %+v", older)
+	}
+	latest := quote(now.Add(time.Second), "2.00", 1)
+	if err := store.StoreReadOnlyQuote(latest); err != nil {
+		t.Fatal(err)
+	}
+	if latest.UpstreamPrice != "2.00" || latest.UpstreamStock != 1 || !latest.QuotedAt.Equal(now.Add(time.Second)) {
+		t.Fatalf("new quote was not stored: %+v", latest)
+	}
+}
+
 func createMappedProduct(t *testing.T, db *gorm.DB, slug, title string) *productdomain.Product {
 	t.Helper()
 	product := &productdomain.Product{

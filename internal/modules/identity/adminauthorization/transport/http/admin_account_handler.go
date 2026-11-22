@@ -133,6 +133,7 @@ func (h *AdminHandler) UpdateAuthzAdmin(c *gin.Context) {
 		return
 	}
 
+	expectedVersion := admin.TokenVersion
 	var req authzUpdateAdminPayload
 	if err := c.ShouldBindJSON(&req); err != nil {
 		ginutil.RespondBindError(c, err)
@@ -193,9 +194,6 @@ func (h *AdminHandler) UpdateAuthzAdmin(c *gin.Context) {
 			return
 		}
 		admin.PasswordHash = hash
-		now := time.Now()
-		admin.TokenVersion++
-		admin.TokenInvalidBefore = &now
 		updatedFields = append(updatedFields, "password")
 	}
 
@@ -204,11 +202,16 @@ func (h *AdminHandler) UpdateAuthzAdmin(c *gin.Context) {
 		return
 	}
 
-	if err := h.admins.Update(admin); err != nil {
+	// Every account edit changes the version, including role/username changes,
+	// so another editor cannot silently restore stale privileges or credentials.
+	now := time.Now()
+	admin.TokenVersion++
+	admin.TokenInvalidBefore = &now
+	if err := h.admins.Update(admin, expectedVersion); err != nil {
 		ginutil.RespondError(c, response.CodeInternal, "error.admin_update_failed", err)
 		return
 	}
-	_ = h.authState.SetAdminAuthState(c.Request.Context(), admin)
+	_ = h.authState.DelAdminAuthState(c.Request.Context(), admin.ID)
 
 	sort.Strings(updatedFields)
 	if c.GetUint("admin_id") == admin.ID {

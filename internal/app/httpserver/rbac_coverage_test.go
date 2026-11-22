@@ -60,6 +60,10 @@ func TestAllAdminRoutesCoveredByBuiltinRoles(t *testing.T) {
 
 	var uncovered []adminRoute
 	for _, r := range routes {
+		// This exact JWT-authenticated self-only operation is covered by a separate integration test.
+		if authz.IsAdminSelfSessionOperation(r.object, r.method) {
+			continue
+		}
 		matched := false
 		for _, p := range policies {
 			if p.action != "*" && p.action != r.method {

@@ -216,6 +216,7 @@ func JWTAuthMiddleware(secretKey string, adminRepo admincontract.Store) gin.Hand
 		}
 
 		c.Set("admin_id", claims.AdminID)
+		c.Set("admin_token_version", claims.TokenVersion)
 		c.Set("username", claims.Username)
 		c.Set(adminIsSuperContextKey, admin.IsSuper)
 		c.Next()
@@ -265,6 +266,12 @@ func AdminRBACMiddleware(authzService *authz.Service) gin.HandlerFunc {
 			msg := i18n.T(i18n.ResolveLocale(c), "error.unauthorized")
 			response.Unauthorized(c, msg)
 			c.Abort()
+			return
+		}
+
+		// A logged-in administrator must always be able to revoke their own session.
+		if authz.IsAdminSelfSessionOperation(c.FullPath(), c.Request.Method) {
+			c.Next()
 			return
 		}
 

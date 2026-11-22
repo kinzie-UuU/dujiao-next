@@ -321,7 +321,14 @@ func (s *Service) consumeRecoveryCode(user *userdomain.User, code string) error 
 	if err != nil {
 		return err
 	}
-	return s.userRepo.UpdateRecoveryCodes(user.ID, js)
+	updated, err := s.userRepo.CompareAndSwapRecoveryCodes(user.ID, user.RecoveryCodes, js)
+	if err != nil {
+		return err
+	}
+	if !updated {
+		return totpapplication.ErrRecoveryCodeInvalid
+	}
+	return nil
 }
 
 func (s *Service) LoadEnableSubject(userID uint) (totpapplication.EnableSubject, error) {

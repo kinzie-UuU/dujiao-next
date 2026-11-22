@@ -573,3 +573,19 @@ func (s *OrderService) GetOrderForAdmin(orderID uint) (*orderdomain.Order, error
 	FillOrderItemsFromChildren(order)
 	return order, nil
 }
+
+// ReadOrderAuditStatus observes persisted state without expiry/refund reconciliation.
+// Never call GetOrderForAdmin here: that query can mutate business state.
+func (s *OrderService) ReadOrderAuditStatus(orderID uint) (string, error) {
+	if orderID == 0 {
+		return "", ErrOrderNotFound
+	}
+	order, err := s.orderStore.GetByID(orderID)
+	if err != nil {
+		return "", ErrOrderFetchFailed
+	}
+	if order == nil {
+		return "", ErrOrderNotFound
+	}
+	return order.Status, nil
+}

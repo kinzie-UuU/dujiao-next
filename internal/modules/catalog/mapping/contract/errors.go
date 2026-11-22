@@ -10,3 +10,6 @@ var (
 	ErrMediaRecorderRequired     = errors.New("product mapping media recorder is required")
 	ErrUpstreamStockInsufficient = errors.New("upstream stock insufficient")
 )
+
+var ErrReadOnlyBindingInvalid = errors.New("invalid read-only supplier binding")
+var ErrReadOnlyBindingConflict = errors.New("read-only supplier binding conflicts with existing association")

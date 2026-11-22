@@ -142,3 +142,30 @@ func TestStoreSoftDeleteExcludesAdminFromReadsAndMutations(t *testing.T) {
 		t.Fatalf("deleted admin was mutated: %#v", persisted)
 	}
 }
+
+func TestStoreAccountEditRejectsStaleRoleSnapshot(t *testing.T) {
+	store := New(setupStoreTestDB(t))
+	admin := &admindomain.Admin{Username: "role-race", PasswordHash: "hash", IsSuper: true}
+	if err := store.Create(admin); err != nil {
+		t.Fatal(err)
+	}
+	stale := *admin
+	expected := admin.TokenVersion
+	admin.IsSuper = false
+	admin.TokenVersion++
+	if err := store.Update(admin, expected); err != nil {
+		t.Fatal(err)
+	}
+	stale.Username = "renamed"
+	stale.TokenVersion++
+	if err := store.Update(&stale, expected); err == nil {
+		t.Fatal("stale editor restored super-admin role")
+	}
+	current, err := store.GetByID(admin.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.IsSuper || current.Username != "role-race" || current.TokenVersion != expected+1 {
+		t.Fatal("stale account snapshot changed persisted state")
+	}
+}

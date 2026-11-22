@@ -1,6 +1,11 @@
 package application
 
-import "github.com/shopspring/decimal"
+import (
+	"errors"
+	"time"
+
+	"github.com/shopspring/decimal"
+)
 
 var (
 	hundred    = decimal.NewFromInt(100)
@@ -62,4 +67,77 @@ func CalculateMarkedUpPrice(upstreamPrice, markupPercent decimal.Decimal, roundi
 	default:
 		return result.Round(roundScale)
 	}
+}
+
+// BackupQuotePricingInput contains caller-validated exchange-rate data and the
+// supplier quote. The function does not fetch, persist, or choose a rate.
+type BackupQuotePricingInput struct {
+	CurrentPrice  decimal.Decimal
+	SupplierPrice decimal.Decimal
+	ExchangeRate  decimal.Decimal
+	MarkupPercent decimal.Decimal
+	MinimumPrice  decimal.Decimal
+	Stock         int
+	QuotedAt      time.Time
+	Now           time.Time
+	MaxAge        time.Duration
+}
+
+// CalculateBackupQuotePrice returns the current price unchanged and applied=false
+// when the quote cannot safely drive pricing. All amounts are decimal, and the
+// final local price is rounded upward to the next cent, including the floor.
+// The caller must validate the rate's origin, currency and freshness separately.
+func CalculateBackupQuotePrice(in BackupQuotePricingInput) (price decimal.Decimal, applied bool, err error) {
+	price = in.CurrentPrice
+	if !in.CurrentPrice.IsPositive() || !in.SupplierPrice.IsPositive() || !in.ExchangeRate.IsPositive() || in.MarkupPercent.IsNegative() || in.MinimumPrice.IsNegative() || in.Stock < 0 || in.Now.IsZero() || in.QuotedAt.IsZero() || in.MaxAge <= 0 || in.QuotedAt.After(in.Now) {
+		return price, false, errors.New("invalid backup quote pricing input")
+	}
+	if in.Stock == 0 || in.Now.Sub(in.QuotedAt) > in.MaxAge {
+		return price, false, nil
+	}
+	multiplier := decimal.NewFromInt(1).Add(in.MarkupPercent.Shift(-2))
+	calculated := in.SupplierPrice.Mul(in.ExchangeRate).Mul(multiplier)
+	if calculated.LessThan(in.MinimumPrice) {
+		calculated = in.MinimumPrice
+	}
+	return calculated.Shift(2).Ceil().Shift(-2), true, nil
+}
+
+// AggregatedQuotePricingInput is a pure pricing snapshot. PrimaryPrice must be
+// calculated by the existing primary supplier rule; callers must verify both
+// quote identities, currencies and the exchange rate source before using it.
+type AggregatedQuotePricingInput struct {
+	PrimaryPrice       decimal.Decimal
+	PrimaryQuotedAt    time.Time
+	PrimaryMaxAge      time.Duration
+	ExchangeRateAt     time.Time
+	ExchangeRateMaxAge time.Duration
+	Backup             BackupQuotePricingInput
+}
+
+// CalculateAggregatedQuotePrice gives priority to the higher of the primary
+// rule price and a usable backup price. If backup or exchange data is missing,
+// stale or invalid, a verified primary increase is allowed but the current
+// price cannot be reduced. It neither fetches quotes nor writes catalog prices.
+func CalculateAggregatedQuotePrice(in AggregatedQuotePricingInput) (price decimal.Decimal, backupUsable bool, err error) {
+	price = in.Backup.CurrentPrice
+	now := in.Backup.Now
+	if !price.IsPositive() || !in.PrimaryPrice.IsPositive() || now.IsZero() || in.PrimaryQuotedAt.IsZero() || in.PrimaryMaxAge <= 0 || in.PrimaryQuotedAt.After(now) || now.Sub(in.PrimaryQuotedAt) > in.PrimaryMaxAge {
+		return price, false, errors.New("invalid primary quote pricing input")
+	}
+	primary := in.PrimaryPrice.Shift(2).Ceil().Shift(-2)
+	backup, usable, _ := CalculateBackupQuotePrice(in.Backup)
+	if in.ExchangeRateAt.IsZero() || in.ExchangeRateMaxAge <= 0 || in.ExchangeRateAt.After(now) || now.Sub(in.ExchangeRateAt) > in.ExchangeRateMaxAge {
+		usable = false
+	}
+	if !usable {
+		if primary.GreaterThan(price) {
+			price = primary
+		}
+		return price, false, nil
+	}
+	if backup.GreaterThan(primary) {
+		return backup, true, nil
+	}
+	return primary, true, nil
 }

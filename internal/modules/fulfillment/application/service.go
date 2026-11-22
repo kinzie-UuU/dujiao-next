@@ -119,6 +119,35 @@ func (s *Service) CreateManual(input CreateManualInput) (*fulfillmentdomain.Fulf
 
 	var created *fulfillmentdomain.Fulfillment
 	err = s.orderStore.WithinTransaction(func(tx ordercontract.Transaction) error {
+		// Serialize manual delivery with procurement submission and refund on the
+		// same root order before checking any delivery state.
+		rootID := order.ID
+		if order.ParentID != nil && *order.ParentID != 0 {
+			rootID = *order.ParentID
+		}
+		root, err := tx.Orders().GetByIDForUpdate(rootID)
+		if err != nil {
+			return err
+		}
+		if root == nil {
+			return ErrOrderNotFound
+		}
+		if root.Status == constants.OrderStatusCanceled || root.Status == constants.OrderStatusRefunded {
+			return ErrOrderStatusInvalid
+		}
+		if err := tx.Orders().AssertNoUncertainProcurement(rootID); err != nil {
+			return err
+		}
+		locked := root
+		if rootID != order.ID {
+			locked, err = tx.Orders().GetByIDForUpdate(order.ID)
+			if err != nil {
+				return err
+			}
+		}
+		if locked == nil || (locked.Status != constants.OrderStatusPaid && locked.Status != constants.OrderStatusFulfilling) {
+			return ErrOrderStatusInvalid
+		}
 		if _, found, err := tx.Fulfillments().FindByOrderIDForUpdate(input.OrderID); err != nil {
 			return err
 		} else if found {
@@ -150,6 +179,9 @@ func (s *Service) CreateManual(input CreateManualInput) (*fulfillmentdomain.Fulf
 		return nil
 	})
 	if err != nil {
+		if errors.Is(err, ErrOrderStatusInvalid) {
+			return nil, ErrOrderStatusInvalid
+		}
 		if errors.Is(err, ErrFulfillmentExists) {
 			return nil, ErrFulfillmentExists
 		}
