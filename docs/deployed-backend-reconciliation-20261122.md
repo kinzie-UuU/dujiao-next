@@ -25,3 +25,7 @@ Go 1.26.10 默认工具链的漏洞扫描报告标准库 GO-2026-6859；Go 1.26.
 - Go 1.26.11：`go build ./cmd/server` 通过；该实际生成二进制的 `govulncheck -mode=binary` 无漏洞。
 
 一次初始 race 命令误列不存在的独立 backupprocurement 路径，返回 setup failed；备援模块实际位于 procurement 内，修正路径后的上述完整命令成功。未修改应用或测试以隐藏失败。
+
+## 独立核实的 Fang Fang 管理端
+
+后端提交后另行摘取只读连接及报价管理 UI 的 5 文件提交 `eba208d69712fa9e99b98b30c1ee013b827cd498`（本分支为 `bc2637f`），不混入其他 admin 前端改动。独立核验的 patch-id 与线上源 `f804e1683e4cf1721741091095f11f462ce93d6d` 相符，2038 个线上静态文件摘要核对相符；该独立候选 Vitest 4 项、vue-tsc、Vite build 均通过。摘取无冲突，不修改 Go 代码。本记录区分该独立 UI 验证与上述后端验证；没有重新部署整合结果。
