@@ -54,3 +54,72 @@ func (f *Fulfillment) TruncatePayload(maxLines int) {
 func (Fulfillment) TableName() string {
 	return "fulfillments"
 }
+
+// CustomerPayload hides explicitly labelled procurement references without changing
+// the stored receipt or customer account identifiers.
+func (f *Fulfillment) CustomerPayload() string {
+	if f == nil {
+		return ""
+	}
+	return customerPayload(f.Payload)
+}
+
+func customerPayload(payload string) string {
+	lines := strings.Split(payload, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		separator := strings.IndexAny(trimmed, ":：")
+		if separator >= 0 && internalOrderReference(trimmed[:separator]) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
+}
+
+func internalOrderReference(label string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(label))
+	normalized = strings.NewReplacer("_", "", "-", "", " ", "").Replace(normalized)
+	switch normalized {
+	case "上游订单", "上游订单号", "上游订单id", "上游单号", "供应商订单", "供应商订单号", "供应商订单id", "供货方订单", "供货方订单号", "upstreamorder", "upstreamorderno", "upstreamorderid", "supplierorder", "supplierorderno", "supplierorderid":
+		return true
+	}
+	return false
+}
+
+// CustomerDeliveryData copies structured delivery data, removing only explicit
+// internal order references. Account IDs and ordinary order/tracking IDs survive.
+func (f *Fulfillment) CustomerDeliveryData() jsonmap.JSON {
+	if f == nil || f.LogisticsJSON == nil {
+		return nil
+	}
+	return customerDeliveryMap(f.LogisticsJSON)
+}
+
+func customerDeliveryMap(data map[string]interface{}) jsonmap.JSON {
+	result := make(jsonmap.JSON, len(data))
+	for key, value := range data {
+		if !internalOrderReference(key) {
+			result[key] = customerDeliveryValue(value)
+		}
+	}
+	return result
+}
+
+func customerDeliveryValue(value interface{}) interface{} {
+	switch v := value.(type) {
+	case jsonmap.JSON:
+		return customerDeliveryMap(v)
+	case map[string]interface{}:
+		return customerDeliveryMap(v)
+	case []interface{}:
+		result := make([]interface{}, len(v))
+		for i := range v {
+			result[i] = customerDeliveryValue(v[i])
+		}
+		return result
+	default:
+		return value
+	}
+}

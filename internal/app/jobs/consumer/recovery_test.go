@@ -3,7 +3,13 @@ package consumer
 import (
 	"context"
 	"errors"
+	"github.com/dujiao-next/internal/app/container"
+	procurementapp "github.com/dujiao-next/internal/modules/procurement/application"
+	procurementcontract "github.com/dujiao-next/internal/modules/procurement/contract"
+	procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
+	"github.com/dujiao-next/internal/queue"
 	"testing"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"go.uber.org/zap"
@@ -108,5 +114,34 @@ func TestWithPanicRecovery_PanicValueTypes(t *testing.T) {
 				t.Fatalf("expected 1 worker_panic_recovered entry, got %d", len(observed.All()))
 			}
 		})
+	}
+}
+
+// Verify the scheduled task reaches recovery and preserves errors for Asynq.
+type dispatchRecoveryStore struct {
+	procurementcontract.Repository
+	calls int
+	err   error
+}
+
+func (s *dispatchRecoveryStore) ListDispatchable(time.Time, int) ([]procurementdomain.Order, error) {
+	s.calls++
+	return nil, s.err
+}
+
+type dispatchRecoveryQueue struct{ procurementcontract.Enqueuer }
+
+func TestProcurementRetryTaskRegistration(t *testing.T) {
+	want := errors.New("mock database unavailable")
+	store := &dispatchRecoveryStore{err: want}
+	service := procurementapp.NewService(procurementapp.Options{Repository: store, Queue: &dispatchRecoveryQueue{}})
+	worker := New(&container.Container{ProcurementOrderService: service})
+	mux := asynq.NewServeMux()
+	worker.Register(mux)
+	if err := mux.ProcessTask(context.Background(), queue.NewProcurementRetryPendingTask()); !errors.Is(err, want) {
+		t.Fatalf("retry task did not propagate database error: %v", err)
+	}
+	if store.calls != 1 {
+		t.Fatalf("recovery calls=%d", store.calls)
 	}
 }

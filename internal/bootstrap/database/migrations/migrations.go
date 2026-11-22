@@ -734,3 +734,22 @@ func ensureCategoryParentMigration() error {
 	}
 	return gormdb.DB.Save(&doneMarker).Error
 }
+
+// Refuse ambiguous history before schema writes; never silently deduplicate purchases.
+func validateProcurementLocalOrderUniqueness() error {
+	db := gormdb.DB
+	if db == nil {
+		return errors.New("database is not initialized")
+	}
+	if !db.Migrator().HasTable(&procurementdomain.Order{}) {
+		return nil
+	}
+	var duplicates []struct{ LocalOrderID uint }
+	if err := db.Unscoped().Table("procurement_orders").Select("local_order_id").Group("local_order_id").Having("COUNT(*) > 1").Limit(1).Scan(&duplicates).Error; err != nil {
+		return err
+	}
+	if len(duplicates) != 0 {
+		return errors.New("procurement local-order uniqueness migration refused: duplicate history requires review; no rows were removed")
+	}
+	return nil
+}

@@ -54,3 +54,15 @@ func TestReaderProjectsParentAndChildFulfillment(t *testing.T) {
 		t.Fatalf("delivered time mismatch: %#v", fulfillment.DeliveredAt)
 	}
 }
+
+func TestReaderFiltersInternalOrderReferencesWithoutMutatingSource(t *testing.T) {
+	f := &fulfillmentdomain.Fulfillment{Payload: "credential\n上游订单：PRIVATE", LogisticsJSON: jsonmap.JSON{"upstream_order_id": "PRIVATE", "account_id": "KEEP"}}
+	snapshot := projectOrder(&orderdomain.Order{Children: []orderdomain.Order{{Fulfillment: f}}})
+	got := snapshot.Children[0].Fulfillment
+	if got.Payload != "credential" || got.DeliveryData["account_id"] != "KEEP" || got.DeliveryData["upstream_order_id"] != nil {
+		t.Fatalf("projection=%v", got)
+	}
+	if f.LogisticsJSON["upstream_order_id"] != "PRIVATE" {
+		t.Fatal("audit metadata changed")
+	}
+}

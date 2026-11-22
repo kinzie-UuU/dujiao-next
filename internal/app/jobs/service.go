@@ -107,6 +107,11 @@ func registerPeriodicTasks(scheduler *asynq.Scheduler, consumer *jobconsumer.Con
 		}
 	}
 	if consumer.ProcurementOrderService != nil {
+		if entryID, err := scheduler.Register("@every 1m", queue.NewProcurementRetryPendingTask(), asynq.Queue(queue.DefaultQueue)); err != nil {
+			logger.Warnw("scheduler_register_procurement_retry_pending_failed", "error", err)
+		} else {
+			logger.Infow("scheduler_register_procurement_retry_pending_ok", "entry_id", entryID)
+		}
 		task := queue.NewProcurementSyncAcceptedTask()
 		entryID, err := scheduler.Register("@every 30m", task, asynq.Queue(queue.DefaultQueue))
 		if err != nil {

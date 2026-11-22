@@ -43,7 +43,7 @@ func (s twoFAAuthStub) ParseChallengeToken(string) (*ChallengeClaims, error) {
 	return &ChallengeClaims{AdminID: 7, JTI: "challenge"}, s.parseErr
 }
 func (s twoFAAuthStub) GetAdminUsername(uint) (string, error) { return "admin", nil }
-func (s twoFAAuthStub) CompleteLoginAfter2FA(uint) (*AuthLoginResult, error) {
+func (s twoFAAuthStub) CompleteLoginAfter2FA(uint, ...uint64) (*AuthLoginResult, error) {
 	return finalLoginResult(), s.err
 }
 

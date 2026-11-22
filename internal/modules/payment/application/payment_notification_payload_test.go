@@ -1,7 +1,9 @@
 package application
 
 import (
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -500,7 +502,7 @@ func TestBuildPaymentOrderAlertDispatchPayloadsUseDashboardThresholds(t *testing
 		t.Fatalf("payment failed alert value/threshold mismatch: %#v", failedPayload.Data)
 	}
 	failedMessage := fmt.Sprintf("%v", failedPayload.Data["message"])
-	if !strings.Contains(failedMessage, "支付失败 4 笔") || !strings.Contains(failedMessage, "10 分钟") {
+	if !strings.Contains(failedMessage, "尚未支付成功的失败记录 4 笔") || !strings.Contains(failedMessage, "仅有新增失败记录时提醒") || !strings.Contains(failedMessage, "10 分钟") {
 		t.Fatalf("unexpected payment failed message: %s", failedMessage)
 	}
 
@@ -684,5 +686,66 @@ func TestResolveInventoryAlertTypeKey(t *testing.T) {
 				t.Fatalf("resolveInventoryAlertTypeKey want %q got %q", tc.want, got)
 			}
 		})
+	}
+}
+
+func TestIgnoredPaymentIDsPersistNormalizeAndPatchWithoutLoss(t *testing.T) {
+	repo := memorysettings.New()
+	svc := settingsapp.NewService(repo)
+	ids := []uint{660, 0, 677, 660}
+	original, err := svc.PatchNotificationCenterSetting(settingsmessaging.NotificationCenterSettingPatch{IgnoredPaymentIDs: &ids})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []uint{660, 677}
+	if !reflect.DeepEqual(original.IgnoredPaymentIDs, want) {
+		t.Fatalf("normalization: %v", original.IgnoredPaymentIDs)
+	}
+	ids[0] = 673 // Caller-owned slices cannot mutate persisted settings.
+	stored, err := svc.GetNotificationCenterSetting()
+	if err != nil || !reflect.DeepEqual(stored.IgnoredPaymentIDs, want) {
+		t.Fatalf("stored exclusions lost: %v %v", stored.IgnoredPaymentIDs, err)
+	}
+	// Simulate an older settings UI that does not know this field.
+	var patch settingsmessaging.NotificationCenterSettingPatch
+	if err := json.Unmarshal([]byte(`{"payment_order_alert_interval_seconds":900}`), &patch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.PatchNotificationCenterSetting(patch); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = svc.GetNotificationCenterSetting()
+	if err != nil || !reflect.DeepEqual(stored.IgnoredPaymentIDs, want) {
+		t.Fatalf("unrelated save erased exclusions: %v %v", stored.IgnoredPaymentIDs, err)
+	}
+	encoded, err := json.Marshal(settingsmessaging.NotificationCenterSettingToMap(stored))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw jsonmap.JSON
+	if err := json.Unmarshal(encoded, &raw); err != nil {
+		t.Fatal(err)
+	}
+	decoded := settingsmessaging.DecodeNotificationCenterSetting(raw, settingsmessaging.NotificationCenterDefaultSetting())
+	if !reflect.DeepEqual(decoded.IgnoredPaymentIDs, want) {
+		t.Fatalf("JSON codec lost IDs: %v", decoded.IgnoredPaymentIDs)
+	}
+	patch = settingsmessaging.NotificationCenterSettingPatch{}
+	if err := json.Unmarshal([]byte(`{"ignored_payment_ids":[]}`), &patch); err != nil {
+		t.Fatal(err)
+	}
+	if patch.IgnoredPaymentIDs == nil {
+		t.Fatal("explicit empty list became absent field")
+	}
+	if _, err := svc.PatchNotificationCenterSetting(patch); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = svc.GetNotificationCenterSetting()
+	if err != nil || len(stored.IgnoredPaymentIDs) != 0 {
+		t.Fatalf("explicit clear not persisted: %v %v", stored.IgnoredPaymentIDs, err)
+	}
+	legacy := settingsmessaging.DecodeNotificationCenterSetting(jsonmap.JSON{"dedupe_ttl_seconds": 300}, settingsmessaging.NotificationCenterDefaultSetting())
+	if len(legacy.IgnoredPaymentIDs) != 0 {
+		t.Fatal("legacy config unexpectedly excludes payment IDs")
 	}
 }

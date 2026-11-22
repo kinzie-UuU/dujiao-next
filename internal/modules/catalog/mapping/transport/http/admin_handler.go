@@ -1,7 +1,11 @@
 package mappinghttp
 
 import (
+	"context"
 	"errors"
+	"fmt"
+
+	"github.com/dujiao-next/internal/shared/operationaudit"
 
 	mappingapp "github.com/dujiao-next/internal/modules/catalog/mapping/application"
 	mappingcontract "github.com/dujiao-next/internal/modules/catalog/mapping/contract"
@@ -17,6 +21,9 @@ import (
 
 // ProductMappingService 是后台商品映射端点所需的最小用例接口。
 type ProductMappingService interface {
+	ListReadOnlyBindings(uint) ([]mappingdomain.ReadOnlyBinding, error)
+	BindReadOnlySupplier(context.Context, mappingapp.ReadOnlyBindingInput) (*mappingdomain.ReadOnlyBinding, error)
+	RefreshReadOnlyBinding(context.Context, uint) (*mappingdomain.ReadOnlyBinding, error)
 	List(filter mappingcontract.ListFilter) ([]mappingdomain.Mapping, int64, error)
 	GetByID(id uint) (*mappingdomain.Mapping, error)
 	GetSKUMappings(mappingID uint) ([]mappingdomain.SKUMapping, error)
@@ -191,6 +198,23 @@ func (h *AdminHandler) BatchImportUpstreamProducts(c *gin.Context) {
 		return
 	}
 
+	before := operationaudit.Fields{"snapshot_available": false}
+	if ids, readErr := h.service.GetMappedUpstreamIDs(req.ConnectionID); readErr == nil {
+		existing := make(map[uint]bool, len(ids))
+		for _, id := range ids {
+			existing[id] = true
+		}
+		entries := make([]operationaudit.Fields, 0, min(len(req.UpstreamProductIDs), 500))
+		for _, id := range req.UpstreamProductIDs {
+			if len(entries) >= 500 {
+				break
+			}
+			entries = append(entries, operationaudit.Fields{"upstream_product_id": id, "mapped": existing[id]})
+		}
+		before = operationaudit.Fields{"mappings": entries, "truncated": len(req.UpstreamProductIDs) > 500}
+	}
+	audit := operationaudit.New("mapping.batch_import", fmt.Sprint(req.ConnectionID), before)
+	defer ginutil.RecordOperation(c, audit)
 	outcomes, err := h.service.BatchImportUpstreamProducts(
 		req.ConnectionID,
 		req.UpstreamProductIDs,
@@ -219,6 +243,26 @@ func (h *AdminHandler) BatchImportUpstreamProducts(c *gin.Context) {
 		results[i] = item
 	}
 
+	entries := make([]operationaudit.Fields, 0, min(len(outcomes), 500))
+	for _, outcome := range outcomes {
+		if len(entries) >= 500 {
+			break
+		}
+		entry := operationaudit.Fields{"upstream_product_id": outcome.UpstreamProductID, "success": outcome.Err == nil}
+		if outcome.Err == nil && outcome.Mapping != nil {
+			entry["mapping_id"] = outcome.Mapping.ID
+			entry["local_product_id"] = outcome.Mapping.LocalProductID
+			entry["is_active"] = outcome.Mapping.IsActive
+		}
+		entries = append(entries, entry)
+	}
+	audit.Success(operationaudit.Fields{"success_count": successCount, "failed_count": len(outcomes) - successCount, "mappings": entries, "truncated": len(outcomes) > 500})
+	if successCount != len(outcomes) {
+		audit.Result = "partial_failure"
+	}
+	if successCount == 0 {
+		audit.Result = "failed"
+	}
 	response.Success(c, gin.H{
 		"results":       results,
 		"total":         len(req.UpstreamProductIDs),
@@ -330,6 +374,12 @@ func (h *AdminHandler) UpdateProductMappingStatus(c *gin.Context) {
 		return
 	}
 
+	before := operationaudit.Fields{"snapshot_available": false}
+	if old, readErr := h.service.GetByID(id); readErr == nil && old != nil {
+		before = operationaudit.Fields{"is_active": old.IsActive}
+	}
+	audit := operationaudit.New("mapping.status", fmt.Sprint(id), before)
+	defer ginutil.RecordOperation(c, audit)
 	if err := h.service.SetActive(id, req.IsActive); err != nil {
 		if errors.Is(err, mappingcontract.ErrMappingNotFound) {
 			ginutil.RespondError(c, response.CodeNotFound, "error.mapping_not_found", nil)
@@ -339,6 +389,7 @@ func (h *AdminHandler) UpdateProductMappingStatus(c *gin.Context) {
 		return
 	}
 
+	audit.Success(operationaudit.Fields{"is_active": req.IsActive})
 	response.Success(c, gin.H{"updated": true})
 }
 
@@ -451,4 +502,61 @@ func (h *AdminHandler) BatchImportByCategory(c *gin.Context) {
 	}
 
 	response.Success(c, result)
+}
+
+func (h *AdminHandler) ListReadOnlyBindings(c *gin.Context) {
+	id, err := ginutil.ParseQueryUint(c.Query("connection_id"), true)
+	if err != nil || id == 0 {
+		ginutil.RespondError(c, response.CodeBadRequest, "error.bad_request", nil)
+		return
+	}
+	rows, err := h.service.ListReadOnlyBindings(id)
+	if err != nil {
+		readOnlyBindingError(c, err)
+		return
+	}
+	response.Success(c, rows)
+}
+func (h *AdminHandler) BindReadOnlySupplier(c *gin.Context) {
+	var input mappingapp.ReadOnlyBindingInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		ginutil.RespondBindError(c, err)
+		return
+	}
+	audit := operationaudit.New("supplier_readonly.bind", fmt.Sprint(input.LocalProductID), operationaudit.Fields{"purchase_enabled": false})
+	defer ginutil.RecordOperation(c, audit)
+	row, err := h.service.BindReadOnlySupplier(c.Request.Context(), input)
+	if err != nil {
+		readOnlyBindingError(c, err)
+		return
+	}
+	audit.Success(operationaudit.Fields{"binding_id": row.ID, "connection_id": row.ConnectionID, "local_product_id": row.LocalProductID, "local_sku_id": row.LocalSKUID, "upstream_product_id": row.UpstreamProductID, "purchase_enabled": false})
+	response.Success(c, row)
+}
+func (h *AdminHandler) RefreshReadOnlyBinding(c *gin.Context) {
+	id, err := ginutil.ParseParamUint(c, "id")
+	if err != nil {
+		ginutil.RespondError(c, response.CodeBadRequest, "error.bad_request", nil)
+		return
+	}
+	audit := operationaudit.New("supplier_readonly.refresh", fmt.Sprint(id), operationaudit.Fields{"purchase_enabled": false})
+	defer ginutil.RecordOperation(c, audit)
+	row, err := h.service.RefreshReadOnlyBinding(c.Request.Context(), id)
+	if err != nil {
+		readOnlyBindingError(c, err)
+		return
+	}
+	audit.Success(operationaudit.Fields{"binding_id": row.ID, "purchase_enabled": false})
+	response.Success(c, row)
+}
+func readOnlyBindingError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, mappingcontract.ErrReadOnlyBindingInvalid), errors.Is(err, mappingcontract.ErrReadOnlyBindingConflict):
+		ginutil.RespondError(c, response.CodeBadRequest, "error.bad_request", nil)
+	case errors.Is(err, mappingcontract.ErrMappingNotFound):
+		ginutil.RespondError(c, response.CodeNotFound, "error.mapping_not_found", nil)
+	default:
+		// Never return supplier bodies or credentials through the admin endpoint.
+		ginutil.RespondError(c, response.CodeInternal, "error.mapping_fetch_failed", nil)
+	}
 }

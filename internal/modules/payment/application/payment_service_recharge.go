@@ -106,6 +106,12 @@ func (s *PaymentService) CreateWalletRechargePayment(input CreateWalletRechargeP
 		currency = "CNY"
 	}
 	now := time.Now()
+	// Resolve configuration before opening the SQLite transaction.
+	var manualExpiry *time.Time
+	if isManualLocalQR(channel) {
+		expiresAt := now.Add(time.Duration(s.resolveExpireMinutes()) * time.Minute)
+		manualExpiry = &expiresAt
+	}
 
 	var payment *paymentdomain.Payment
 	var recharge *walletdomain.RechargeOrder
@@ -157,6 +163,15 @@ func (s *PaymentService) CreateWalletRechargePayment(input CreateWalletRechargeP
 		if err := rechargeRepo.CreateRechargeOrder(recharge); err != nil {
 			return ErrPaymentCreateFailed
 		}
+		if isManualLocalQR(channel) {
+			virtualOrder := &orderdomain.Order{OrderNo: recharge.RechargeNo, UserID: recharge.UserID, ExpiresAt: manualExpiry}
+			if err := prepareManualLocalQR(virtualOrder, channel, payment, recharge); err != nil {
+				return err
+			}
+			if err := paymentRepo.Update(payment); err != nil {
+				return ErrPaymentUpdateFailed
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -166,38 +181,41 @@ func (s *PaymentService) CreateWalletRechargePayment(input CreateWalletRechargeP
 		return nil, ErrPaymentCreateFailed
 	}
 
-	// 复用支付网关下单逻辑，使用充值单号作为业务单号。
-	virtualOrder := &orderdomain.Order{
-		OrderNo: recharge.RechargeNo,
-		UserID:  recharge.UserID,
+	if !isManualLocalQR(channel) {
+		// 复用支付网关下单逻辑，使用充值单号作为业务单号。
+		virtualOrder := &orderdomain.Order{
+			OrderNo: recharge.RechargeNo,
+			UserID:  recharge.UserID,
+		}
+		if err := s.applyProviderPayment(CreatePaymentInput{
+			ChannelID:        input.ChannelID,
+			ClientIP:         input.ClientIP,
+			Context:          input.Context,
+			ReturnBizType:    "recharge",
+			ReturnBusinessNo: recharge.RechargeNo,
+			RequestScheme:    input.RequestScheme,
+		}, virtualOrder, channel, payment); err != nil {
+			_ = s.paymentRepo.WithinTransaction(func(tx paymentcontract.Transaction) error {
+				rechargeRepo := tx.Wallets().Wallets()
+				paymentRepo := tx.Payments()
+				failedAt := time.Now()
+				payment.Status = constants.PaymentStatusFailed
+				payment.UpdatedAt = failedAt
+				if updateErr := paymentRepo.Update(payment); updateErr != nil {
+					return updateErr
+				}
+				lockedRecharge, getErr := rechargeRepo.GetRechargeOrderByPaymentIDForUpdate(payment.ID)
+				if getErr != nil || lockedRecharge == nil {
+					return getErr
+				}
+				lockedRecharge.Status = constants.WalletRechargeStatusFailed
+				lockedRecharge.UpdatedAt = failedAt
+				return rechargeRepo.UpdateRechargeOrder(lockedRecharge)
+			})
+			return nil, err
+		}
 	}
-	if err := s.applyProviderPayment(CreatePaymentInput{
-		ChannelID:        input.ChannelID,
-		ClientIP:         input.ClientIP,
-		Context:          input.Context,
-		ReturnBizType:    "recharge",
-		ReturnBusinessNo: recharge.RechargeNo,
-		RequestScheme:    input.RequestScheme,
-	}, virtualOrder, channel, payment); err != nil {
-		_ = s.paymentRepo.WithinTransaction(func(tx paymentcontract.Transaction) error {
-			rechargeRepo := tx.Wallets().Wallets()
-			paymentRepo := tx.Payments()
-			failedAt := time.Now()
-			payment.Status = constants.PaymentStatusFailed
-			payment.UpdatedAt = failedAt
-			if updateErr := paymentRepo.Update(payment); updateErr != nil {
-				return updateErr
-			}
-			lockedRecharge, getErr := rechargeRepo.GetRechargeOrderByPaymentIDForUpdate(payment.ID)
-			if getErr != nil || lockedRecharge == nil {
-				return getErr
-			}
-			lockedRecharge.Status = constants.WalletRechargeStatusFailed
-			lockedRecharge.UpdatedAt = failedAt
-			return rechargeRepo.UpdateRechargeOrder(lockedRecharge)
-		})
-		return nil, err
-	}
+
 	if s.queue != nil && s.queue.Enabled() {
 		delay := time.Duration(s.resolveExpireMinutes()) * time.Minute
 		if err := s.queue.EnqueueWalletRechargeExpire(payment.ID, delay); err != nil {
@@ -207,6 +225,11 @@ func (s *PaymentService) CreateWalletRechargePayment(input CreateWalletRechargeP
 				"delay_minutes", int(delay/time.Minute),
 				"error", err,
 			)
+			if isManualLocalQR(channel) {
+				// The committed intent may already carry a QR claim or receipt.
+				// A scheduling outage is not a payment failure; do not overwrite it.
+				return nil, ErrQueueUnavailable
+			}
 			_ = s.paymentRepo.WithinTransaction(func(tx paymentcontract.Transaction) error {
 				rechargeRepo := tx.Wallets().Wallets()
 				paymentRepo := tx.Payments()

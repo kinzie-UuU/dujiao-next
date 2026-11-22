@@ -3,8 +3,11 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +17,9 @@ import (
 	paymentdomain "github.com/dujiao-next/internal/modules/payment/domain"
 
 	userdomain "github.com/dujiao-next/internal/modules/identity/user/domain"
+	userstore "github.com/dujiao-next/internal/modules/identity/user/infrastructure/gormstore"
 	orderdomain "github.com/dujiao-next/internal/modules/order/domain"
+	walletdomain "github.com/dujiao-next/internal/modules/wallet/domain"
 
 	"github.com/dujiao-next/internal/constants"
 	"github.com/dujiao-next/internal/shared/jsonmap"
@@ -22,6 +27,7 @@ import (
 	"github.com/dujiao-next/internal/shared/money"
 
 	"github.com/shopspring/decimal"
+	"gorm.io/gorm"
 )
 
 func TestValidateOrderChannelEligibilityUsesPersistedOrderIdentity(t *testing.T) {
@@ -900,7 +906,7 @@ func TestManualUSDTValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, mutate := range []func(*paymentdomain.PaymentChannel){
-		func(c *paymentdomain.PaymentChannel) { c.ChannelType = "alipay" },
+		func(c *paymentdomain.PaymentChannel) { c.ChannelType = "unknown" },
 		func(c *paymentdomain.PaymentChannel) { c.InteractionMode = "redirect" },
 		func(c *paymentdomain.PaymentChannel) { c.ConfigJSON["usdt_fixed"] = map[string]interface{}{} },
 		func(c *paymentdomain.PaymentChannel) {
@@ -995,10 +1001,10 @@ func TestManualUSDTCoreCreateAndAdminConfirm(t *testing.T) {
 	}
 }
 
-func TestManualUSDTKeepsLegacyProvidersAndRejectsRecharge(t *testing.T) {
+func TestManualUSDTKeepsUnknownProvidersAndRejectsRecharge(t *testing.T) {
 	svc := &PaymentService{}
 	order := &orderdomain.Order{OrderNo: "DJLEGACY"}
-	for _, kind := range []string{"alipay", "wechat", "unknown"} {
+	for _, kind := range []string{"unknown"} {
 		channel := manualUSDTChannel()
 		channel.ChannelType = kind
 		if err := svc.ValidateChannel(channel); err != ErrPaymentProviderNotSupported {
@@ -1094,6 +1100,366 @@ func TestManualUSDTCreatePaymentWithSQLiteConfigStorageTypes(t *testing.T) {
 			}
 			if order.Status != constants.OrderStatusPendingPayment {
 				t.Fatalf("creation changed order status to %s", order.Status)
+			}
+		})
+	}
+}
+
+func TestManualLocalQRCreateReusesPendingAndPreservesAmounts(t *testing.T) {
+	for _, kind := range []string{"alipay", "wechat"} {
+		for _, balance := range []bool{false, true} {
+			t.Run(kind+map[bool]string{false: "/online", true: "/mixed"}[balance], func(t *testing.T) {
+				svc, db := setupPaymentServiceWalletTest(t)
+				svc.paymentProviderRegistry = nil
+				m := func(v string) money.Amount { return money.FromDecimal(decimal.RequireFromString(v)) }
+				user := userdomain.User{Email: "manual@example.com", PasswordHash: "test", Status: constants.UserStatusActive}
+				if err := db.Create(&user).Error; err != nil {
+					t.Fatal(err)
+				}
+				if err := db.Create(&walletdomain.Account{UserID: user.ID, Balance: m("30")}).Error; err != nil {
+					t.Fatal(err)
+				}
+				ch := paymentdomain.PaymentChannel{ProviderType: manualQRProviderType, ChannelType: kind, InteractionMode: "qr", IsActive: true, FeeRate: m("2")}
+				if err := db.Create(&ch).Error; err != nil {
+					t.Fatal(err)
+				}
+				expiry := time.Now().Add(time.Hour)
+				order := orderdomain.Order{OrderNo: "DJMANUALLOCAL", UserID: user.ID, Currency: "CNY", Status: constants.OrderStatusPendingPayment, TotalAmount: m("100"), OriginalAmount: m("100"), ExpiresAt: &expiry}
+				if err := db.Create(&order).Error; err != nil {
+					t.Fatal(err)
+				}
+				input := CreatePaymentInput{OrderID: order.ID, ChannelID: ch.ID, UseBalance: balance}
+				result, err := svc.CreatePayment(input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				expected, online, wallet := "102", "100", "0"
+				if balance {
+					expected, online, wallet = "71.4", "70", "30"
+				}
+				p := result.Payment
+				if p == nil || p.Status != constants.PaymentStatusPending || p.PaidAt != nil || result.OrderPaid || p.Currency != "CNY" || !p.Amount.Decimal.Equal(decimal.RequireFromString(expected)) || p.QRCode != "manual://order/DJMANUALLOCAL" {
+					t.Fatalf("incorrect pending intent: %+v", result)
+				}
+				if !result.OnlinePayAmount.Decimal.Equal(decimal.RequireFromString(online)) || !result.WalletPaidAmount.Decimal.Equal(decimal.RequireFromString(wallet)) {
+					t.Fatal("incorrect principal/balance split")
+				}
+				again, err := svc.CreatePayment(input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if again.Payment.ID != p.ID {
+					t.Fatal("retry created another payment")
+				}
+				var count int64
+				if err := db.Model(&paymentdomain.Payment{}).Count(&count).Error; err != nil || count != 1 {
+					t.Fatalf("payment count=%d err=%v", count, err)
+				}
+				if err := db.First(&order, order.ID).Error; err != nil {
+					t.Fatal(err)
+				}
+				if order.Status != constants.OrderStatusPendingPayment || order.PaidAt != nil {
+					t.Fatal("creation settled order")
+				}
+				exportManualLocalFixture(t, db, kind+map[bool]string{false: "-online", true: "-mixed"}[balance])
+				if _, err := svc.ConfirmManualPayment(p.ID); err == nil {
+					t.Fatal("confirmation without receipt evidence accepted")
+				}
+				if _, err := svc.ConfirmManualPayment(p.ID, receiptEvidence(t, db, p.ID)); err != nil {
+					t.Fatal(err)
+				}
+				if err := db.First(&order, order.ID).Error; err != nil || order.Status != constants.OrderStatusPaid {
+					t.Fatalf("verified receipt did not settle: %v %s", err, order.Status)
+				}
+			})
+		}
+	}
+}
+
+func TestManualLocalQRRechargeCreationBindsExactPayment(t *testing.T) {
+	for _, kind := range []string{"alipay", "wechat"} {
+		t.Run(kind, func(t *testing.T) {
+			svc, db := setupPaymentServiceWalletTest(t)
+			svc.userRepo = userstore.New(db)
+			svc.paymentProviderRegistry = nil
+			user := userdomain.User{Email: "recharge@example.com", PasswordHash: "test", Status: constants.UserStatusActive}
+			if err := db.Create(&user).Error; err != nil {
+				t.Fatal(err)
+			}
+			ch := paymentdomain.PaymentChannel{ProviderType: manualQRProviderType, ChannelType: kind, InteractionMode: "qr", IsActive: true, FixedFee: money.FromDecimal(decimal.NewFromInt(2))}
+			if err := db.Create(&ch).Error; err != nil {
+				t.Fatal(err)
+			}
+			result, err := svc.CreateWalletRechargePayment(CreateWalletRechargePaymentInput{UserID: user.ID, ChannelID: ch.ID, Amount: money.FromDecimal(decimal.NewFromInt(100)), Currency: "CNY"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, r := result.Payment, result.Recharge
+			if p.Status != constants.PaymentStatusPending || p.OrderID != 0 || p.PaidAt != nil || p.ExpiredAt == nil || r.Status != constants.WalletRechargeStatusPending || r.PaymentID != p.ID || !p.Amount.Decimal.Equal(decimal.NewFromInt(102)) || p.QRCode != "manual://recharge/"+r.RechargeNo {
+				t.Fatalf("incorrect recharge binding: %+v %+v", p, r)
+			}
+			var accountCount int64
+			db.Model(&walletdomain.Account{}).Count(&accountCount)
+			if accountCount != 0 {
+				t.Fatal("creation credited wallet")
+			}
+			exportManualLocalFixture(t, db, kind+"-recharge")
+			// A virtual order must match the stored recharge, not just order_id=0.
+			for _, virtual := range []orderdomain.Order{{OrderNo: r.RechargeNo, UserID: user.ID + 1}, {OrderNo: "WROTHER", UserID: user.ID}} {
+				copy := *p
+				copy.Status = constants.PaymentStatusInitiated
+				virtual.ExpiresAt = p.ExpiredAt
+				if err := prepareManualLocalQR(&virtual, &ch, &copy, r); err == nil {
+					t.Fatal("unrelated recharge accepted")
+				}
+			}
+			if _, err := svc.ConfirmManualPayment(p.ID); err == nil {
+				t.Fatal("recharge confirmed without evidence")
+			}
+			proof := receiptEvidence(t, db, p.ID)
+			for i := 0; i < 2; i++ {
+				if _, err := svc.ConfirmManualPayment(p.ID, proof); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var stored walletdomain.RechargeOrder
+			if err := db.First(&stored, r.ID).Error; err != nil || stored.Status != constants.WalletRechargeStatusSuccess {
+				t.Fatalf("recharge not settled: %v", err)
+			}
+			var account walletdomain.Account
+			if err := db.Where("user_id = ?", user.ID).First(&account).Error; err != nil || !account.Balance.Decimal.Equal(decimal.NewFromInt(100)) {
+				t.Fatalf("wallet credited incorrectly: %v %s", err, account.Balance.String())
+			}
+		})
+	}
+}
+
+func TestManualLocalQRRejectsInvalidIntent(t *testing.T) {
+	svc := &PaymentService{}
+	ch := &paymentdomain.PaymentChannel{ID: 1, ProviderType: manualQRProviderType, ChannelType: "wechat", InteractionMode: "qr", IsActive: true}
+	if err := svc.ValidateChannel(ch); err != nil {
+		t.Fatal(err)
+	}
+	ch.InteractionMode = "redirect"
+	if err := svc.ValidateChannel(ch); err == nil {
+		t.Fatal("redirect manual channel accepted")
+	}
+	ch.InteractionMode = "qr"
+	if err := svc.applyProviderPayment(CreatePaymentInput{}, &orderdomain.Order{OrderNo: "WRUNBOUND"}, ch, &paymentdomain.Payment{ID: 1, ChannelID: 1, ProviderType: manualQRProviderType, ChannelType: "wechat", InteractionMode: "qr", Currency: "CNY", Amount: money.FromDecimal(decimal.NewFromInt(100)), Status: constants.PaymentStatusInitiated}); err == nil {
+		t.Fatal("unbound virtual order accepted")
+	}
+}
+
+// Optional synthetic fixtures allow the independently deployed QR service to run
+// its real SQLite handoff against native CreatePayment results.
+func exportManualLocalFixture(t *testing.T, db *gorm.DB, name string) {
+	t.Helper()
+	dir := os.Getenv("PAYMENT_QR_FIXTURE_DIR")
+	if dir == "" {
+		return
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("VACUUM INTO ?", filepath.Join(dir, name+".db")).Error; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManualLocalQRDoesNotOverwriteConcurrentHandoff(t *testing.T) {
+	for _, action := range []string{"qr-quote", "expire"} {
+		t.Run(action, func(t *testing.T) {
+			svc, db := setupPaymentServiceWalletTest(t)
+			ch := paymentdomain.PaymentChannel{ProviderType: manualQRProviderType, ChannelType: "wechat", InteractionMode: "qr", IsActive: true}
+			if err := db.Create(&ch).Error; err != nil {
+				t.Fatal(err)
+			}
+			expiry := time.Now().Add(time.Hour)
+			order := orderdomain.Order{OrderNo: "DJINTERLEAVE", Currency: "CNY", Status: constants.OrderStatusPendingPayment, ExpiresAt: &expiry}
+			if err := db.Create(&order).Error; err != nil {
+				t.Fatal(err)
+			}
+			stale := paymentdomain.Payment{OrderID: order.ID, ChannelID: ch.ID, ProviderType: manualQRProviderType, ChannelType: "wechat", InteractionMode: "qr", Currency: "CNY", Amount: money.FromDecimal(decimal.NewFromInt(100)), Status: constants.PaymentStatusInitiated}
+			if err := db.Create(&stale).Error; err != nil {
+				t.Fatal(err)
+			}
+			// Existing order retry: CreatePayment committed the initiated intent, while
+			// the QR service (which selects initiated rows) or a second retry wins next.
+			if action == "qr-quote" {
+				if err := db.Model(&paymentdomain.Payment{}).Where("id = ?", stale.ID).Updates(map[string]interface{}{"amount": money.FromDecimal(decimal.NewFromInt(102)), "fee_amount": money.FromDecimal(decimal.NewFromInt(2)), "provider_payload": jsonmap.JSON{"invoice_required": true, "quote_marker": "independent-qr-service"}}).Error; err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if _, err := svc.paymentRepo.ExpirePendingByOrderIDs([]uint{order.ID}, time.Now()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_ = svc.applyProviderPayment(CreatePaymentInput{}, &order, &ch, &stale)
+			var stored paymentdomain.Payment
+			if err := db.First(&stored, stale.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if action == "qr-quote" {
+				if !stored.Amount.Decimal.Equal(decimal.NewFromInt(102)) || stored.ProviderPayload["quote_marker"] != "independent-qr-service" {
+					t.Fatalf("stale native apply overwrote QR quote: amount=%s payload=%v", stored.Amount.String(), stored.ProviderPayload)
+				}
+			} else if stored.Status != constants.PaymentStatusExpired {
+				t.Fatalf("stale native apply resurrected expired intent: %s", stored.Status)
+			}
+		})
+	}
+}
+
+type manualLocalCommitHook struct {
+	paymentcontract.Store
+	after func()
+}
+
+func (h *manualLocalCommitHook) WithinTransaction(fn func(paymentcontract.Transaction) error) error {
+	err := h.Store.WithinTransaction(fn)
+	if err == nil && h.after != nil {
+		after := h.after
+		h.after = nil
+		after()
+	}
+	return err
+}
+
+func TestManualLocalQRInitializationIsCommittedAtomically(t *testing.T) {
+	for _, business := range []string{"order", "recharge"} {
+		for _, action := range []string{"qr-quote", "expire"} {
+			t.Run(business+"/"+action, func(t *testing.T) {
+				svc, db := setupPaymentServiceWalletTest(t)
+				svc.userRepo = userstore.New(db)
+				user := userdomain.User{Email: "atomic@example.com", PasswordHash: "test", Status: constants.UserStatusActive}
+				if err := db.Create(&user).Error; err != nil {
+					t.Fatal(err)
+				}
+				ch := paymentdomain.PaymentChannel{ProviderType: manualQRProviderType, ChannelType: "wechat", InteractionMode: "qr", IsActive: true}
+				if err := db.Create(&ch).Error; err != nil {
+					t.Fatal(err)
+				}
+				amount := money.FromDecimal(decimal.NewFromInt(100))
+				expiry := time.Now().Add(time.Hour)
+				order := orderdomain.Order{OrderNo: "DJATOMIC", UserID: user.ID, Currency: "CNY", Status: constants.OrderStatusPendingPayment, TotalAmount: amount, OriginalAmount: amount, ExpiresAt: &expiry}
+				if business == "order" {
+					if err := db.Create(&order).Error; err != nil {
+						t.Fatal(err)
+					}
+				}
+				var id uint
+				svc.paymentRepo = &manualLocalCommitHook{Store: svc.paymentRepo, after: func() {
+					var p paymentdomain.Payment
+					if err := db.First(&p).Error; err != nil {
+						t.Fatal(err)
+					}
+					id = p.ID
+					if p.Status != constants.PaymentStatusPending || p.QRCode == "" || p.ProviderPayload["manual_confirmation_required"] != true {
+						t.Errorf("first committed state is not a complete pending intent: status=%s qr=%q payload=%v", p.Status, p.QRCode, p.ProviderPayload)
+					}
+					// Another client can already use the existing order/recharge number here.
+					updates := map[string]interface{}{"amount": money.FromDecimal(decimal.NewFromInt(102)), "fee_amount": money.FromDecimal(decimal.NewFromInt(2)), "provider_payload": jsonmap.JSON{"quote_marker": "qr-won"}}
+					if action == "expire" {
+						updates = map[string]interface{}{"status": constants.PaymentStatusExpired}
+					}
+					if err := db.Model(&paymentdomain.Payment{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+						t.Fatal(err)
+					}
+				}}
+				if business == "order" {
+					if _, err := svc.CreatePayment(CreatePaymentInput{OrderID: order.ID, ChannelID: ch.ID}); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					if _, err := svc.CreateWalletRechargePayment(CreateWalletRechargePaymentInput{UserID: user.ID, ChannelID: ch.ID, Amount: amount, Currency: "CNY"}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var p paymentdomain.Payment
+				if err := db.First(&p, id).Error; err != nil {
+					t.Fatal(err)
+				}
+				if action == "expire" {
+					if p.Status != constants.PaymentStatusExpired {
+						t.Fatal("post-commit initialization revived expired payment")
+					}
+				} else if !p.Amount.Decimal.Equal(decimal.NewFromInt(102)) || p.ProviderPayload["quote_marker"] != "qr-won" {
+					t.Fatal("post-commit initialization overwrote QR quote")
+				}
+			})
+		}
+	}
+}
+
+type manualLocalFailedExpiryQueue struct {
+	paymentcontract.Queue
+	beforeFailure func(uint)
+}
+
+func (q *manualLocalFailedExpiryQueue) Enabled() bool { return true }
+func (q *manualLocalFailedExpiryQueue) EnqueueWalletRechargeExpire(id uint, _ time.Duration) error {
+	q.beforeFailure(id)
+	return errors.New("queue unavailable")
+}
+
+func TestManualLocalQRRechargeQueueFailurePreservesCommittedState(t *testing.T) {
+	for _, action := range []string{"pending", "claimed", "success", "expired"} {
+		t.Run(action, func(t *testing.T) {
+			svc, db := setupPaymentServiceWalletTest(t)
+			svc.userRepo = userstore.New(db)
+			user := userdomain.User{Email: "queue@example.com", PasswordHash: "test", Status: constants.UserStatusActive}
+			if err := db.Create(&user).Error; err != nil {
+				t.Fatal(err)
+			}
+			ch := paymentdomain.PaymentChannel{ProviderType: manualQRProviderType, ChannelType: "alipay", InteractionMode: "qr", IsActive: true}
+			if err := db.Create(&ch).Error; err != nil {
+				t.Fatal(err)
+			}
+			var id uint
+			svc.queue = &manualLocalFailedExpiryQueue{beforeFailure: func(paymentID uint) {
+				id = paymentID
+				switch action {
+				case "claimed":
+					if err := db.Model(&paymentdomain.Payment{}).Where("id = ?", id).Update("provider_payload", jsonmap.JSON{"customer_claimed_paid": true}).Error; err != nil {
+						t.Fatal(err)
+					}
+				case "success", "expired":
+					updates := map[string]interface{}{"status": action}
+					if action == "success" {
+						updates["paid_at"] = time.Now()
+					}
+					if err := db.Model(&paymentdomain.Payment{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+						t.Fatal(err)
+					}
+					if err := db.Model(&walletdomain.RechargeOrder{}).Where("payment_id = ?", id).Updates(updates).Error; err != nil {
+						t.Fatal(err)
+					}
+				}
+			}}
+			_, err := svc.CreateWalletRechargePayment(CreateWalletRechargePaymentInput{UserID: user.ID, ChannelID: ch.ID, Amount: money.FromDecimal(decimal.NewFromInt(100)), Currency: "CNY"})
+			if !errors.Is(err, ErrQueueUnavailable) {
+				t.Fatalf("expected scheduling error, got %v", err)
+			}
+			var p paymentdomain.Payment
+			var r walletdomain.RechargeOrder
+			if err := db.First(&p, id).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Where("payment_id = ?", id).First(&r).Error; err != nil {
+				t.Fatal(err)
+			}
+			want := action
+			if action == "claimed" {
+				want = "pending"
+				if p.ProviderPayload["customer_claimed_paid"] != true {
+					t.Fatal("claim overwritten")
+				}
+			}
+			if p.Status != want || r.Status != want {
+				t.Fatalf("queue failure changed committed status: payment=%s recharge=%s want=%s", p.Status, r.Status, want)
+			}
+			if action == "success" && (p.PaidAt == nil || r.PaidAt == nil) {
+				t.Fatal("receipt timestamps overwritten")
 			}
 		})
 	}

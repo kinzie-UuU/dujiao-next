@@ -45,6 +45,8 @@ type OverviewRow struct {
 type PaymentOrderAlertCountsRow struct {
 	PendingPaymentOrders int64
 	PaymentsFailed       int64
+	// FailedPaymentIDs identify unresolved attempts for notification deduplication.
+	FailedPaymentIDs []uint
 }
 
 type OrderTrendRow struct {

@@ -367,8 +367,10 @@ const (
 	TaskAffiliateOrderPaid          = "affiliate:order_paid"
 	TaskResellerConfirmLedger       = "reseller:confirm_ledger"
 	TaskProcurementSubmit           = "procurement:submit"
+	TaskBackupProcurementSubmit     = "procurement:backup_submit"
 	TaskProcurementPollStatus       = "procurement:poll_status"
 	TaskProcurementSyncAccepted     = "procurement:sync_accepted"
+	TaskProcurementRetryPending     = "procurement:retry_pending"
 	TaskUpstreamSyncProducts        = "upstream:sync_products"
 	TaskUpstreamSyncStock           = "upstream:sync_stock"
 	TaskReconciliationRun           = "reconciliation:run"
@@ -391,6 +393,7 @@ const (
 const (
 	ProcurementStatusPending           = "pending"
 	ProcurementStatusSubmitted         = "submitted"
+	ProcurementStatusUncertain         = "uncertain"
 	ProcurementStatusAccepted          = "accepted"
 	ProcurementStatusRejected          = "rejected"
 	ProcurementStatusFailed            = "failed"
@@ -412,6 +415,7 @@ const (
 const (
 	ConnectionProtocolDujiaoNext = "dujiao-next"
 	ConnectionProtocolNewzoe     = "newzoe"
+	ConnectionProtocolFangfang   = "fangfang-readonly"
 )
 
 // API 凭证状态常量

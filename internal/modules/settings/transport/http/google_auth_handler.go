@@ -2,6 +2,8 @@ package settingshttp
 
 import (
 	"errors"
+	"github.com/dujiao-next/internal/shared/operationaudit"
+	"reflect"
 
 	"github.com/gin-gonic/gin"
 
@@ -48,6 +50,13 @@ func (h *GoogleAuthHandler) UpdateGoogleAuth(c *gin.Context) {
 		return
 	}
 
+	old, readErr := h.googleAuth.GetGoogleAuthSetting()
+	before := operationaudit.Fields{"snapshot_available": readErr == nil}
+	if readErr == nil {
+		before["enabled"] = old.Enabled
+	}
+	audit := operationaudit.New("settings.google_auth", "google_auth_config", before)
+	defer ginutil.RecordOperation(c, audit)
 	setting, err := h.googleAuth.PatchGoogleAuthSetting(req)
 	if err != nil {
 		switch {
@@ -59,6 +68,11 @@ func (h *GoogleAuthHandler) UpdateGoogleAuth(c *gin.Context) {
 		return
 	}
 
+	after := operationaudit.Fields{"enabled": setting.Enabled}
+	if readErr == nil {
+		after["configuration_changed"] = !reflect.DeepEqual(old, setting)
+	}
+	audit.Success(after)
 	h.googleAuth.ApplyRuntime(setting)
 	_ = cache.DelAllPublicConfig(c.Request.Context())
 	response.Success(c, settingssecurity.MaskGoogleAuthSettingForAdmin(setting))

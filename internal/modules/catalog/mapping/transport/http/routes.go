@@ -7,6 +7,9 @@ func RegisterAdminRoutes(admin gin.IRoutes, handler *AdminHandler) {
 	if admin == nil || handler == nil {
 		panic("catalog admin product mapping routes: required dependency is nil")
 	}
+	admin.GET("/supplier-readonly-bindings", handler.ListReadOnlyBindings)
+	admin.POST("/supplier-readonly-bindings", handler.BindReadOnlySupplier)
+	admin.POST("/supplier-readonly-bindings/:id/refresh", handler.RefreshReadOnlyBinding)
 	admin.GET("/product-mappings", handler.GetProductMappings)
 	admin.GET("/product-mappings/:id", handler.GetProductMapping)
 	admin.POST("/product-mappings/import", handler.ImportUpstreamProduct)

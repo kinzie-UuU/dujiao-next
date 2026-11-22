@@ -23,6 +23,7 @@ import (
 	userstore "github.com/dujiao-next/internal/modules/identity/user/infrastructure/gormstore"
 
 	userdomain "github.com/dujiao-next/internal/modules/identity/user/domain"
+	"github.com/dujiao-next/internal/modules/procurement/backupstate"
 	procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
 
 	settingsapp "github.com/dujiao-next/internal/modules/settings/application"
@@ -52,6 +53,7 @@ func setupOrderRefundServiceTest(t *testing.T) (*Service, *gorm.DB) {
 		&fulfillmentdomain.Fulfillment{},
 		&siteconnectiondomain.Connection{},
 		&procurementdomain.Order{},
+		&backupstate.Claim{},
 		&affiliatedomain.Profile{},
 		&affiliatedomain.Commission{},
 		&affiliatedomain.WithdrawRequest{},

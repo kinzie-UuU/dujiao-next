@@ -520,3 +520,7 @@ func mapOrderTransportError(err error) error {
 	}
 	return err
 }
+
+func (a orderAdminQueryAdapter) ReadOrderAuditStatus(orderID uint) (string, error) {
+	return a.orders.ReadOrderAuditStatus(orderID)
+}

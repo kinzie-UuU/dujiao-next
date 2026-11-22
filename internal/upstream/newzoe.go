@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -103,10 +104,21 @@ func (a *newzoeAdapter) ListCategories(context.Context) (*CategoryListResult, er
 
 const museAccountTerms = "<p>交付内容包括 Muse 账号、密码、双重验证（2FA）信息和邮箱取件链接。请在购买后 1 小时内首次登录。上游仅保障首次登录，建议当天用完额度。</p>"
 
+const geminiProSelfServiceTerms = "<p>需自备谷歌账号，并在交付的自助开通系统中提供账号、密码和双重验证（2FA）信息，无需绑定银行卡。提交前请按开通页面要求处理支付资料。仅保障会员开通，开通失败可申请售后；开通成功后质保结束。会员期限以所选规格为准，不承诺具体模型权限。</p>"
+
 var newzoeProductTerms = map[uint]string{
+	3:  "<p>用于 Codex 的美国实体手机号单次验证。付款后自动交付接码链接，需打开链接获取号码和验证码。每份仅可成功接收一次验证码；未收到验证码不扣次数。无法接收时，可在激活 1.5 分钟后取消并重新兑换号码；收到验证码后次数即被消耗。此商品不承诺其他平台、其他国家或长期号码使用。</p>",
+	16: "<p>交付 Gemini Pro 18 个月兑换链接，需自备注册超过 7 天且支持 Google One 的谷歌账号，无需绑定银行卡。请在购买后 30 分钟内兑换，链接会过期。已有 Pro 方案可能被替换，原方案退款以原支付渠道处理结果为准。请保留从购买前到兑换的连续录屏用于售后核验；超过 30 分钟或兑换成功后质保结束。</p>",
 	21: museAccountTerms,
 	22: museAccountTerms,
 	24: "<p>在你自己的多邻国账号上使用激活码，可开通 12 个月的 Super 会员，无需绑定银行卡。上游标注的质保期为 5 天，激活后即结束。</p>",
+	34: "<p>Figma Pro 教育版成品账号，交付邮箱、密码及邮箱 Token。两年为上游标注规格，具体起止以交付账号为准，不代表两年质保。教育资格及功能受 Figma 官方规则约束，请勿更改绑定邮箱。</p>",
+	35: "<p>交付 Gemini AI Plus 6 个月兑换链接，需自备支持 Google One 的谷歌账号，无需绑定银行卡。链接质保 24 小时，兑换成功后质保结束。虚拟商品发出后非质量问题不退；请按需购买。</p>",
+	36: geminiProSelfServiceTerms,
+	37: geminiProSelfServiceTerms,
+	38: geminiProSelfServiceTerms,
+	39: "<p>Muse 2B 额度日抛成品号。交付账号、密码、双重验证（2FA）信息和邮箱取件链接，或账号与邮箱取件链接，以订单实际内容为准。仅保障首次登录，请在购买后 1 小时内登录，逾期邮件可能失效；建议当天尽快用完额度，不承诺持续可用。</p>",
+	40: "<p>Muse 1B 额度成品号，使用 Hotmail 邮箱，质保 2 天。交付 API 邮件取件数据（API MAIL）；按交付说明将完整 API 邮件数据粘贴到 https://dongvanfb.net/read_mail_box/ 查看验证码，再登录 https://muse.ai/ 使用。</p>",
 }
 
 func (a *newzoeAdapter) ListProducts(ctx context.Context, opts ListProductsOpts) (*ProductListResult, error) {
@@ -156,7 +168,12 @@ func (a *newzoeAdapter) ListProducts(ctx context.Context, opts ListProductsOpts)
 	// Newzoe lists the complete on-sale catalog. In synchronization mode,
 	// represent missing supported products explicitly so stale stock is hidden.
 	if opts.IncludeInactive {
-		for _, id := range []uint{21, 22, 24} {
+		ids := make([]uint, 0, len(newzoeProductTerms))
+		for id := range newzoeProductTerms {
+			ids = append(ids, id)
+		}
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		for _, id := range ids {
 			if !active[id] {
 				items = append(items, UpstreamProduct{ID: id, IsActive: false})
 			}

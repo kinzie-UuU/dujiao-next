@@ -16,6 +16,7 @@ import (
 	"github.com/dujiao-next/internal/config"
 	mappinggormstore "github.com/dujiao-next/internal/modules/catalog/mapping/infrastructure/gormstore"
 	procurementapp "github.com/dujiao-next/internal/modules/procurement/application"
+	backupstate "github.com/dujiao-next/internal/modules/procurement/backupstate"
 	procurementcontract "github.com/dujiao-next/internal/modules/procurement/contract"
 	procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
 	procurementgormstore "github.com/dujiao-next/internal/modules/procurement/infrastructure/gormstore"
@@ -59,6 +60,7 @@ func setupProcurementTestDB(t *testing.T) *gorm.DB {
 		&orderdomain.OrderRefundRecord{},
 		&fulfillmentdomain.Fulfillment{},
 		&procurementdomain.Order{},
+		&backupstate.Claim{},
 		&siteconnectiondomain.Connection{},
 		&mappingdomain.Mapping{},
 		&mappingdomain.SKUMapping{},
@@ -105,13 +107,14 @@ func createProcTestOrder(t *testing.T, db *gorm.DB, orderNo, status, fulfillment
 func createTestProcurementOrder(t *testing.T, db *gorm.DB, connID, localOrderID uint, localOrderNo, status string) *ProcurementOrder {
 	t.Helper()
 	order := &ProcurementOrder{
-		ConnectionID:    connID,
-		LocalOrderID:    localOrderID,
-		LocalOrderNo:    localOrderNo,
-		Status:          status,
-		LocalSellAmount: money.FromDecimal(decimal.NewFromInt(100)),
-		Currency:        "CNY",
-		TraceID:         "test-trace-id",
+		SubmissionVersion: 1,
+		ConnectionID:      connID,
+		LocalOrderID:      localOrderID,
+		LocalOrderNo:      localOrderNo,
+		Status:            status,
+		LocalSellAmount:   money.FromDecimal(decimal.NewFromInt(100)),
+		Currency:          "CNY",
+		TraceID:           "test-trace-id",
 	}
 	if err := db.Create(order).Error; err != nil {
 		t.Fatalf("create procurement order failed: %v", err)

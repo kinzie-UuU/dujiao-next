@@ -13,7 +13,7 @@ func TestPaymentServiceImplementationIsSplitByResponsibility(t *testing.T) {
 	serviceDirectory := filepath.Join(repositoryRoot, "internal", "modules", "payment", "application")
 	expected := map[string][]string{
 		"payment_service.go": {
-			"SetProcurementService", "SetDownstreamCallbackService", "SetMemberLevelService",
+			"SetProcurementService", "SetBackupPaidTrigger", "SetDownstreamCallbackService", "SetMemberLevelService",
 			"NewPaymentService", "ListPayments", "GetPayment", "ListChannels", "GetChannel",
 			"paymentLogger",
 		},
@@ -28,6 +28,7 @@ func TestPaymentServiceImplementationIsSplitByResponsibility(t *testing.T) {
 			"resolveProviderOrderNo", "matchesBusinessOrderNo", "buildPaymentReturnQuery",
 			"applyProviderPayment", "ValidateChannel", "resolveTenantReturnURL",
 			"validateManualUSDT", "applyManualUSDT",
+			"isManualLocalQR", "validateManualLocalQR", "prepareManualLocalQR",
 			"tenantReturnPath", "resolveTokenPayOrderUserKey",
 		},
 		"payment_service_rules.go": {

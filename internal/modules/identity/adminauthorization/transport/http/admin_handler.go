@@ -74,7 +74,7 @@ type AdminDirectory interface {
 	GetByID(id uint) (*admindomain.Admin, error)
 	GetByUsername(username string) (*admindomain.Admin, error)
 	Create(admin *admindomain.Admin) error
-	Update(admin *admindomain.Admin) error
+	Update(admin *admindomain.Admin, expectedVersion ...uint64) error
 	Delete(id uint) error
 	Count() (int64, error)
 }

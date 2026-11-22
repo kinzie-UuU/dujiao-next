@@ -3,6 +3,7 @@ package integrationtest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -27,9 +28,11 @@ import (
 	mappinghttp "github.com/dujiao-next/internal/modules/catalog/mapping/transport/http"
 	productgormstore "github.com/dujiao-next/internal/modules/catalog/product/store/gormstore"
 	"github.com/dujiao-next/internal/shared/jsonmap"
+	"github.com/dujiao-next/internal/shared/money"
 	"github.com/dujiao-next/internal/upstream"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
 
@@ -358,5 +361,195 @@ func TestBatchImportUpstreamProductsRestoresSoftDeletedAutoCategory(t *testing.T
 	}
 	if restored.NameJSON["zh-CN"] != "流媒体" {
 		t.Fatalf("expected restored category name to be refreshed, got %+v", restored.NameJSON)
+	}
+}
+
+type readonlyQuoteAdapter struct {
+	upstream.Adapter
+	price      string
+	stock      int
+	reads      int
+	observedAt time.Time
+}
+
+func (a *readonlyQuoteAdapter) GetProduct(_ context.Context, id uint) (*upstream.UpstreamProduct, error) {
+	a.reads++
+	a.observedAt = time.Now().UTC()
+	native := map[uint]string{1: "6aeedc6cadf360530f5faf80", 2: "6a4b4d7d1827db4ca39bb8be", 3: "6ae37dc5ed8e0e40e4de28b7"}[id]
+	return &upstream.UpstreamProduct{ID: id, Currency: "USD", IsActive: true, SKUs: []upstream.UpstreamSKU{{ID: id, SKUCode: native, PriceAmount: a.price, StockQuantity: a.stock, IsActive: true}}}, nil
+}
+
+func readonlyBindingFixture(t *testing.T) (*mappingapp.Service, *gorm.DB, *readonlyQuoteAdapter) {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:readonly_%d?mode=memory&cache=shared", time.Now().UnixNano())), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&categorydomain.Category{}, &productdomain.Product{}, &productdomain.ProductSKU{}, &siteconnectiondomain.Connection{}, &mappingdomain.Mapping{}, &mappingdomain.SKUMapping{}, &mappingdomain.ReadOnlyBinding{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []any{
+		&categorydomain.Category{ID: 1, Slug: "test", NameJSON: jsonmap.JSON{"zh-CN": "测试"}},
+		&siteconnectiondomain.Connection{ID: 1, Protocol: constants.ConnectionProtocolFangfang},
+		&siteconnectiondomain.Connection{ID: 2, Protocol: constants.ConnectionProtocolNewzoe},
+		&productdomain.Product{ID: 37, Slug: "upstream-1-22-1793713309179", CategoryID: 1, TitleJSON: jsonmap.JSON{"zh-CN": "测试"}, FulfillmentType: constants.FulfillmentTypeUpstream, IsMapped: true, IsActive: true},
+		&productdomain.Product{ID: 41, Slug: "gpt-plus-account-preorder", CategoryID: 1, TitleJSON: jsonmap.JSON{"zh-CN": "测试"}, FulfillmentType: constants.FulfillmentTypeManual, IsActive: true},
+		&productdomain.Product{ID: 49, Slug: "muse-invitation-cdk", CategoryID: 1, TitleJSON: jsonmap.JSON{"zh-CN": "测试"}, FulfillmentType: constants.FulfillmentTypeManual},
+		&productdomain.Product{ID: 50, Slug: "muse-31b-first-login", CategoryID: 1, TitleJSON: jsonmap.JSON{"zh-CN": "测试"}, FulfillmentType: constants.FulfillmentTypeManual, IsActive: true},
+		&productdomain.Product{ID: 51, Slug: "gmail-aged-2010-2022", CategoryID: 1, TitleJSON: jsonmap.JSON{"zh-CN": "测试"}, FulfillmentType: constants.FulfillmentTypeManual, IsActive: true},
+		&productdomain.ProductSKU{ID: 70, ProductID: 37, SKUCode: "MUSE31B", PriceAmount: money.FromDecimal(decimal.NewFromInt(26)), IsActive: true},
+		&productdomain.ProductSKU{ID: 74, ProductID: 41, SKUCode: "gpt-plus-account-preorder-1m", PriceAmount: money.FromDecimal(decimal.NewFromInt(108)), ManualStockTotal: 6, IsActive: true},
+		&productdomain.ProductSKU{ID: 84, ProductID: 49, SKUCode: "CDK"},
+		&productdomain.ProductSKU{ID: 85, ProductID: 50, SKUCode: "fang-fang-muse-31b-default", PriceAmount: money.FromDecimal(decimal.NewFromInt(26)), ManualStockTotal: 10, IsActive: true},
+		&productdomain.ProductSKU{ID: 86, ProductID: 51, SKUCode: "fang-fang-gmail-2010-2022-default", PriceAmount: money.FromDecimal(decimal.NewFromInt(40)), ManualStockTotal: 10, IsActive: true},
+		&mappingdomain.Mapping{ID: 2, ConnectionID: 2, LocalProductID: 37, UpstreamProductID: 22, IsActive: true},
+		&mappingdomain.SKUMapping{ID: 2, ProductMappingID: 2, LocalSKUID: 70, UpstreamSKUID: 22, UpstreamStock: 0},
+	} {
+		if err := db.Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	adapter := &readonlyQuoteAdapter{price: "0.96", stock: 3}
+	service, err := mappingapp.NewService(mappingapp.Options{
+		Products: productgormstore.NewProductStore(db), SKUs: productgormstore.NewSKUStore(db),
+		ReadOnlyBindings: mappinggormstore.NewReadOnlyBindingStore(db),
+		Connections:      &mappingConnectionProvider{db: db, adapter: adapter}, Media: adminNoopLocalMediaRecorder{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service, db, adapter
+}
+func snapshotReadOnlyProtected(t *testing.T, db *gorm.DB) string {
+	t.Helper()
+	state := map[string]any{}
+	for _, table := range []string{"products", "product_skus", "product_mappings", "sku_mappings"} {
+		var rows []map[string]interface{}
+		if err := db.Table(table).Order("id").Find(&rows).Error; err != nil {
+			t.Fatal(err)
+		}
+		state[table] = rows
+	}
+	b, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+func TestReadOnlyBindingsPreserveExistingFulfillment(t *testing.T) {
+	service, db, adapter := readonlyBindingFixture(t)
+	before := snapshotReadOnlyProtected(t, db)
+	muse := mappingapp.ReadOnlyBindingInput{ConnectionID: 1, LocalProductID: 50, LocalSKUID: 85, UpstreamProductID: 1}
+	beforeRequest := time.Now().UTC()
+	first, err := service.BindReadOnlySupplier(context.Background(), muse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.PurchaseEnabled || first.UpstreamPrice != "0.96" || first.UpstreamStock != 3 || first.UpstreamSKUCode != "6aeedc6cadf360530f5faf80" {
+		t.Fatalf("incorrect quote: %+v", first)
+	}
+	if first.QuotedAt.Before(beforeRequest) || first.QuotedAt.After(adapter.observedAt) {
+		t.Fatal("quote time must be the start of the supplier request")
+	}
+	adapter.price, adapter.stock = "1.02", 8
+	again, err := service.RefreshReadOnlyBinding(context.Background(), first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.ID != first.ID || again.UpstreamPrice != "1.02" || again.UpstreamStock != 8 || again.PurchaseEnabled {
+		t.Fatalf("incorrect refresh: %+v", again)
+	}
+	gmail, err := service.BindReadOnlySupplier(context.Background(), mappingapp.ReadOnlyBindingInput{ConnectionID: 1, LocalProductID: 51, LocalSKUID: 86, UpstreamProductID: 3})
+	if err != nil || gmail.PurchaseEnabled {
+		t.Fatalf("gmail bind: %+v %v", gmail, err)
+	}
+	rows, err := service.ListReadOnlyBindings(1)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("list: %+v %v", rows, err)
+	}
+	if got := snapshotReadOnlyProtected(t, db); got != before {
+		t.Fatal("binding or refresh modified existing product, SKU, procurement mapping, or stock")
+	}
+	if adapter.reads != 3 {
+		t.Fatal("unexpected upstream operations")
+	}
+}
+func TestReadOnlyBindingsRejectWrongProductAndProtocol(t *testing.T) {
+	service, db, adapter := readonlyBindingFixture(t)
+	for _, input := range []mappingapp.ReadOnlyBindingInput{
+		{ConnectionID: 1, LocalProductID: 49, LocalSKUID: 84, UpstreamProductID: 1},
+		{ConnectionID: 1, LocalProductID: 50, LocalSKUID: 74, UpstreamProductID: 1},
+		{ConnectionID: 1, LocalProductID: 37, LocalSKUID: 70, UpstreamProductID: 1},
+		{ConnectionID: 1, LocalProductID: 51, LocalSKUID: 86, UpstreamProductID: 1},
+		{ConnectionID: 2, LocalProductID: 51, LocalSKUID: 86, UpstreamProductID: 3},
+		{ConnectionID: 1, LocalProductID: 51, LocalSKUID: 86, UpstreamProductID: 2},
+	} {
+		if _, err := service.BindReadOnlySupplier(context.Background(), input); !errors.Is(err, mappingcontract.ErrReadOnlyBindingInvalid) {
+			t.Fatalf("unexpected result: %v", err)
+		}
+	}
+	var count int64
+	db.Model(&mappingdomain.ReadOnlyBinding{}).Count(&count)
+	if count != 0 || adapter.reads != 0 {
+		t.Fatal("invalid binding performed supplier read or write")
+	}
+}
+func TestReadOnlyBindingAdminRoutes(t *testing.T) {
+	service, _, _ := readonlyBindingFixture(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	mappinghttp.RegisterAdminRoutes(router, mappinghttp.NewAdminHandler(service))
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest("POST", "/supplier-readonly-bindings", strings.NewReader(`{"connection_id":1,"local_product_id":51,"local_sku_id":86,"upstream_product_id":3,"purchase_enabled":true}`)))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"purchase_enabled":false`) {
+		t.Fatalf("bind %d %s", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest("GET", "/supplier-readonly-bindings?connection_id=1", nil))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"local_sku_id":86`) {
+		t.Fatalf("list %d %s", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest("POST", "/supplier-readonly-bindings/1/refresh", nil))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"purchase_enabled":false`) {
+		t.Fatalf("refresh %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestReadOnlyBindingCannotRetargetExistingAssociation(t *testing.T) {
+	service, db, _ := readonlyBindingFixture(t)
+	input := mappingapp.ReadOnlyBindingInput{ConnectionID: 1, LocalProductID: 51, LocalSKUID: 86, UpstreamProductID: 3}
+	original, err := service.BindReadOnlySupplier(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&productdomain.ProductSKU{ID: 87, ProductID: 51, SKUCode: "another-sku"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	input.LocalSKUID = 87
+	if _, err := service.BindReadOnlySupplier(context.Background(), input); !errors.Is(err, mappingcontract.ErrReadOnlyBindingInvalid) {
+		t.Fatalf("off-pin retarget not refused: %v", err)
+	}
+	rows, err := service.ListReadOnlyBindings(1)
+	if err != nil || len(rows) != 1 || rows[0].ID != original.ID || rows[0].LocalSKUID != 86 {
+		t.Fatalf("association changed: %+v %v", rows, err)
+	}
+}
+
+func TestPlusBindingPreservesManualFulfillmentAndActivationTime(t *testing.T) {
+	service, db, adapter := readonlyBindingFixture(t)
+	before := snapshotReadOnlyProtected(t, db)
+	adapter.price = "5.29"
+	input := mappingapp.ReadOnlyBindingInput{ConnectionID: 1, LocalProductID: 41, LocalSKUID: 74, UpstreamProductID: 2}
+	binding, err := service.BindReadOnlySupplier(context.Background(), input)
+	if err != nil || binding.CreatedAt.IsZero() || binding.UpstreamSKUCode != "6a4b4d7d1827db4ca39bb8be" {
+		t.Fatalf("binding=%v err=%v", binding, err)
+	}
+	refreshed, err := service.RefreshReadOnlyBinding(context.Background(), binding.ID)
+	if err != nil || !refreshed.CreatedAt.Equal(binding.CreatedAt) {
+		t.Fatal("refresh changed activation time")
+	}
+	if snapshotReadOnlyProtected(t, db) != before {
+		t.Fatal("binding changed fulfillment or catalog")
 	}
 }

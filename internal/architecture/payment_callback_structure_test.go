@@ -23,7 +23,8 @@ func TestPaymentCallbackImplementationIsSplitByResponsibility(t *testing.T) {
 			"validateWalletCallbackPaymentFacts",
 		},
 		"payment_service_callback_dispatch.go": {
-			"enqueueOrderPaidAsync", "enqueueProcurementAsync", "enqueueDownstreamCallbackAsync",
+			"enqueueOrderPaidAsync", "enqueueProcurementAsync", "enqueueBackupPaidAsync",
+			"isFangFangBackupPinOrder", "enqueueDownstreamCallbackAsync",
 			"enqueueOrderPaidNotificationAsync", "enqueueWalletRechargeSuccessAsync",
 			"enqueueOrderPaidBotNotifyAsync", "enqueueWalletRechargeBotNotifyAsync",
 			"hasManualFulfillmentItems", "enqueueManualFulfillmentPendingAsync",

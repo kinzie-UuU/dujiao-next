@@ -57,3 +57,23 @@ type SKUMapping struct {
 func (SKUMapping) TableName() string {
 	return "sku_mappings"
 }
+
+// ReadOnlyBinding records a supplier quote alongside an existing SKU. It is
+// deliberately separate from procurement mappings: no fulfillment code reads it.
+type ReadOnlyBinding struct {
+	ID                uint      `gorm:"primarykey" json:"id"`
+	ConnectionID      uint      `gorm:"not null;uniqueIndex:idx_readonly_connection_product;uniqueIndex:idx_readonly_connection_sku" json:"connection_id"`
+	LocalProductID    uint      `gorm:"not null;index" json:"local_product_id"`
+	LocalSKUID        uint      `gorm:"column:local_sku_id;not null;uniqueIndex:idx_readonly_connection_sku" json:"local_sku_id"`
+	UpstreamProductID uint      `gorm:"not null;uniqueIndex:idx_readonly_connection_product" json:"upstream_product_id"`
+	UpstreamSKUCode   string    `gorm:"column:upstream_sku_code;type:varchar(64);not null" json:"upstream_sku_code"`
+	UpstreamPrice     string    `gorm:"type:varchar(64);not null" json:"upstream_price"`
+	Currency          string    `gorm:"type:varchar(3);not null" json:"currency"`
+	UpstreamStock     int       `gorm:"not null" json:"upstream_stock"`
+	QuotedAt          time.Time `json:"quoted_at"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+	PurchaseEnabled   bool      `gorm:"-" json:"purchase_enabled"`
+}
+
+func (ReadOnlyBinding) TableName() string { return "supplier_readonly_bindings" }

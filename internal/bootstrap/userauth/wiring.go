@@ -3,7 +3,9 @@ package userauthwiring
 import (
 	"github.com/dujiao-next/internal/app/container"
 	captchahttp "github.com/dujiao-next/internal/modules/captcha/transport/http"
+	userchallengestore "github.com/dujiao-next/internal/modules/identity/userauth/infrastructure/gormstore"
 	userauthtransport "github.com/dujiao-next/internal/modules/identity/userauth/transport/http"
+	"github.com/dujiao-next/internal/platform/database/gormdb"
 )
 
 // Handlers contains the complete user authentication HTTP entrypoint set.
@@ -50,7 +52,7 @@ func New(c *container.Container) Handlers {
 		TwoFA: userauthtransport.NewUser2FAHandler(
 			user2FATOTPTransportAdapter{totp: c.UserTOTPService},
 			user2FAAuthTransportAdapter{auth: c.UserAuthService, users: c.UserStore},
-			user2FAChallengeStoreAdapter{},
+			userchallengestore.NewChallengeStore(gormdb.DB),
 			recorder,
 		),
 		TelegramOIDC: userauthtransport.NewUserTelegramOIDCHandler(

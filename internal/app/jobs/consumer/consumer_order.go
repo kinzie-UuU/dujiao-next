@@ -409,7 +409,7 @@ func buildOrderFulfillmentEmailPayload(order *orderdomain.Order) string {
 		return ""
 	}
 	if order.Fulfillment != nil {
-		payload := strings.TrimSpace(order.Fulfillment.Payload)
+		payload := strings.TrimSpace(order.Fulfillment.CustomerPayload())
 		if payload != "" {
 			return payload
 		}
@@ -422,7 +422,7 @@ func buildOrderFulfillmentEmailPayload(order *orderdomain.Order) string {
 		if child.Fulfillment == nil {
 			continue
 		}
-		content := strings.TrimSpace(child.Fulfillment.Payload)
+		content := strings.TrimSpace(child.Fulfillment.CustomerPayload())
 		if content == "" {
 			continue
 		}

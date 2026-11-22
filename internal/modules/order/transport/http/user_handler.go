@@ -422,14 +422,5 @@ func respondFulfillmentDownload(c *gin.Context, order *orderdomain.Order) {
 }
 
 func collectFulfillmentPayload(order *orderdomain.Order) string {
-	if order.Fulfillment != nil && order.Fulfillment.Payload != "" {
-		return order.Fulfillment.Payload
-	}
-	var parts []string
-	for _, child := range order.Children {
-		if child.Fulfillment != nil && child.Fulfillment.Payload != "" {
-			parts = append(parts, child.Fulfillment.Payload)
-		}
-	}
-	return strings.Join(parts, "\n")
+	return orderpresenter.CustomerFulfillmentPayload(order)
 }

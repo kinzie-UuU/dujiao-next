@@ -16,9 +16,10 @@ import (
 )
 
 type adminLoginNotifierAdapter struct {
-	notifications notificationcontract.NotificationEnqueuer
-	slots         chan struct{}
-	prefix        string
+	notifications  notificationcontract.NotificationEnqueuer
+	slots          chan struct{}
+	aggregateSlots chan struct{}
+	prefix         string
 }
 
 func (a adminLoginNotifierAdapter) NotifyAdminLogin(login adminauthtransport.AdminLoginNotification) {
@@ -62,6 +63,21 @@ if redis.call('SET', KEYS[2], ARGV[1], 'NX', 'EX', 900) then return count end
 return 0
 `
 
+// This is an alert, not an account lock: attackers cannot deny a legitimate
+// administrator access by exhausting a shared threshold. The capped set stores
+// only hashed source addresses and bounds Redis memory under IP rotation.
+const distributedFailureWindowScript = `
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then redis.call('EXPIRE', KEYS[1], 600) end
+if redis.call('SCARD', KEYS[2]) < 5 then
+  redis.call('SADD', KEYS[2], ARGV[2])
+  if redis.call('TTL', KEYS[2]) < 0 then redis.call('EXPIRE', KEYS[2], 600) end
+end
+if count < 15 or redis.call('SCARD', KEYS[2]) < 5 then return 0 end
+if redis.call('SET', KEYS[3], ARGV[1], 'NX', 'EX', 900) then return count end
+return 0
+`
+
 func (a adminLoginNotifierAdapter) failureKeys(ip string) []string {
 	prefix := strings.TrimSpace(a.prefix)
 	if prefix == "" {
@@ -70,17 +86,42 @@ func (a adminLoginNotifierAdapter) failureKeys(ip string) []string {
 	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(ip)))
 	return []string{prefix + ":admin_login_fail:count:" + digest, prefix + ":admin_login_fail:alert:" + digest}
 }
+
+func (a adminLoginNotifierAdapter) distributedFailureKeys() []string {
+	prefix := strings.TrimSpace(a.prefix)
+	if prefix == "" {
+		prefix = constants.RedisPrefixDefault
+	}
+	return []string{prefix + ":admin_login_fail:distributed:count", prefix + ":admin_login_fail:distributed:ips", prefix + ":admin_login_fail:distributed:alert"}
+}
 func (a adminLoginNotifierAdapter) NotifyAdminLoginFailure(failure adminauthtransport.AdminLoginFailureNotification) {
 	if a.notifications == nil {
 		return
 	}
 	select {
 	case a.slots <- struct{}{}:
+		go func() { defer func() { <-a.slots }(); a.enqueueFailure(failure) }()
 	default:
 		logger.Warnw("admin_login_failure_notification_capacity_exceeded")
+	}
+	// Invalid challenge tokens need no password or CAPTCHA. Keep their existing
+	// per-IP warning but do not mix them into verified-credential failures.
+	if failure.Method != "password" && failure.Method != constants.AdminLoginEventLogin2FAVerify && failure.Method != constants.AdminLoginEventLoginRecoveryCode {
 		return
 	}
-	go func() { defer func() { <-a.slots }(); a.enqueueFailure(failure) }()
+	// Independent bounded workers prevent a slow per-IP notification from
+	// delaying the aggregate counter, and vice versa. Neither blocks login.
+	select {
+	case a.aggregateSlots <- struct{}{}:
+		go func() {
+			defer func() { <-a.aggregateSlots }()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			a.enqueueDistributedFailure(ctx, failure)
+		}()
+	default:
+		logger.Warnw("admin_login_distributed_notification_capacity_exceeded")
+	}
 }
 func (a adminLoginNotifierAdapter) enqueueFailure(failure adminauthtransport.AdminLoginFailureNotification) {
 	client := cache.Client()
@@ -112,5 +153,35 @@ func (a adminLoginNotifierAdapter) enqueueFailure(failure adminauthtransport.Adm
 		// Release only our reservation; the next failure can retry enqueueing the warning.
 		_ = client.Eval(cleanupCtx, `if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0`, []string{keys[1]}, eventID).Err()
 		logger.Warnw("admin_login_failure_notification_enqueue_failed")
+	}
+}
+
+func (a adminLoginNotifierAdapter) enqueueDistributedFailure(ctx context.Context, failure adminauthtransport.AdminLoginFailureNotification) {
+	client := cache.Client()
+	if client == nil {
+		return
+	}
+	keys := a.distributedFailureKeys()
+	eventID := uuid.NewString()
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(failure.ClientIP)))
+	count, err := client.Eval(ctx, distributedFailureWindowScript, keys, eventID, digest).Int64()
+	if err != nil {
+		logger.Warnw("admin_login_distributed_failure_counter_failed")
+		return
+	}
+	if count == 0 {
+		return
+	}
+	err = a.notifications.Enqueue(notificationcontract.EnqueueInput{
+		EventType: constants.NotificationEventAdminLoginFailed, BizType: "admin_login", Data: jsonmap.JSON{
+			"client_ip": "5+ IPs", "login_method": failure.Method, "failure_count": count, "window_minutes": 10,
+			"occurred_at": time.Now().UTC().Format(time.RFC3339), "security_event_id": eventID,
+		},
+	})
+	if err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = client.Eval(cleanupCtx, `if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0`, []string{keys[2]}, eventID).Err()
+		logger.Warnw("admin_login_distributed_failure_notification_enqueue_failed")
 	}
 }

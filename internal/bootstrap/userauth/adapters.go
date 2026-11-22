@@ -17,13 +17,11 @@ import (
 
 	settingsapp "github.com/dujiao-next/internal/modules/settings/application"
 
-	"github.com/dujiao-next/internal/cache"
 	auditlogapp "github.com/dujiao-next/internal/modules/auditlog/application"
 	externalidentitydomain "github.com/dujiao-next/internal/modules/identity/externalidentity/domain"
 	googleauthapp "github.com/dujiao-next/internal/modules/identity/googleauth/application"
 	telegramauthapp "github.com/dujiao-next/internal/modules/identity/telegramauth/application"
 	userauthapp "github.com/dujiao-next/internal/modules/identity/userauth/application"
-	"github.com/dujiao-next/internal/modules/identity/userauth/challenge"
 	usertotpapp "github.com/dujiao-next/internal/modules/identity/userauth/totp/application"
 	userauthtransport "github.com/dujiao-next/internal/modules/identity/userauth/transport/http"
 	notificationcontract "github.com/dujiao-next/internal/modules/notification/contract"
@@ -520,16 +518,17 @@ func (a user2FAAuthTransportAdapter) ParseUserChallengeToken(tokenString string)
 		return nil, nil
 	}
 	return &userauthtransport.UserChallengeClaims{
-		ResellerID:  claims.ResellerID,
-		UserID:      claims.UserID,
-		JTI:         claims.JTI,
-		RememberMe:  claims.RememberMe,
-		LoginSource: claims.LoginSource,
+		ResellerID:   claims.ResellerID,
+		UserID:       claims.UserID,
+		JTI:          claims.JTI,
+		RememberMe:   claims.RememberMe,
+		LoginSource:  claims.LoginSource,
+		TokenVersion: *claims.TokenVersion,
 	}, nil
 }
 
-func (a user2FAAuthTransportAdapter) CompleteLoginAfter2FA(ctx context.Context, userID uint, rememberMe bool) (*userauthtransport.AuthLoginResult, error) {
-	res, err := a.auth.CompleteLoginAfter2FA(userID, rememberMe)
+func (a user2FAAuthTransportAdapter) CompleteLoginAfter2FA(ctx context.Context, userID uint, rememberMe bool, expectedVersion ...uint64) (*userauthtransport.AuthLoginResult, error) {
+	res, err := a.auth.CompleteLoginAfter2FA(userID, rememberMe, expectedVersion...)
 	if err != nil {
 		return nil, mapUserAuthTransportError(err)
 	}
@@ -545,38 +544,6 @@ func (a user2FAAuthTransportAdapter) GetUserEmail(userID uint) (string, error) {
 		return "", nil
 	}
 	return user.Email, nil
-}
-
-// user2FAChallengeStoreAdapter 将 Redis 挑战状态适配为 transport 端口。
-type user2FAChallengeStoreAdapter struct{}
-
-func (user2FAChallengeStoreAdapter) IsRevoked(ctx context.Context, jti string) bool {
-	rdb := cache.Client()
-	if rdb == nil {
-		return false
-	}
-	v, _ := rdb.Exists(ctx, challenge.RevocationKey(jti)).Result()
-	return v == 1
-}
-
-func (user2FAChallengeStoreAdapter) BumpFails(ctx context.Context, jti string) int64 {
-	rdb := cache.Client()
-	if rdb == nil {
-		return 0
-	}
-	cnt, err := rdb.Incr(ctx, challenge.FailureKey(jti)).Result()
-	if err == nil && cnt == 1 {
-		_ = rdb.Expire(ctx, challenge.FailureKey(jti), challenge.TTL).Err()
-	}
-	return cnt
-}
-
-func (user2FAChallengeStoreAdapter) Revoke(ctx context.Context, jti string) {
-	rdb := cache.Client()
-	if rdb == nil {
-		return
-	}
-	_ = rdb.Set(ctx, challenge.RevocationKey(jti), "1", challenge.TTL).Err()
 }
 
 func mapUserAuthTransportError(err error) error {

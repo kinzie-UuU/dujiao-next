@@ -310,7 +310,7 @@ func buildChannelOrderDetailResponse(order *orderdomain.Order, locale string) gi
 			childResp["fulfillment"] = gin.H{
 				"status":       child.Fulfillment.Status,
 				"type":         child.Fulfillment.Type,
-				"payload":      child.Fulfillment.Payload,
+				"payload":      child.Fulfillment.CustomerPayload(),
 				"delivered_at": child.Fulfillment.DeliveredAt,
 				"instructions": childInstructions,
 			}
@@ -327,7 +327,7 @@ func buildChannelOrderDetailResponse(order *orderdomain.Order, locale string) gi
 	}
 	if order.Fulfillment != nil {
 		resp["fulfillment_status"] = order.Fulfillment.Status
-		resp["fulfillment_result"] = order.Fulfillment.Payload
+		resp["fulfillment_result"] = order.Fulfillment.CustomerPayload()
 		resp["fulfillment_delivered_at"] = order.Fulfillment.DeliveredAt
 		resp["fulfillment_instructions"] = parentInstructions
 	} else {

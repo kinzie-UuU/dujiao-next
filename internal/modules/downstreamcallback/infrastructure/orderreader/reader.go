@@ -46,8 +46,8 @@ func projectOrder(order *orderdomain.Order) *downstreamcontract.OrderSnapshot {
 		projection.Fulfillment = &downstreamcontract.Fulfillment{
 			Type:         order.Fulfillment.Type,
 			Status:       order.Fulfillment.Status,
-			Payload:      order.Fulfillment.Payload,
-			DeliveryData: order.Fulfillment.LogisticsJSON,
+			Payload:      order.Fulfillment.CustomerPayload(),
+			DeliveryData: order.Fulfillment.CustomerDeliveryData(),
 			DeliveredAt:  order.Fulfillment.DeliveredAt,
 		}
 	}

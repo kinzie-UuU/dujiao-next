@@ -1,6 +1,19 @@
 package application
 
 import (
+	fulfillmentapp "github.com/dujiao-next/internal/modules/fulfillment/application"
+	fulfillmentdomain "github.com/dujiao-next/internal/modules/fulfillment/domain"
+	fulfillmentstore "github.com/dujiao-next/internal/modules/fulfillment/infrastructure/gormstore"
+	notificationcontract "github.com/dujiao-next/internal/modules/notification/contract"
+	orderstore "github.com/dujiao-next/internal/modules/order/infrastructure/gormstore"
+	procurementapp "github.com/dujiao-next/internal/modules/procurement/application"
+	"github.com/dujiao-next/internal/modules/procurement/backupstate"
+	procurementdomain "github.com/dujiao-next/internal/modules/procurement/domain"
+	procurementstore "github.com/dujiao-next/internal/modules/procurement/infrastructure/gormstore"
+	procurementorder "github.com/dujiao-next/internal/modules/procurement/infrastructure/orderreader"
+	securestoreserializer "github.com/dujiao-next/internal/securestore/serializer"
+	"net/http"
+
 	"crypto/sha256"
 	"fmt"
 	userdomain "github.com/dujiao-next/internal/modules/identity/user/domain"
@@ -11,6 +24,8 @@ import (
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"context"
 	"errors"
@@ -184,7 +199,7 @@ func TestManualReceiptRequiredAndAmountChecked(t *testing.T) {
 	for _, mutate := range []func(*paymentdomain.ManualPaymentEvidence){
 		func(e *paymentdomain.ManualPaymentEvidence) { e.PayerVerified = false },
 		func(e *paymentdomain.ManualPaymentEvidence) { e.TransactionID = "bad" },
-		func(e *paymentdomain.ManualPaymentEvidence) { e.Amount = "100.01" },
+		func(e *paymentdomain.ManualPaymentEvidence) { e.Amount = "99.99" },
 		func(e *paymentdomain.ManualPaymentEvidence) { e.Amount = "100.001" },
 		func(e *paymentdomain.ManualPaymentEvidence) { e.Currency = "USD" },
 	} {
@@ -346,7 +361,7 @@ func TestManualSettlementUsesLockedTWDAndUSDTQuotes(t *testing.T) {
 		{"binance_usdt", "crypto_quote", "USDT", "orderAmount", "rate", "7", "14.29"},
 	} {
 		t.Run(tc.channel, func(t *testing.T) {
-			p := paymentdomain.Payment{ChannelType: tc.channel, Currency: "CNY", Amount: base}
+			p := paymentdomain.Payment{ProviderType: manualQRProviderType, ChannelType: tc.channel, Currency: "CNY", Amount: base}
 			if _, _, err := manualSettlement(&p); err == nil {
 				t.Fatal("missing settlement accepted")
 			}
@@ -356,9 +371,17 @@ func TestManualSettlementUsesLockedTWDAndUSDTQuotes(t *testing.T) {
 			if err != nil || amount.String() != tc.amount || currency != tc.currency {
 				t.Fatalf("settlement=%s %s err=%v", amount, currency, err)
 			}
+			populateManualSettlement(&p)
+			if p.SettlementAmount != tc.amount || p.SettlementCurrency != tc.currency {
+				t.Fatal("safe admin settlement missing")
+			}
 			quote["amount"] = "100"
 			if _, _, err := manualSettlement(&p); err == nil {
 				t.Fatal("incorrect conversion accepted")
+			}
+			populateManualSettlement(&p)
+			if p.SettlementAmount != "" || p.SettlementCurrency != "" {
+				t.Fatal("invalid quote exposed to admin")
 			}
 			quote["amount"] = tc.amount
 			quote[tc.ledger] = "99"
@@ -513,6 +536,594 @@ func TestManualReceiptNamespaceAcrossOrderAndRecharge(t *testing.T) {
 			if _, err := svc.ConfirmManualPayment(p.ID, bad); err == nil {
 				t.Fatalf("successful replay accepted invalid %s", field)
 			}
+		}
+	}
+}
+
+func TestManualAdminAttestationWithoutTransaction(t *testing.T) {
+	for _, rechargeCase := range []bool{false, true} {
+		t.Run(fmt.Sprintf("recharge=%v", rechargeCase), func(t *testing.T) {
+			svc, db := setupPaymentServiceWalletTest(t)
+			sqlDB, _ := db.DB()
+			sqlDB.SetMaxOpenConns(1)
+			var p paymentdomain.Payment
+			var userID uint
+			if rechargeCase {
+				payment, recharge := createWalletRechargeFixture(t, db, constants.PaymentStatusPending, constants.WalletRechargeStatusPending)
+				p, userID = *payment, recharge.UserID
+				db.Model(&p).Update("provider_type", manualQRProviderType)
+			} else {
+				order := createUnderpaidOrder(t, db, "ADMIN-ATTESTATION", 0, 88)
+				p = paymentdomain.Payment{OrderID: order.ID, ChannelID: 1, ProviderType: manualQRProviderType, ChannelType: "wechat", Amount: order.TotalAmount, Currency: "CNY", Status: constants.PaymentStatusPending}
+				if err := db.Create(&p).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			proof := receiptEvidence(t, db, p.ID)
+			proof.TransactionID = ""
+			for _, field := range []string{"payer", "amount", "currency", "hold"} {
+				bad := proof
+				switch field {
+				case "payer":
+					bad.PayerVerified = false
+				case "amount":
+					bad.Amount = "0.01"
+				case "currency":
+					bad.Currency = "USD"
+				case "hold":
+					db.Exec("UPDATE payment_risk_reservations SET status='review_required'")
+				}
+				if _, err := svc.ConfirmManualPayment(p.ID, bad); err == nil {
+					t.Fatalf("accepted invalid %s without transaction", field)
+				}
+			}
+			receiptEvidence(t, db, p.ID)
+			start, done := make(chan struct{}), make(chan error, 8)
+			for i := 0; i < 8; i++ {
+				go func() { <-start; _, err := svc.ConfirmManualPayment(p.ID, proof); done <- err }()
+			}
+			close(start)
+			for i := 0; i < 8; i++ {
+				if err := <-done; err != nil {
+					t.Fatal(err)
+				}
+			}
+			var got paymentdomain.Payment
+			db.First(&got, p.ID)
+			if got.Status != constants.PaymentStatusSuccess || got.ManualReceiptKey == nil || *got.ManualReceiptKey != fmt.Sprintf("admin-confirm:%d", p.ID) || got.ProviderRef != "" {
+				t.Fatalf("invalid attestation state: status=%s key=%v ref=%q", got.Status, got.ManualReceiptKey, got.ProviderRef)
+			}
+			if got.ProviderPayload["receipt_verification"] != "admin_attestation" {
+				t.Fatal("attestation mislabeled as platform receipt")
+			}
+			if rechargeCase && walletBalance(t, db, userID) != "88.00" {
+				t.Fatal("repeated confirmation credited wallet more than once")
+			}
+		})
+	}
+}
+
+func TestManualAdminAttestationPreservesLegacyReceipt(t *testing.T) {
+	svc, db := setupPaymentServiceWalletTest(t)
+	for i := 0; i < 2; i++ {
+		order := createUnderpaidOrder(t, db, fmt.Sprintf("LEGACY-ATTESTATION-%d", i), 0, 88)
+		p := paymentdomain.Payment{OrderID: order.ID, ChannelID: 1, ProviderType: manualQRProviderType, ChannelType: "wechat", Amount: order.TotalAmount, Currency: "CNY", Status: constants.PaymentStatusPending}
+		if err := db.Create(&p).Error; err != nil {
+			t.Fatal(err)
+		}
+		proof := receiptEvidence(t, db, p.ID)
+		originalRef := proof.TransactionID
+		if _, err := svc.ConfirmManualPayment(p.ID, proof); err != nil {
+			t.Fatal(err)
+		}
+		proof.TransactionID = ""
+		got, err := svc.ConfirmManualPayment(p.ID, proof)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.ProviderRef != originalRef || got.ManualReceiptKey == nil || *got.ManualReceiptKey != "wechat:"+originalRef {
+			t.Fatal("retry lost original platform receipt")
+		}
+	}
+}
+
+type receiptQueue struct {
+	paymentcontract.Queue
+	fulfilled atomic.Int32
+}
+
+func (q *receiptQueue) Enabled() bool                                  { return true }
+func (q *receiptQueue) EnqueueOrderAutoFulfill(uint) error             { q.fulfilled.Add(1); return nil }
+func (q *receiptQueue) EnqueueStatusEmail(uint, string) error          { return nil }
+func (q *receiptQueue) EnqueueTimeoutCancel(uint, time.Duration) error { return nil }
+
+type receiptProcurement struct{ calls atomic.Int32 }
+
+func (p *receiptProcurement) CreateForOrder(uint) error { p.calls.Add(1); return nil }
+
+func TestManualOverpaymentPreservesQuotedAccounting(t *testing.T) {
+	for _, tt := range []struct{ name, channel, quote, fee, wallet, received, surplus string }{
+		{"invoice8percent", "wechat", "143.64", "10.64", "0", "146", "2.36"},
+		{"standard2percent", "alipay", "135.66", "2.66", "0", "136", "0.34"},
+		{"walletMixedInvoice", "wechat", "108", "8", "33", "109", "1.00"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, db := setupPaymentServiceWalletTest(t)
+			sqlDB, _ := db.DB()
+			sqlDB.SetMaxOpenConns(1)
+			order := createUnderpaidOrder(t, db, "OVER-"+tt.name, 0, 133)
+			wallet := decimal.RequireFromString(tt.wallet)
+			if err := db.Model(order).Updates(map[string]interface{}{"wallet_paid_amount": tt.wallet, "online_paid_amount": decimal.NewFromInt(133).Sub(wallet).String()}).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Create(&orderdomain.OrderItem{OrderID: order.ID, ProductID: 1, TitleJSON: jsonmap.JSON{"en": "test"}, Quantity: 1, FulfillmentType: constants.FulfillmentTypeAuto}).Error; err != nil {
+				t.Fatal(err)
+			}
+			payment := &paymentdomain.Payment{OrderID: order.ID, ChannelID: 1, ProviderType: manualQRProviderType, ChannelType: tt.channel, Amount: money.FromDecimal(decimal.RequireFromString(tt.quote)), FeeAmount: money.FromDecimal(decimal.RequireFromString(tt.fee)), Currency: "CNY", Status: constants.PaymentStatusPending}
+			if err := db.Create(payment).Error; err != nil {
+				t.Fatal(err)
+			}
+			proof := receiptEvidence(t, db, payment.ID)
+			proof.Amount = tt.received
+			queue := &receiptQueue{}
+			svc.queue = queue
+			procurement := &receiptProcurement{}
+			svc.procurementSvc = procurement
+			var wg sync.WaitGroup
+			results := make(chan error, 8)
+			for i := 0; i < 8; i++ {
+				wg.Add(1)
+				go func() { defer wg.Done(); _, err := svc.ConfirmManualPayment(payment.ID, proof); results <- err }()
+			}
+			wg.Wait()
+			close(results)
+			for err := range results {
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if procurement.calls.Load() != 1 {
+				t.Fatalf("procurement count=%d", procurement.calls.Load())
+			}
+			if queue.fulfilled.Load() != 1 {
+				t.Fatalf("fulfillment count=%d", queue.fulfilled.Load())
+			}
+			if err := db.First(payment, payment.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if !payment.Amount.Decimal.Equal(decimal.RequireFromString(tt.quote)) || !payment.FeeAmount.Decimal.Equal(decimal.RequireFromString(tt.fee)) {
+				t.Fatal("quote or fee changed")
+			}
+			for key, want := range map[string]string{manualReceivedAmountKey: decimal.RequireFromString(tt.received).StringFixed(2), manualReceivedCurrencyKey: "CNY", manualExpectedAmountKey: decimal.RequireFromString(tt.quote).StringFixed(2), manualOverpaymentAmountKey: tt.surplus} {
+				if payment.ProviderPayload[key] != want {
+					t.Fatalf("audit %s=%v want %s", key, payment.ProviderPayload[key], want)
+				}
+			}
+			if err := db.First(order, order.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if !order.TotalAmount.Decimal.Equal(decimal.NewFromInt(133)) || !order.WalletPaidAmount.Decimal.Equal(wallet) || !order.OnlinePaidAmount.Decimal.Equal(decimal.NewFromInt(133).Sub(wallet)) {
+				t.Fatal("order accounting changed")
+			}
+			proof.Amount = decimal.RequireFromString(tt.received).Add(decimal.NewFromInt(1)).String()
+			if _, err := svc.ConfirmManualPayment(payment.ID, proof); !errors.Is(err, ErrPaymentInvalid) {
+				t.Fatalf("changed receipt accepted: %v", err)
+			}
+			proof.Amount = tt.received
+			proof.Currency = "USD"
+			if _, err := svc.ConfirmManualPayment(payment.ID, proof); !errors.Is(err, ErrPaymentCurrencyMismatch) {
+				t.Fatalf("changed currency accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestManualOverpaymentRejectsUnderpaymentAndInvalidCents(t *testing.T) {
+	for _, amount := range []string{"143.63", "146.001", "146.000", "1e3", "+146", " 146", "-146", "0"} {
+		t.Run(amount, func(t *testing.T) {
+			svc, db := setupPaymentServiceWalletTest(t)
+			order := createUnderpaidOrder(t, db, "INVALID-AMOUNT", 0, 133)
+			p := &paymentdomain.Payment{OrderID: order.ID, ChannelID: 1, ProviderType: manualQRProviderType, ChannelType: "wechat", Amount: money.FromDecimal(decimal.RequireFromString("143.64")), FeeAmount: money.FromDecimal(decimal.RequireFromString("10.64")), Currency: "CNY", Status: constants.PaymentStatusPending}
+			if err := db.Create(p).Error; err != nil {
+				t.Fatal(err)
+			}
+			proof := receiptEvidence(t, db, p.ID)
+			proof.Amount = amount
+			if _, err := svc.ConfirmManualPayment(p.ID, proof); !errors.Is(err, ErrPaymentAmountMismatch) {
+				t.Fatalf("amount accepted: %v", err)
+			}
+			db.First(p, p.ID)
+			if p.ManualReceiptKey != nil || p.Status != constants.PaymentStatusPending {
+				t.Fatal("rejected amount claimed or paid")
+			}
+		})
+	}
+}
+
+func TestManualOverpaymentClaimSurvivesFailedCapture(t *testing.T) {
+	svc, db := setupPaymentServiceWalletTest(t)
+	order := createUnderpaidOrder(t, db, "OVER-FAILED-CAPTURE", 0, 133)
+	p := &paymentdomain.Payment{OrderID: order.ID, ChannelID: 1, ProviderType: manualQRProviderType, ChannelType: "wechat", Amount: money.FromDecimal(decimal.RequireFromString("143.64")), FeeAmount: money.FromDecimal(decimal.RequireFromString("10.64")), Currency: "CNY", Status: constants.PaymentStatusPending}
+	if err := db.Create(p).Error; err != nil {
+		t.Fatal(err)
+	}
+	proof := receiptEvidence(t, db, p.ID)
+	proof.Amount = "146"
+	svc.paymentRepo = &expireManualRiskAfterClaimStore{Store: svc.paymentRepo, afterClaim: func() {
+		db.Exec("UPDATE payment_risk_reservations SET created_at=?", time.Now().Add(-25*time.Hour).Unix())
+	}}
+	if _, err := svc.ConfirmManualPayment(p.ID, proof); !errors.Is(err, ErrPaymentStatusInvalid) {
+		t.Fatalf("expected second-stage failure: %v", err)
+	}
+	db.Exec("UPDATE payment_risk_reservations SET created_at=?", time.Now().Unix())
+	proof.Amount = "147"
+	if _, err := svc.ConfirmManualPayment(p.ID, proof); !errors.Is(err, ErrPaymentInvalid) {
+		t.Fatalf("changed pending receipt accepted: %v", err)
+	}
+	db.First(p, p.ID)
+	for _, key := range []string{manualReceivedAmountKey, manualExpectedAmountKey, manualOverpaymentAmountKey, manualReceivedCurrencyKey} {
+		payload := jsonmap.JSON{"payer_verified_by_admin": true}
+		for k, v := range p.ProviderPayload {
+			payload[k] = v
+		}
+		payload[key] = "999"
+		_, err := svc.HandleCallback(PaymentCallbackInput{PaymentID: p.ID, ChannelID: 1, Status: constants.PaymentStatusSuccess, ProviderRef: p.ProviderRef, Amount: p.Amount, Currency: "CNY", Payload: payload})
+		if err == nil {
+			t.Fatalf("changed callback %s accepted", key)
+		}
+	}
+	proof.Amount = "146"
+	if _, err := svc.ConfirmManualPayment(p.ID, proof); err != nil {
+		t.Fatalf("original proof retry failed: %v", err)
+	}
+}
+
+func TestManualForeignSettlementStillRejectsOverpayment(t *testing.T) {
+	for _, tt := range []struct{ channel, key, currency, ledger, rateKey, rate, amount string }{
+		{"twqr", "twqr_quote", "TWD", "cnyAmount", "exchangeRate", "4.5", "450"},
+		{"binance_usdt", "crypto_quote", "USDT", "orderAmount", "rate", "7", "14.29"},
+	} {
+		t.Run(tt.channel, func(t *testing.T) {
+			svc, db := setupPaymentServiceWalletTest(t)
+			order := createUnderpaidOrder(t, db, "FOREIGN-"+tt.channel, 0, 100)
+			p := &paymentdomain.Payment{OrderID: order.ID, ChannelID: 1, ProviderType: manualQRProviderType, ChannelType: tt.channel, Amount: money.FromDecimal(decimal.NewFromInt(100)), Currency: "CNY", Status: constants.PaymentStatusPending, ProviderPayload: jsonmap.JSON{tt.key: map[string]interface{}{"currency": tt.currency, tt.ledger: "100", tt.rateKey: tt.rate, "amount": tt.amount}}}
+			if err := db.Create(p).Error; err != nil {
+				t.Fatal(err)
+			}
+			proof := receiptEvidence(t, db, p.ID)
+			proof.Amount = decimal.RequireFromString(tt.amount).Add(decimal.NewFromInt(1)).String()
+			if _, err := svc.ConfirmManualPayment(p.ID, proof); !errors.Is(err, ErrPaymentAmountMismatch) {
+				t.Fatalf("foreign overpayment accepted: %v", err)
+			}
+			proof.Amount = tt.amount
+			if _, err := svc.ConfirmManualPayment(p.ID, proof); err != nil {
+				t.Fatalf("exact foreign receipt rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestManualOverpaymentCompetingAmountsBindOneReceipt(t *testing.T) {
+	svc, db := setupPaymentServiceWalletTest(t)
+	sqlDB, _ := db.DB()
+	sqlDB.SetMaxOpenConns(1)
+	order := createUnderpaidOrder(t, db, "OVER-RACE", 0, 133)
+	p := &paymentdomain.Payment{OrderID: order.ID, ChannelID: 1, ProviderType: manualQRProviderType, ChannelType: "wechat", Amount: money.FromDecimal(decimal.RequireFromString("143.64")), FeeAmount: money.FromDecimal(decimal.RequireFromString("10.64")), Currency: "CNY", Status: constants.PaymentStatusPending}
+	if err := db.Create(p).Error; err != nil {
+		t.Fatal(err)
+	}
+	proof := receiptEvidence(t, db, p.ID)
+	var wg sync.WaitGroup
+	results := make(chan error, 2)
+	for _, amount := range []string{"146", "147"} {
+		wg.Add(1)
+		go func(amount string) {
+			defer wg.Done()
+			copy := proof
+			copy.Amount = amount
+			_, err := svc.ConfirmManualPayment(p.ID, copy)
+			results <- err
+		}(amount)
+	}
+	wg.Wait()
+	close(results)
+	success, rejected := 0, 0
+	for err := range results {
+		if err == nil {
+			success++
+		} else if errors.Is(err, ErrPaymentInvalid) {
+			rejected++
+		} else {
+			t.Fatal(err)
+		}
+	}
+	if success != 1 || rejected != 1 {
+		t.Fatalf("success=%d rejected=%d", success, rejected)
+	}
+	db.First(p, p.ID)
+	other := createUnderpaidOrder(t, db, "OVER-DUPLICATE-RECEIPT", 0, 133)
+	duplicate := &paymentdomain.Payment{OrderID: other.ID, ChannelID: 1, ProviderType: manualQRProviderType, ChannelType: "wechat", Amount: p.Amount, FeeAmount: p.FeeAmount, Currency: "CNY", Status: constants.PaymentStatusPending}
+	if err := db.Create(duplicate).Error; err != nil {
+		t.Fatal(err)
+	}
+	reused := receiptEvidence(t, db, duplicate.ID)
+	reused.TransactionID = proof.TransactionID
+	reused.Amount = p.ProviderPayload[manualReceivedAmountKey].(string)
+	if _, err := svc.ConfirmManualPayment(duplicate.ID, reused); err == nil {
+		t.Fatal("same receipt paid another order")
+	}
+	db.First(duplicate, duplicate.ID)
+	if duplicate.Status != constants.PaymentStatusPending {
+		t.Fatal("duplicate paid")
+	}
+}
+
+func TestManualOverpaidRechargeDoesNotCreditSurplus(t *testing.T) {
+	svc, db := setupPaymentServiceWalletTest(t)
+	p, recharge := createWalletRechargeFixture(t, db, constants.PaymentStatusPending, constants.WalletRechargeStatusPending)
+	if err := db.Model(p).Update("provider_type", manualQRProviderType).Error; err != nil {
+		t.Fatal(err)
+	}
+	proof := receiptEvidence(t, db, p.ID)
+	proof.Amount = decimal.RequireFromString(proof.Amount).Add(decimal.NewFromInt(1)).String()
+	for i := 0; i < 2; i++ {
+		if _, err := svc.ConfirmManualPayment(p.ID, proof); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := walletBalance(t, db, recharge.UserID); got != "88.00" {
+		t.Fatalf("surplus credited or duplicate credit: %s", got)
+	}
+}
+
+// The gateway, queue and procurement port are in-process fakes. This test never
+// sends a payment or a supplier purchase, and uses an isolated in-memory DB.
+func TestUpstreamPaymentDispatchNoCharge(t *testing.T) {
+	for _, tc := range []struct {
+		name, amount, currency string
+		valid                  bool
+	}{
+		{"paid-and-replayed", "81", "CNY", true},
+		{"amount-mismatch", "80", "CNY", false},
+		{"currency-mismatch", "81", "USD", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, db := setupPaymentServiceWalletTest(t)
+			channel := createUnderpaidChannel(t, db, svc, "Mock payment only", constants.PaymentChannelTypeWechat)
+			order := createUnderpaidOrder(t, db, "MOCK-UPSTREAM", 0, 81)
+			if err := db.Create(&orderdomain.OrderItem{OrderID: order.ID, ProductID: 1, SKUID: 1, Quantity: 1, TitleJSON: jsonmap.JSON{"zh-CN": "Figma mock"}, FulfillmentType: constants.FulfillmentTypeUpstream}).Error; err != nil {
+				t.Fatal(err)
+			}
+			q := &receiptQueue{}
+			procurement := &receiptProcurement{}
+			svc.queue = q
+			svc.SetProcurementService(procurement)
+			created, err := svc.CreatePayment(CreatePaymentInput{OrderID: order.ID, ChannelID: channel.ID, Context: context.Background()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if procurement.calls.Load() != 0 || q.fulfilled.Load() != 0 {
+				t.Fatal("unpaid order dispatched fulfillment")
+			}
+			input := PaymentCallbackInput{PaymentID: created.Payment.ID, OrderNo: order.OrderNo, ChannelID: channel.ID, Status: constants.PaymentStatusSuccess, Amount: money.FromDecimal(decimal.RequireFromString(tc.amount)), Currency: tc.currency, ProviderRef: "MOCK-RECEIPT"}
+			_, err = svc.HandleCallback(input)
+			if !tc.valid {
+				if err == nil {
+					t.Fatal("invalid callback accepted")
+				}
+				if procurement.calls.Load() != 0 || q.fulfilled.Load() != 0 {
+					t.Fatal("invalid callback dispatched fulfillment")
+				}
+				if err := db.First(order, order.ID).Error; err != nil {
+					t.Fatal(err)
+				}
+				if order.Status != constants.OrderStatusPendingPayment {
+					t.Fatalf("invalid callback changed order to %s", order.Status)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 3; i++ {
+				if _, err := svc.HandleCallback(input); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if procurement.calls.Load() != 1 {
+				t.Fatalf("procurement dispatch count=%d", procurement.calls.Load())
+			}
+			if q.fulfilled.Load() != 0 {
+				t.Fatal("upstream order incorrectly dispatched local-card fulfillment")
+			}
+			if err := db.First(order, order.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if order.Status != constants.OrderStatusPaid || order.PaidAt == nil {
+				t.Fatalf("order not paid: %s", order.Status)
+			}
+		})
+	}
+}
+
+type manualAccountMockTransport func(*http.Request) (*http.Response, error)
+
+func (f manualAccountMockTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type manualAccountMockQueue struct{ ids []uint }
+
+func (q *manualAccountMockQueue) EnqueueSubmit(id uint) error           { q.ids = append(q.ids, id); return nil }
+func (q *manualAccountMockQueue) EnqueuePoll(uint, time.Duration) error { return nil }
+
+type manualPurchaseNotices struct {
+	events []notificationcontract.EnqueueInput
+}
+
+func (n *manualPurchaseNotices) Enqueue(input notificationcontract.EnqueueInput) error {
+	n.events = append(n.events, input)
+	return nil
+}
+
+// Manual purchase mode: payment creates an admin task, never a supplier charge.
+// The operator pastes purchased credentials directly into the intended order.
+func TestManualAccountPurchaseAndDeliveryNoCharge(t *testing.T) {
+	if err := securestoreserializer.Configure("manual-account-test-encryption-only"); err != nil {
+		t.Fatal(err)
+	}
+	svc, db := setupPaymentServiceWalletTest(t)
+	if err := db.AutoMigrate(&procurementdomain.Order{}, &backupstate.Claim{}); err != nil {
+		t.Fatal(err)
+	}
+	old := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = old })
+	http.DefaultTransport = manualAccountMockTransport(func(*http.Request) (*http.Response, error) {
+		t.Fatal("manual workflow must never contact supplier or send live notification")
+		return nil, errors.New("network disabled")
+	})
+	queue := &receiptQueue{}
+	notices := &manualPurchaseNotices{}
+	procurementQueue := &manualAccountMockQueue{}
+	svc.queue = queue
+	svc.notificationSvc = notices
+	orders := orderstore.New(db, "test-guest-credential-secret-with-32-bytes")
+	svc.SetProcurementService(procurementapp.NewService(procurementapp.Options{
+		Repository: procurementstore.New(db), Orders: procurementorder.New(orders), Queue: procurementQueue,
+	}))
+	channel := createUnderpaidChannel(t, db, svc, "mock manual-account payment", constants.PaymentChannelTypeWechat)
+	order := createUnderpaidOrder(t, db, "MANUAL-ACCOUNT-MOCK", 0, 108)
+	unrelated := createUnderpaidOrder(t, db, "MANUAL-UNPAID-MOCK", 0, 108)
+	if err := db.Create(&orderdomain.OrderItem{OrderID: order.ID, ProductID: 1, SKUID: 1, Quantity: 1, TitleJSON: jsonmap.JSON{"zh-CN": "Plus account manual purchase"}, FulfillmentType: constants.FulfillmentTypeManual}).Error; err != nil {
+		t.Fatal(err)
+	}
+	created, err := svc.CreatePayment(CreatePaymentInput{OrderID: order.ID, ChannelID: channel.ID, Context: context.Background()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notices.events) != 0 || queue.fulfilled.Load() != 0 || len(procurementQueue.ids) != 0 {
+		t.Fatal("unpaid order dispatched")
+	}
+	callback := PaymentCallbackInput{PaymentID: created.Payment.ID, OrderNo: order.OrderNo, ChannelID: channel.ID, Status: constants.PaymentStatusSuccess, Amount: money.FromDecimal(decimal.NewFromInt(108)), Currency: "CNY", ProviderRef: "MOCK-MANUAL-ACCOUNT-RECEIPT"}
+	for i := 0; i < 3; i++ {
+		if _, err := svc.HandleCallback(callback); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pending := 0
+	for _, n := range notices.events {
+		if n.EventType == constants.NotificationEventManualFulfillmentPending {
+			pending++
+			if n.BizID != order.ID {
+				t.Fatal("notice bound to wrong order")
+			}
+		}
+	}
+	if pending != 1 || queue.fulfilled.Load() != 0 || len(procurementQueue.ids) != 0 {
+		t.Fatalf("manual notices=%d automatic=%d procurements=%d", pending, queue.fulfilled.Load(), len(procurementQueue.ids))
+	}
+	var procurementCount int64
+	if err := db.Model(&procurementdomain.Order{}).Count(&procurementCount).Error; err != nil || procurementCount != 0 {
+		t.Fatal("manual order created procurement")
+	}
+	if err := db.First(order, order.ID).Error; err != nil || (order.Status != constants.OrderStatusPaid && order.Status != constants.OrderStatusFulfilling) {
+		t.Fatal("manual order not waiting for delivery")
+	}
+	fulfill := fulfillmentapp.New(fulfillmentapp.Options{OrderStore: orders, FulfillmentStore: fulfillmentstore.New(db)})
+	payload := "账号：synthetic@example.invalid\n密码：mock-manual-password\n2FA：synthetic-only"
+	if _, err := fulfill.CreateManual(fulfillmentapp.CreateManualInput{OrderID: unrelated.ID, AdminID: 1, Payload: payload}); err == nil {
+		t.Fatal("unpaid order accepted credentials")
+	}
+	if _, err := fulfill.CreateManual(fulfillmentapp.CreateManualInput{OrderID: order.ID, AdminID: 1, Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fulfill.CreateManual(fulfillmentapp.CreateManualInput{OrderID: order.ID, AdminID: 1, Payload: "duplicate"}); err == nil {
+		t.Fatal("duplicate delivery accepted")
+	}
+	var delivered []fulfillmentdomain.Fulfillment
+	if err := db.Find(&delivered).Error; err != nil || len(delivered) != 1 || delivered[0].OrderID != order.ID || delivered[0].Payload != payload {
+		t.Fatal("delivery was not bound exactly once to intended order")
+	}
+	var raw string
+	if err := db.Raw("SELECT payload FROM fulfillments WHERE order_id=?", order.ID).Scan(&raw).Error; err != nil || !securestoreserializer.IsEncryptedString(raw) || strings.Contains(raw, "mock-manual-password") {
+		t.Fatal("account stored without encryption")
+	}
+	if err := db.First(order, order.ID).Error; err != nil || order.Status != constants.OrderStatusDelivered {
+		t.Fatal("target not delivered")
+	}
+	if err := db.First(unrelated, unrelated.ID).Error; err != nil || unrelated.Status != constants.OrderStatusPendingPayment {
+		t.Fatal("unrelated order modified")
+	}
+}
+
+type gmailPaidRecorder struct{ ids []uint }
+
+func (r *gmailPaidRecorder) OnOrderPaid(id uint) error { r.ids = append(r.ids, id); return nil }
+
+func TestGmailDispatchAfterManualConfirmationAndCallback(t *testing.T) {
+	for _, pin := range [][2]uint{{51, 86}, {41, 74}} {
+		for _, manual := range []bool{true, false} {
+			for _, child := range []bool{true, false} {
+				t.Run(fmt.Sprintf("product_%d_manual_%t_child_%t", pin[0], manual, child), func(t *testing.T) {
+					svc, db := setupPaymentServiceWalletTest(t)
+					queue := &receiptQueue{}
+					recorder := &gmailPaidRecorder{}
+					notices := &manualPurchaseNotices{}
+					svc.queue, svc.notificationSvc = queue, notices
+					svc.SetBackupPaidTrigger(recorder)
+					root := createUnderpaidOrder(t, db, "GMAIL-PAID-ROOT", 0, 38)
+					target := root
+					if child {
+						target = createUnderpaidOrder(t, db, "GMAIL-PAID-CHILD", 0, 38)
+						if err := db.Model(target).Update("parent_id", root.ID).Error; err != nil {
+							t.Fatal(err)
+						}
+					}
+					if err := db.Create(&orderdomain.OrderItem{OrderID: target.ID, ProductID: pin[0], SKUID: pin[1], Quantity: 1, TitleJSON: jsonmap.JSON{"zh-CN": "Gmail老号"}, FulfillmentType: constants.FulfillmentTypeManual}).Error; err != nil {
+						t.Fatal(err)
+					}
+					payment := paymentdomain.Payment{OrderID: root.ID, ChannelID: 1, ProviderType: manualQRProviderType, ChannelType: "wechat", Amount: money.FromDecimal(decimal.NewFromInt(38)), Currency: "CNY", Status: constants.PaymentStatusPending}
+					if !manual {
+						payment.ProviderType = "mock"
+					}
+					if err := db.Create(&payment).Error; err != nil {
+						t.Fatal(err)
+					}
+					if manual {
+						proof := receiptEvidence(t, db, payment.ID)
+						for i := 0; i < 2; i++ {
+							if _, err := svc.ConfirmManualPayment(payment.ID, proof); err != nil {
+								t.Fatal(err)
+							}
+						}
+					} else {
+						input := PaymentCallbackInput{PaymentID: payment.ID, OrderNo: root.OrderNo, ChannelID: 1, Status: constants.PaymentStatusSuccess, Amount: payment.Amount, Currency: "CNY", ProviderRef: "synthetic-gmail-callback"}
+						for i := 0; i < 2; i++ {
+							if _, err := svc.HandleCallback(input); err != nil {
+								t.Fatal(err)
+							}
+						}
+					}
+					if len(recorder.ids) != 1 || recorder.ids[0] != target.ID {
+						t.Fatalf("Gmail trigger missing or duplicate: %+v", recorder.ids)
+					}
+					for _, event := range notices.events {
+						if event.EventType == constants.NotificationEventManualFulfillmentPending {
+							t.Fatal("Gmail fell back to manual fulfillment")
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestBackupDispatchPinsExcludeCrossProductSKUs(t *testing.T) {
+	for _, tc := range []struct {
+		product, sku uint
+		want         bool
+	}{{51, 86, true}, {50, 85, true}, {41, 74, true}, {51, 74, false}, {41, 86, false}} {
+		got := isFangFangBackupPinOrder(&orderdomain.Order{Items: []orderdomain.OrderItem{{ProductID: tc.product, SKUID: tc.sku}}})
+		if got != tc.want {
+			t.Fatalf("pin %d/%d=%v", tc.product, tc.sku, got)
 		}
 	}
 }

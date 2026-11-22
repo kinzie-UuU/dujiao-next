@@ -29,6 +29,11 @@ func (s *Service) execute(ctx context.Context, job *reconciliationdomain.Job) er
 	for index := range orders {
 		order := &orders[index]
 		if order.UpstreamOrderID == 0 && order.UpstreamOrderNo == "" {
+			if order.Status == constants.ProcurementStatusSubmitted || order.Status == constants.ProcurementStatusUncertain {
+				// An absent receipt is an unresolved effect, not a clean skipped row.
+				mismatches = append(mismatches, reconciliationdomain.Item{JobID: job.ID, ProcurementOrderID: order.ID, LocalOrderNo: order.LocalOrderNo, LocalStatus: order.Status, UpstreamStatus: "unconfirmed", MismatchType: constants.MismatchTypeStatus, Remark: "Supplier acceptance is unconfirmed; obtain evidence binding the original request before any retry or refund"})
+				continue
+			}
 			skippedCount++
 			continue
 		}

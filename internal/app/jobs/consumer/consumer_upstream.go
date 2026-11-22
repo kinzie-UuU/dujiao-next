@@ -3,8 +3,13 @@ package consumer
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 
 	"github.com/dujiao-next/internal/logger"
+	backupservice "github.com/dujiao-next/internal/modules/procurement/backupservice"
+	backupgormstore "github.com/dujiao-next/internal/modules/procurement/backupservice/infrastructure/gormstore"
+	"github.com/dujiao-next/internal/platform/database/gormdb"
 	"github.com/dujiao-next/internal/queue"
 
 	"github.com/hibiken/asynq"
@@ -102,6 +107,45 @@ func (c *Consumer) handleDownstreamCallback(ctx context.Context, task *asynq.Tas
 			"error", err,
 		)
 		return err
+	}
+	return nil
+}
+
+func (c *Consumer) handleProcurementRetryPending(_ context.Context, _ *asynq.Task) error {
+	if c == nil || c.ProcurementOrderService == nil {
+		return nil
+	}
+	return c.ProcurementOrderService.RetryPendingSubmissions()
+}
+
+// handleBackupProcurementSubmit runs the fail-closed Fang backup purchase worker.
+// Gate closed, inactive connection, or unverified delivery contracts all refuse purchase/delivery.
+func (c *Consumer) handleBackupProcurementSubmit(ctx context.Context, task *asynq.Task) error {
+	if c == nil || task == nil || c.SiteConnectionService == nil || gormdb.DB == nil {
+		logger.Warnw("worker_backup_procurement_submit_unavailable")
+		return errors.New("backup procurement worker unavailable")
+	}
+	var payload queue.BackupProcurementSubmitPayload
+	if err := json.Unmarshal(task.Payload(), &payload); err != nil || payload.ClaimID == 0 {
+		logger.Warnw("worker_backup_procurement_submit_invalid_payload")
+		return fmt.Errorf("backup procurement invalid payload: %w", asynq.SkipRetry)
+	}
+	store := &backupgormstore.ReceiptStore{
+		DB: gormdb.DB,
+		Controller: &backupgormstore.Controller{
+			DB:      gormdb.DB,
+			Decrypt: c.SiteConnectionService.DecryptSecret,
+			Policy:  backupgormstore.StructuralPolicy,
+		},
+	}
+	if err := (backupservice.Worker{Store: store}).Run(ctx, payload.ClaimID); err != nil {
+		logger.Warnw("worker_backup_procurement_submit_failed", "claim_id", payload.ClaimID, "error", err)
+		if errors.Is(err, backupservice.ErrDeferred) {
+			// Gate closed (still Claimed) or delivery-only resume after a saved receipt.
+			return err
+		}
+		// Uncertain / denied / missing deps: never replay PurchaseOnce.
+		return fmt.Errorf("backup procurement terminal: %w", asynq.SkipRetry)
 	}
 	return nil
 }

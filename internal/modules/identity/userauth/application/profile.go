@@ -44,12 +44,13 @@ func (s *Service) ResetPassword(email, code, newPassword string) error {
 	user.PasswordSetupRequired = false
 	now := time.Now()
 	user.UpdatedAt = now
+	expectedVersion := user.TokenVersion
 	user.TokenVersion++
 	user.TokenInvalidBefore = &now
-	if err := s.userRepo.Update(user); err != nil {
+	if err := s.userRepo.Update(user, expectedVersion); err != nil {
 		return err
 	}
-	_ = cache.SetUserAuthState(context.Background(), cache.BuildUserAuthState(user))
+	_ = cache.DelUserAuthState(context.Background(), user.ID)
 	return nil
 }
 
@@ -89,12 +90,13 @@ func (s *Service) ChangePassword(userID uint, oldPassword, newPassword string) e
 	user.PasswordSetupRequired = false
 	now := time.Now()
 	user.UpdatedAt = now
+	expectedVersion := user.TokenVersion
 	user.TokenVersion++
 	user.TokenInvalidBefore = &now
-	if err := s.userRepo.Update(user); err != nil {
+	if err := s.userRepo.Update(user, expectedVersion); err != nil {
 		return err
 	}
-	_ = cache.SetUserAuthState(context.Background(), cache.BuildUserAuthState(user))
+	_ = cache.DelUserAuthState(context.Background(), user.ID)
 	return nil
 }
 
