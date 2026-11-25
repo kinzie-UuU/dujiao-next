@@ -75,7 +75,21 @@ func (s *Service) SetConfig(cfg *config.EmailConfig) {
 // SendVerifyCode 发送邮箱验证码
 func (s *Service) SendVerifyCode(toEmail, code, purpose, locale string, brand mailbrand.Brand) error {
 	subject, body := buildVerifyCodeContent(code, purpose, locale, brand)
-	return s.sendTextEmail(toEmail, subject, body, brand)
+	if !usesUuuaigcVerifyCard(brand) {
+		return s.sendTextEmail(toEmail, subject, body, brand)
+	}
+	if telegramidentity.IsPlaceholderEmail(toEmail) {
+		return nil
+	}
+	from, addr, err := s.prepareSMTPEnvelope(toEmail, brand.FromName)
+	if err != nil {
+		return err
+	}
+	msg, err := buildVerifyCardMessage(from, toEmail, subject, body, code, purpose, locale, brand.ReplyTo)
+	if err != nil {
+		return err
+	}
+	return s.sendSMTPMessage(addr, toEmail, msg)
 }
 
 // SendOrderStatusEmail 发送订单状态通知
